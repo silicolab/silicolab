@@ -1,0 +1,38 @@
+[package]
+name = "silicolab"
+version = "0.1.0"
+authors = ["Jiekang Tian", "Dongcheng Lin"]
+edition = "2024"
+description = "Computational environment for chemistry, biology & materials research."
+readme = "README.md"
+repository = "https://github.com/silicolab/silicolab"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+anyhow = "1.0"
+bytemuck = { version = "1", features = ["derive"] }
+chemx = "0.2.0"
+eframe = { version = "0.34", features = ["persistence"] }
+egui-phosphor = "0.12.0"
+flate2 = "1"
+image = { version = "0.25", default-features = false, features = ["png"] }
+nalgebra = "0.35.0"
+rfd = "0.17"
+rusqlite = { version = "0.40.0", features = ["bundled"] }
+sdfrust = "0.6"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ureq = "3.3.0"
+uuid = { version = "1", features = ["v4"] }
+raw-window-handle = "0.6"
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+window-vibrancy = "0.7"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+muda = "0.19"
+objc2 = "0.6"
+objc2-foundation = "0.3"
+
+[dev-dependencies]
+pollster = "0.4"

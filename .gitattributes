@@ -1,0 +1,5 @@
+# Normalize line endings: store everything as LF in the repository.
+* text=auto eol=lf
+
+# Binary assets — never normalize or diff as text.
+*.png binary

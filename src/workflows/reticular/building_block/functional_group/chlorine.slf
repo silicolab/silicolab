@@ -1,0 +1,18 @@
+@<TRIPOS>MOLECULE
+chlorine functional group
+2 1
+SMALL
+USER_CHARGES
+@<TRIPOS>ATOM
+1 Cl1 0.000000 0.000000 0.000000 Cl 1 FUNC 0.0
+2 Du -1.000000 0.000000 0.000000 Du 1 FUNC 0.0
+@<TRIPOS>BOND
+1 1 2 1
+@<SILICOLAB>RETICULAR
+#KEY
+class functional_group
+label Cl
+
+#TABLE
+leaving_atom binding_atom
+2 1
