@@ -1,0 +1,26 @@
+REMARK 999 Capped alanine dipeptide (ACE-ALA-NME), AMBER atom names, explicit H
+REMARK 999 Generated fixture for SilicoLab bonded-topology tests
+ATOM      1 CH3  ACE A   1      11.662  16.662  14.775  1.00  0.00           C
+ATOM      2 HH31 ACE A   1      11.298  17.176  13.885  1.00  0.00           H
+ATOM      3 HH32 ACE A   1      11.298  15.634  14.775  1.00  0.00           H
+ATOM      4 HH33 ACE A   1      11.298  17.176  15.665  1.00  0.00           H
+ATOM      5  C   ACE A   1      13.182  16.662  14.775  1.00  0.00           C
+ATOM      6  O   ACE A   1      13.806  17.722  14.775  1.00  0.00           O
+ATOM      7  N   ALA A   2      13.799  15.478  14.775  1.00  0.00           N
+ATOM      8  H   ALA A   2      13.241  14.636  14.775  1.00  0.00           H
+ATOM      9  CA  ALA A   2      15.245  15.389  14.775  1.00  0.00           C
+ATOM     10  HA  ALA A   2      15.568  14.853  13.883  1.00  0.00           H
+ATOM     11  CB  ALA A   2      15.807  16.070  16.012  1.00  0.00           C
+ATOM     12 HB1  ALA A   2      15.418  15.581  16.905  1.00  0.00           H
+ATOM     13 HB2  ALA A   2      16.895  15.999  16.004  1.00  0.00           H
+ATOM     14 HB3  ALA A   2      15.513  17.120  16.016  1.00  0.00           H
+ATOM     15  C   ALA A   2      15.702  13.938  14.775  1.00  0.00           C
+ATOM     16  O   ALA A   2      14.879  13.024  14.775  1.00  0.00           O
+ATOM     17  N   NME A   3      17.023  13.740  14.775  1.00  0.00           N
+ATOM     18  H   NME A   3      17.638  14.542  14.775  1.00  0.00           H
+ATOM     19 CH3  NME A   3      17.577  12.402  14.775  1.00  0.00           C
+ATOM     20 HH31 NME A   3      17.242  11.869  13.885  1.00  0.00           H
+ATOM     21 HH32 NME A   3      18.666  12.459  14.775  1.00  0.00           H
+ATOM     22 HH33 NME A   3      17.242  11.869  15.665  1.00  0.00           H
+TER
+END
