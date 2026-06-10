@@ -1,0 +1,5 @@
+Public Domain Reference
+
+SPDX-License-Identifier: LicenseRef-Public-Domain
+
+The files marked with LicenseRef-Public-Domain are identified by this repository as public-domain source data. They are included for attribution and provenance clarity; no additional project copyright claim is made over those source data.

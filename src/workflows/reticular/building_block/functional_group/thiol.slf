@@ -1,0 +1,20 @@
+@<TRIPOS>MOLECULE
+thiol functional group
+3 2
+SMALL
+USER_CHARGES
+@<TRIPOS>ATOM
+1 S1 -0.014126 0.613090 0.000000 S 1 FUNC 0.0
+2 H2 0.982563 -0.284068 0.000000 H 1 FUNC 0.0
+3 Du -0.968437 -0.329021 0.000000 Du 1 FUNC 0.0
+@<TRIPOS>BOND
+1 1 2 1
+2 1 3 1
+@<SILICOLAB>RETICULAR
+#KEY
+class functional_group
+label SH
+
+#TABLE
+leaving_atom binding_atom
+3 1

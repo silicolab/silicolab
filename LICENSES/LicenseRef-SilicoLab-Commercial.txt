@@ -1,0 +1,9 @@
+SilicoLab Commercial License Reference
+
+SPDX-License-Identifier: LicenseRef-SilicoLab-Commercial
+
+SilicoLab is available under a separate commercial license granted in writing by the SilicoLab copyright holders.
+
+Unless you have a signed commercial license agreement, your rights to use, copy, modify, and distribute SilicoLab are granted only under the GNU General Public License, version 3 or any later version, together with the applicable third-party component licenses.
+
+A commercial license does not relicense third-party components. Third-party dependencies and bundled assets remain governed by their own licenses and notices.
