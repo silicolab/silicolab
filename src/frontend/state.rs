@@ -1020,6 +1020,27 @@ pub struct UiState {
     /// purpose: any tool with textual output (QM reports, future engines)
     /// shows it here rather than adding its own window.
     pub text_viewer: Option<TextViewer>,
+    /// Progress of a one-click in-place self-update (the download/replace
+    /// triggered from the update badge), distinct from `available_update`
+    /// which only records that a newer release *exists*.
+    pub self_update: SelfUpdateStatus,
+}
+
+/// Lifecycle of a user-initiated in-place update: idle until the user clicks
+/// "update", downloading while the worker replaces the executable, then either
+/// installed (offer a restart) or failed (show the error, leave the releases
+/// link as a fallback).
+#[derive(Default, Clone)]
+pub enum SelfUpdateStatus {
+    #[default]
+    Idle,
+    Downloading,
+    Installed {
+        version: String,
+    },
+    Failed {
+        error: String,
+    },
 }
 
 /// A read-only plain-text document shown in the shared viewer window: a
@@ -1082,6 +1103,7 @@ impl Default for UiState {
             trajectory: None,
             available_update: None,
             text_viewer: None,
+            self_update: SelfUpdateStatus::default(),
         }
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use crate::frontend::state::SelfUpdateStatus;
 
 /// Title-bar buttons (settings gear, sidebar toggle, window controls) sit
 /// `TITLE_BAR_H_MARGIN` from the window's corner, so their hover rect derives
@@ -281,19 +282,70 @@ pub(crate) fn render_title_bar(
                 let center = settings_response.rect.right_top() + egui::vec2(-5.0, 5.0);
                 ui.painter().circle_filled(center, 3.0, pal.status_red);
             }
-            // The release-page link sits directly left of the gear (this layout
+            // The update affordance sits directly left of the gear (this layout
             // is right-to-left), so the dot and its action read as one cluster.
-            if let Some(update) = &state.ui.available_update {
-                ui.hyperlink_to(
-                    RichText::new(format!(
-                        "{}  Update: {}",
-                        egui_phosphor::regular::ARROW_CIRCLE_UP,
-                        update.version
-                    ))
-                    .color(pal.status_blue),
-                    &update.url,
-                )
-                .on_hover_text("Open the release page");
+            // Its form follows the self-update lifecycle: a one-click "Update"
+            // button while idle, a spinner while downloading, a "Restart" button
+            // once installed, and the plain releases link when an in-place
+            // update isn't possible (portable / read-only install) or failed.
+            let update_info = state
+                .ui
+                .available_update
+                .as_ref()
+                .map(|update| (update.version.clone(), update.url.clone()));
+            match state.ui.self_update.clone() {
+                SelfUpdateStatus::Installed { version } => {
+                    let response = ui
+                        .add(Button::new(
+                            RichText::new(format!(
+                                "{}  Restart to update",
+                                egui_phosphor::regular::ARROW_CLOCKWISE
+                            ))
+                            .color(pal.status_blue),
+                        ))
+                        .on_hover_text(format!("Restart into SilicoLab {version}"));
+                    if response.clicked()
+                        && let Err(error) = crate::io::self_update::restart_into_new_binary()
+                    {
+                        state.set_message(format!("Restart failed: {error}"));
+                    }
+                }
+                SelfUpdateStatus::Downloading => {
+                    ui.add(egui::Spinner::new().size(14.0));
+                    ui.label(RichText::new("Updating…").color(muted_text));
+                }
+                status @ (SelfUpdateStatus::Idle | SelfUpdateStatus::Failed { .. }) => {
+                    if let Some((version, url)) = update_info {
+                        let failed = matches!(status, SelfUpdateStatus::Failed { .. });
+                        let label = RichText::new(format!(
+                            "{}  Update: {version}",
+                            egui_phosphor::regular::ARROW_CIRCLE_UP
+                        ))
+                        .color(pal.status_blue);
+                        // Offer one-click only when the install is writable and
+                        // the last attempt didn't fail; otherwise fall back to
+                        // the release page so the user can update manually.
+                        if !failed && crate::io::self_update::is_self_update_supported() {
+                            let response = ui
+                                .add(Button::new(label))
+                                .on_hover_text("Download and install this update");
+                            if response.clicked() {
+                                state.ui.self_update = SelfUpdateStatus::Downloading;
+                                state.jobs.self_update =
+                                    Some(crate::frontend::jobs::spawn_self_update());
+                                state.set_message(format!("Downloading SilicoLab {version}…"));
+                            }
+                        } else {
+                            let hover = match &status {
+                                SelfUpdateStatus::Failed { error } => {
+                                    format!("Update failed ({error}) — open the release page")
+                                }
+                                _ => "Open the release page".to_string(),
+                            };
+                            ui.hyperlink_to(label, &url).on_hover_text(hover);
+                        }
+                    }
+                }
             }
 
             // In a right-to-left layout the cursor's max.x is where the next
