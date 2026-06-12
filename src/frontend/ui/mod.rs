@@ -390,5 +390,6 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
 
     render_structure_editor_window(state, actions, &ctx);
     render_pdb_fetch_window(state, actions, &ctx);
+    render_text_viewer_window(state, &ctx);
     settings_modal::show(state, &ctx, actions);
 }

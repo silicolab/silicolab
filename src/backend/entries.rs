@@ -21,6 +21,10 @@ pub enum EntryOrigin {
     /// the task run directory (never copied into the project database) and is
     /// read on demand for playback.
     MdRun { trajectory: Option<PathBuf> },
+    /// Produced by a quantum-mechanics calculation. `output`, when present, is
+    /// the run's saved output report (e.g. `runs/qm-optimize-1/output.txt`)
+    /// *relative to the project root*; clicking the entry's "QM" badge opens it.
+    QmRun { output: Option<PathBuf> },
 }
 
 impl EntryOrigin {
@@ -29,6 +33,7 @@ impl EntryOrigin {
         match self {
             Self::User => "user",
             Self::MdRun { .. } => "md",
+            Self::QmRun { .. } => "qm",
         }
     }
 
@@ -36,6 +41,24 @@ impl EntryOrigin {
     pub fn trajectory(&self) -> Option<&Path> {
         match self {
             Self::MdRun { trajectory } => trajectory.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Project-relative QM output-report path, when this origin carries one.
+    pub fn qm_output(&self) -> Option<&Path> {
+        match self {
+            Self::QmRun { output } => output.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// The path persisted alongside the kind in the `entries.origin_trajectory`
+    /// column: the MD trajectory or the QM output report, depending on the kind.
+    pub fn stored_path(&self) -> Option<&Path> {
+        match self {
+            Self::MdRun { trajectory } => trajectory.as_deref(),
+            Self::QmRun { output } => output.as_deref(),
             Self::User => None,
         }
     }
@@ -46,11 +69,19 @@ impl EntryOrigin {
         matches!(self, Self::MdRun { .. })
     }
 
+    /// Whether this entry is the output of a QM calculation (used for the badge
+    /// and to open the saved output report).
+    pub fn is_qm_run(&self) -> bool {
+        matches!(self, Self::QmRun { .. })
+    }
+
     /// Rebuild an origin from its persisted `(origin_kind, origin_trajectory)`
-    /// columns.
-    pub fn from_storage(kind: Option<&str>, trajectory: Option<PathBuf>) -> Self {
+    /// columns (the path column holds the trajectory for MD runs and the output
+    /// report for QM runs).
+    pub fn from_storage(kind: Option<&str>, path: Option<PathBuf>) -> Self {
         match kind {
-            Some("md") => Self::MdRun { trajectory },
+            Some("md") => Self::MdRun { trajectory: path },
+            Some("qm") => Self::QmRun { output: path },
             _ => Self::User,
         }
     }
@@ -407,11 +438,31 @@ pub fn normalize_entry_name(structure: &Structure) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
 
     use crate::domain::Structure;
 
-    use super::EntryStore;
+    use super::{EntryOrigin, EntryStore};
+
+    #[test]
+    fn origin_round_trips_through_storage_columns() {
+        for origin in [
+            EntryOrigin::User,
+            EntryOrigin::MdRun {
+                trajectory: Some(PathBuf::from("runs/run-md-1/prod.xtc")),
+            },
+            EntryOrigin::QmRun {
+                output: Some(PathBuf::from("runs/qm-optimize-1/output.txt")),
+            },
+            EntryOrigin::QmRun { output: None },
+        ] {
+            let restored = EntryOrigin::from_storage(
+                Some(origin.kind_token()),
+                origin.stored_path().map(Path::to_path_buf),
+            );
+            assert_eq!(restored, origin);
+        }
+    }
 
     #[test]
     fn store_can_start_empty() {

@@ -1016,6 +1016,17 @@ pub struct UiState {
     /// A newer published release found by the background update check; renders
     /// a link to the release page in the status bar.
     pub available_update: Option<crate::io::update_check::AvailableUpdate>,
+    /// An open plain-text viewer window, or `None` when closed. General
+    /// purpose: any tool with textual output (QM reports, future engines)
+    /// shows it here rather than adding its own window.
+    pub text_viewer: Option<TextViewer>,
+}
+
+/// A read-only plain-text document shown in the shared viewer window: a
+/// window title and the text to display (monospace, scrollable).
+pub struct TextViewer {
+    pub title: String,
+    pub text: String,
 }
 
 #[derive(Default)]
@@ -1070,6 +1081,7 @@ impl Default for UiState {
             md_solvation_preview_key: 0,
             trajectory: None,
             available_update: None,
+            text_viewer: None,
         }
     }
 }
