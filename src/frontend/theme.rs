@@ -464,21 +464,25 @@ pub fn chrome_fill(base: Color32, glass: Option<u8>) -> Color32 {
 pub fn apply(ctx: &egui::Context) {
     register_visuals(ctx);
 
-    // A slim, subtle, always-visible scroll bar (rather than egui's wide,
-    // bright default): a thin handle drawn from the foreground color at low
-    // opacity reads as a soft gray on either theme, brightening on hover.
-    let mut scroll = egui::style::ScrollStyle::solid();
-    scroll.bar_width = 4.0;
+    // A slim, auto-hiding overlay scroll bar (macOS behaviour): the bar floats
+    // above the content without reserving layout space, fades out entirely
+    // when idle, and fades a thin foreground-colored handle back in while
+    // scrolling — widening slightly under the cursor. A dormant scroll area is
+    // indistinguishable from a static one.
+    let mut scroll = egui::style::ScrollStyle::floating();
+    scroll.floating_width = 4.0; // resting width while scrolling
+    scroll.bar_width = 6.0; // expanded width when the cursor is over the bar
     scroll.bar_inner_margin = 4.0;
-    scroll.bar_outer_margin = 2.0;
+    // Hug the edge for a more compact read, without sitting flush on it.
+    scroll.bar_outer_margin = 1.0;
     scroll.handle_min_length = 24.0;
-    scroll.foreground_color = true;
-    scroll.dormant_background_opacity = 0.0;
+    // `floating()` already hides the dormant handle/track. While merely
+    // scrolling no track is drawn; bringing the cursor near the bar fades a
+    // faint track in (and back out when it leaves).
     scroll.active_background_opacity = 0.0;
-    scroll.interact_background_opacity = 0.0;
-    scroll.dormant_handle_opacity = 0.18;
-    scroll.active_handle_opacity = 0.30;
-    scroll.interact_handle_opacity = 0.50;
+    scroll.interact_background_opacity = 0.1;
+    scroll.active_handle_opacity = 0.22;
+    scroll.interact_handle_opacity = 0.35;
 
     for theme in [egui::Theme::Light, egui::Theme::Dark] {
         ctx.style_mut_of(theme, |style| {
