@@ -285,6 +285,28 @@ fn check_updates_reset() -> AppAction {
     AppAction::SetCheckUpdates(AppConfig::default().check_updates)
 }
 
+fn auto_install_updates_read(state: &AppState) -> bool {
+    state.config.auto_install_updates
+}
+
+fn auto_install_updates_change(on: bool) -> AppAction {
+    AppAction::SetAutoInstallUpdates(on)
+}
+
+fn auto_install_updates_is_default(state: &AppState) -> bool {
+    state.config.auto_install_updates == AppConfig::default().auto_install_updates
+}
+
+fn auto_install_updates_reset() -> AppAction {
+    AppAction::SetAutoInstallUpdates(AppConfig::default().auto_install_updates)
+}
+
+/// The auto-install toggle is meaningful only while update checks run, so it is
+/// disabled (and visually nested) under "Check for updates on launch".
+fn auto_install_updates_enabled(state: &AppState) -> bool {
+    state.config.check_updates
+}
+
 // --- Startup & Projects group --------------------------------------------- //
 
 fn reopen_read(state: &AppState) -> bool {
@@ -548,6 +570,33 @@ pub fn registry() -> Vec<SettingDescriptor> {
         indent: false,
         is_default: Some(check_updates_is_default),
         reset: Some(check_updates_reset),
+    });
+    items.push(SettingDescriptor {
+        id: "startup.auto_install_updates",
+        category: SettingCategory::General,
+        group: "Startup & Projects",
+        title: "Install updates automatically",
+        description: "When a newer release is found, download and install it in the background \
+                      (a restart still applies it) instead of waiting for you to click \"Update\". \
+                      Only applies when the install location is writable.",
+        keywords: &[
+            "update",
+            "updates",
+            "upgrade",
+            "automatic",
+            "auto",
+            "install",
+            "download",
+            "background",
+        ],
+        control: Control::Toggle {
+            read: auto_install_updates_read,
+            on_change: auto_install_updates_change,
+        },
+        enabled: Some(auto_install_updates_enabled),
+        indent: true,
+        is_default: Some(auto_install_updates_is_default),
+        reset: Some(auto_install_updates_reset),
     });
     items.push(SettingDescriptor {
         id: "startup.default_project_dir",
