@@ -72,13 +72,15 @@ pub fn restart_into_new_binary() -> Result<std::convert::Infallible> {
 /// falls back to pointing the user at the releases page instead of offering a
 /// one-click update that would only error out.
 pub fn is_self_update_supported() -> bool {
-    let Ok(exe) = std::env::current_exe() else {
-        return false;
-    };
-    let Some(dir) = exe.parent() else {
-        return false;
-    };
-    is_dir_writable(dir)
+    // Memoized: the result is a per-process constant (the install location does
+    // not move under us), and the UI may query it on every title-bar repaint.
+    static SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *SUPPORTED.get_or_init(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(is_dir_writable))
+            .unwrap_or(false)
+    })
 }
 
 /// Best-effort writability probe: try to create (and immediately remove) a

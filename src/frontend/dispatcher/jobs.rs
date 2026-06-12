@@ -40,12 +40,49 @@ pub(crate) fn poll_update_check(state: &mut AppState, ctx: &egui::Context) {
     }
 }
 
+/// Drain the in-flight one-click self-update. On success the executable has
+/// already been replaced on disk; we record the installed version so the title
+/// bar can offer a restart. Failures surface in the status bar and reset the
+/// status to `Failed` (the releases link remains as a manual fallback).
+pub(crate) fn poll_self_update(state: &mut AppState, ctx: &egui::Context) {
+    let Some(job) = state.jobs.self_update.take() else {
+        return;
+    };
+    match job.receiver.try_recv() {
+        Ok(Ok(version)) => {
+            state.set_message(format!("SilicoLab {version} installed — restart to apply"));
+            state.ui.self_update = SelfUpdateStatus::Installed { version };
+        }
+        Ok(Err(error)) => {
+            state.set_message(format!("Update failed: {error}"));
+            state
+                .output_log
+                .push(format!("Self-update failed: {error}"));
+            state.ui.self_update = SelfUpdateStatus::Failed {
+                error: error.to_string(),
+            };
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => {
+            // Still downloading/replacing; keep the handle and poll again.
+            state.jobs.self_update = Some(job);
+            ctx.request_repaint_after(Duration::from_millis(500));
+        }
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            state.set_message("Update failed: worker stopped".to_string());
+            state.ui.self_update = SelfUpdateStatus::Failed {
+                error: "worker stopped".to_string(),
+            };
+        }
+    }
+}
+
 pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     poll_engine_job(state, ctx);
     poll_optimization_job(state, ctx);
     poll_qm_job(state, ctx);
     poll_trajectory_jobs(state, ctx);
     poll_update_check(state, ctx);
+    poll_self_update(state, ctx);
 }
 
 /// Drain a finished background trajectory decode (if any) into playback state,
