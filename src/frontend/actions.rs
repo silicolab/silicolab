@@ -198,6 +198,9 @@ pub enum AppAction {
     SetTrajectoryFrame(usize),
     /// Close trajectory playback, returning the viewport to the static entry.
     StopTrajectory,
+    /// Open the saved QM output report of the given QM-produced entry in a
+    /// viewer window (triggered by clicking the entry's "QM" badge).
+    ShowQmOutput(u64),
     /// Resize a sidebar by a signed delta (drag direction already applied).
     ResizeSidebar(crate::frontend::state::Side, f32),
     /// Reset a sidebar to its default width.

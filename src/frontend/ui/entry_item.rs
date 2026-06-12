@@ -65,17 +65,23 @@ pub(crate) fn render_entry_list_item(
 
         let text_rect = rect.shrink2(egui::vec2(6.0, 0.0));
 
-        // A small "MD" chip marks entries produced by an MD run (extensible to
-        // future provenance kinds). Lay it out first so the name reserves room.
-        let is_md = state
-            .entries
-            .entry(entry_id)
-            .map(|entry| entry.origin.is_md_run())
-            .unwrap_or(false);
-        let chip = is_md.then(|| {
+        // A small chip marks entries produced by a run ("MD" or "QM"). Lay it
+        // out first so the name reserves room. The QM chip is clickable: it
+        // opens the run's saved output report.
+        let chip_label = state.entries.entry(entry_id).and_then(|entry| {
+            if entry.origin.is_md_run() {
+                Some("MD")
+            } else if entry.origin.is_qm_run() {
+                Some("QM")
+            } else {
+                None
+            }
+        });
+        let is_qm = chip_label == Some("QM");
+        let chip = chip_label.map(|label| {
             let galley = ui.painter().fonts_mut(|fonts| {
                 fonts.layout_no_wrap(
-                    "MD".to_string(),
+                    label.to_string(),
                     egui::FontId::proportional(9.0),
                     pal.accent,
                 )
@@ -124,6 +130,21 @@ pub(crate) fn render_entry_list_item(
                 chip_rect.center().y - chip_galley.size().y / 2.0,
             );
             ui.painter().galley(chip_pos, chip_galley, pal.accent);
+
+            // The QM chip doubles as a button: it opens the run's saved output
+            // report. Registered after the row, so it wins the overlap.
+            if is_qm {
+                let chip_response = ui
+                    .interact(
+                        chip_rect,
+                        ui.id().with(("qm-output-chip", entry_id)),
+                        Sense::click(),
+                    )
+                    .on_hover_text("View QM output");
+                if chip_response.clicked() {
+                    actions.push(AppAction::ShowQmOutput(entry_id));
+                }
+            }
         }
 
         if response.double_clicked() {

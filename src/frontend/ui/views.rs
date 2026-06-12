@@ -416,6 +416,35 @@ pub(crate) fn render_structure_editor_window(
     }
 }
 
+/// The shared plain-text viewer window: a read-only monospace view of any
+/// tool's textual output (e.g. a QM report opened via an entry's "QM" badge).
+pub(crate) fn render_text_viewer_window(state: &mut AppState, ctx: &egui::Context) {
+    let Some(viewer) = &state.ui.text_viewer else {
+        return;
+    };
+
+    let mut open = true;
+    egui::Window::new(viewer.title.clone())
+        .default_size([640.0, 420.0])
+        .max_height(560.0)
+        .resizable(true)
+        .collapsible(false)
+        .open(&mut open)
+        .show(ctx, |ui| {
+            egui::ScrollArea::both()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(&viewer.text).monospace())
+                            .wrap_mode(egui::TextWrapMode::Extend),
+                    );
+                });
+        });
+    if !open {
+        state.ui.text_viewer = None;
+    }
+}
+
 pub(crate) fn render_pdb_fetch_window(
     state: &mut AppState,
     actions: &mut Vec<AppAction>,

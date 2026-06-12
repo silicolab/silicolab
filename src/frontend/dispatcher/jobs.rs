@@ -254,6 +254,106 @@ pub(crate) fn set_md_run_origin(state: &mut AppState, entry_id: u64, trajectory:
     state.entries.set_entry_origin(entry_id, origin);
 }
 
+/// File name of the saved QM output report inside a QM task's run directory.
+pub(crate) const QM_OUTPUT_FILE: &str = "output.txt";
+
+/// Persist a finished QM calculation's output report to the active task's run
+/// directory (creating it on demand) and return the written path. Failures are
+/// logged to the Output tab and reported as `None` — they never abort result
+/// handling, since the in-memory output log already holds the report.
+fn save_qm_output(state: &mut AppState, summary: &str) -> Option<PathBuf> {
+    let task_run_id = state.active_task_run?;
+    let kind = state.tasks.task_run(task_run_id)?.kind;
+    if !matches!(
+        kind,
+        TaskKind::RunQmEnergy | TaskKind::RunQmOptimize | TaskKind::RunQmFrequencies
+    ) {
+        return None;
+    }
+    let run_dir = match ensure_active_task_run_dir(state, kind, None) {
+        Ok(run_dir) => run_dir,
+        Err(error) => {
+            state
+                .output_log
+                .push(format!("failed to create QM run directory: {error}"));
+            return None;
+        }
+    };
+    let path = run_dir.join(QM_OUTPUT_FILE);
+    let mut text = summary.to_string();
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    match std::fs::write(&path, text) {
+        Ok(()) => {
+            state
+                .output_log
+                .push(format!("QM output saved to {}", path.display()));
+            Some(path)
+        }
+        Err(error) => {
+            state
+                .output_log
+                .push(format!("failed to save QM output: {error}"));
+            None
+        }
+    }
+}
+
+/// Mark an entry as the output of a QM run. Like [`set_md_run_origin`], the
+/// report path is stored relative to the project root so it survives the
+/// project being moved; the badge tracks the origin, not the path, so the
+/// entry is marked even when saving the report failed.
+pub(crate) fn set_qm_run_origin(state: &mut AppState, entry_id: u64, output: Option<PathBuf>) {
+    let project_root = state
+        .workspace
+        .project()
+        .map(|project| project.root.clone());
+    let output = output.map(|path| match project_root.as_deref() {
+        Some(root) => path
+            .strip_prefix(root)
+            .map(Path::to_path_buf)
+            .unwrap_or(path),
+        None => path,
+    });
+    state
+        .entries
+        .set_entry_origin(entry_id, EntryOrigin::QmRun { output });
+}
+
+/// Open the saved QM output report of `entry_id` in the shared text viewer.
+/// The report is read from disk on every open (it is small), so the viewer
+/// never holds a stale copy and nothing extra is persisted in the project
+/// database.
+pub(crate) fn show_qm_output(state: &mut AppState, entry_id: u64) {
+    let Some(entry) = state.entries.entry(entry_id) else {
+        return;
+    };
+    let entry_name = entry.name.clone();
+    let Some(relative) = entry.origin.qm_output().map(Path::to_path_buf) else {
+        state.set_message("This entry has no saved QM output".to_string());
+        return;
+    };
+    // Stored relative to the project root (absolute when the run directory
+    // lives outside a project); `join` keeps an already-absolute path as-is.
+    let absolute = match state.workspace.project() {
+        Some(project) => project.root.join(&relative),
+        None => relative,
+    };
+    match std::fs::read_to_string(&absolute) {
+        Ok(text) => {
+            state.ui.text_viewer = Some(crate::frontend::state::TextViewer {
+                title: format!("QM Output — {entry_name}"),
+                text,
+            });
+        }
+        Err(error) => state.set_message(format!(
+            "Could not read QM output {}: {error}",
+            absolute.display()
+        )),
+    }
+}
+
 pub(crate) fn poll_engine_job(state: &mut AppState, ctx: &egui::Context) {
     let Some(mut running) = state.jobs.take_engine() else {
         return;
@@ -452,6 +552,10 @@ pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
                 for line in outcome.summary.lines() {
                     state.output_log.push(line.to_string());
                 }
+                // Persist the raw report to the task's run directory before any
+                // new entry is added, so the run's source entry is the input
+                // structure, not the optimized result.
+                let output_path = save_qm_output(state, &outcome.summary);
                 // A QM run is a heavy calculation; its optimized geometry is
                 // surfaced as a new entry (the original structure is preserved),
                 // matching the convention for entry-producing tasks.
@@ -461,6 +565,7 @@ pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
                     if let Some(task_run_id) = task_run_id {
                         record_task_result_entry(state, task_run_id, entry_id);
                     }
+                    set_qm_run_origin(state, entry_id, output_path);
                     changed = true;
                 }
                 state.set_message(format!(

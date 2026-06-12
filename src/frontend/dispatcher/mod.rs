@@ -213,6 +213,7 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::ToggleTrajectoryPlay => toggle_trajectory_play(state, ctx),
         AppAction::SetTrajectoryFrame(frame) => set_trajectory_frame(state, frame),
         AppAction::StopTrajectory => stop_trajectory(state),
+        AppAction::ShowQmOutput(entry_id) => show_qm_output(state, entry_id),
         AppAction::ResizeSidebar(side, delta) => resize_sidebar(state, side, delta, ctx),
         AppAction::ResetSidebar(side) => reset_sidebar(state, side, ctx),
         AppAction::ResizePanel(delta) => resize_panel(state, delta, ctx),
