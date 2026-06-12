@@ -29,6 +29,22 @@ pub(crate) enum RenderPass {
     Lines(Vec<LineSegmentPrimitive>),
 }
 
+/// One mesh triangle tagged with whether it is translucent. Used to composite
+/// the opaque (ball-and-stick, cartoon) and translucent (filled surface)
+/// geometry of *every* representation into a single depth-sorted draw order.
+///
+/// The egui painter has no depth buffer — it composites in submission order — so
+/// correct occlusion *between* representations depends entirely on drawing
+/// back-to-front (painter's algorithm). A single global sort across all
+/// representations is what makes nearer geometry occlude farther geometry
+/// regardless of which representation emitted it; sorting each representation's
+/// pass in isolation (as the per-pass order does) only gets occlusion right
+/// *within* a representation, never across.
+pub(crate) struct CompositedTriangle<'a> {
+    pub(crate) triangle: &'a PrimitiveTriangle,
+    pub(crate) translucent: bool,
+}
+
 impl RenderScene {
     pub(crate) fn is_empty(&self) -> bool {
         self.passes.iter().all(RenderPass::is_empty)
@@ -85,6 +101,46 @@ impl RenderScene {
             .sum()
     }
 
+    /// Every mesh triangle across all passes, tagged opaque/translucent and
+    /// sorted back-to-front (farthest first, i.e. ascending view-space depth)
+    /// for painter's-algorithm compositing. `depth` is larger for nearer
+    /// geometry, so ascending order draws far before near.
+    fn composited_meshes(&self) -> Vec<CompositedTriangle<'_>> {
+        let mut meshes = Vec::with_capacity(self.triangle_count());
+        for pass in &self.passes {
+            match pass {
+                RenderPass::OpaqueMeshes(triangles) => {
+                    meshes.extend(triangles.iter().map(|triangle| CompositedTriangle {
+                        triangle,
+                        translucent: false,
+                    }))
+                }
+                RenderPass::TransparentMeshes(triangles) => {
+                    meshes.extend(triangles.iter().map(|triangle| CompositedTriangle {
+                        triangle,
+                        translucent: true,
+                    }))
+                }
+                RenderPass::Lines(_) => {}
+            }
+        }
+        meshes.sort_by(|a, b| a.triangle.depth.total_cmp(&b.triangle.depth));
+        meshes
+    }
+
+    /// Opaque mesh triangles across all passes. Seeds the screen-space depth
+    /// buffer the wireframe surface is clipped against, so every opaque
+    /// representation (cartoon *and* ball-and-stick) occludes the surface.
+    pub(crate) fn opaque_triangles(&self) -> impl Iterator<Item = &PrimitiveTriangle> {
+        self.passes
+            .iter()
+            .filter_map(|pass| match pass {
+                RenderPass::OpaqueMeshes(triangles) => Some(triangles.as_slice()),
+                _ => None,
+            })
+            .flatten()
+    }
+
     #[cfg(test)]
     pub(crate) fn line_segments(&self) -> Vec<LineSegmentPrimitive> {
         self.passes
@@ -118,18 +174,38 @@ impl RenderPass {
 }
 
 pub(crate) trait RenderBackend {
-    fn draw_opaque_triangles(&mut self, triangles: &[PrimitiveTriangle]);
-    fn draw_transparent_triangles(&mut self, triangles: &[PrimitiveTriangle]);
+    /// Draw the frame's mesh triangles. The slice is pre-sorted back-to-front
+    /// and spans every representation, so a backend that lacks a depth buffer
+    /// (the egui painter) gets correct cross-representation occlusion just by
+    /// drawing in order; a backend that has one (the headless canvas) uses the
+    /// `translucent` tag to skip depth writes for blended geometry.
+    fn draw_meshes(&mut self, meshes: &[CompositedTriangle<'_>]);
     fn draw_line_segments(&mut self, lines: &[LineSegmentPrimitive]);
 
     fn submit_scene(&mut self, scene: &RenderScene) {
-        for pass in &scene.passes {
-            match pass {
-                RenderPass::OpaqueMeshes(triangles) => self.draw_opaque_triangles(triangles),
-                RenderPass::TransparentMeshes(triangles) => {
-                    self.draw_transparent_triangles(triangles)
-                }
-                RenderPass::Lines(lines) => self.draw_line_segments(lines),
+        // Lines emitted *before* any mesh (the unit-cell wireframe) draw behind
+        // the molecule; lines emitted after it (surface wireframe, cartoon
+        // silhouettes) draw on top. Meshes themselves are composited globally,
+        // so their original pass order no longer decides occlusion.
+        let first_mesh = scene.passes.iter().position(|pass| {
+            matches!(
+                pass,
+                RenderPass::OpaqueMeshes(_) | RenderPass::TransparentMeshes(_)
+            )
+        });
+        let split = first_mesh.unwrap_or(scene.passes.len());
+
+        for pass in &scene.passes[..split] {
+            if let RenderPass::Lines(lines) = pass {
+                self.draw_line_segments(lines);
+            }
+        }
+
+        self.draw_meshes(&scene.composited_meshes());
+
+        for pass in &scene.passes[split..] {
+            if let RenderPass::Lines(lines) = pass {
+                self.draw_line_segments(lines);
             }
         }
     }
@@ -146,12 +222,12 @@ impl<'a> EguiRenderBackend<'a> {
 }
 
 impl RenderBackend for EguiRenderBackend<'_> {
-    fn draw_opaque_triangles(&mut self, triangles: &[PrimitiveTriangle]) {
-        add_triangle_mesh(self.painter, triangles);
-    }
-
-    fn draw_transparent_triangles(&mut self, triangles: &[PrimitiveTriangle]) {
-        add_triangle_mesh(self.painter, triangles);
+    fn draw_meshes(&mut self, meshes: &[CompositedTriangle<'_>]) {
+        // One mesh, drawn in the given back-to-front order. egui has no depth
+        // buffer and rasterizes in index order with alpha blending, so opaque
+        // triangles (alpha 255) overwrite and translucent ones blend over
+        // whatever is already there — exactly painter's algorithm.
+        add_triangle_mesh(self.painter, meshes);
     }
 
     fn draw_line_segments(&mut self, lines: &[LineSegmentPrimitive]) {
@@ -173,15 +249,19 @@ impl<'a> CanvasRenderBackend<'a> {
 }
 
 impl RenderBackend for CanvasRenderBackend<'_> {
-    fn draw_opaque_triangles(&mut self, triangles: &[PrimitiveTriangle]) {
-        for triangle in triangles {
-            self.canvas.draw_opaque_primitive_triangle(triangle);
-        }
-    }
-
-    fn draw_transparent_triangles(&mut self, triangles: &[PrimitiveTriangle]) {
-        for triangle in triangles {
-            self.canvas.draw_transparent_primitive_triangle(triangle);
+    fn draw_meshes(&mut self, meshes: &[CompositedTriangle<'_>]) {
+        // The canvas has a real depth buffer. Drawing the merged stream
+        // back-to-front, opaque triangles depth-test *and* write while
+        // translucent ones depth-test without writing, so a near opaque atom
+        // occludes a far surface wall and a near surface wall blends over the
+        // cartoon behind it — both directions correct.
+        for mesh in meshes {
+            if mesh.translucent {
+                self.canvas
+                    .draw_transparent_primitive_triangle(mesh.triangle);
+            } else {
+                self.canvas.draw_opaque_primitive_triangle(mesh.triangle);
+            }
         }
     }
 
@@ -240,16 +320,16 @@ pub(crate) fn submit_scene_to_canvas(canvas: &mut HeadlessCanvas, scene: &Render
     backend.submit_scene(scene);
 }
 
-fn add_triangle_mesh(painter: &Painter, triangles: &[PrimitiveTriangle]) {
-    if triangles.is_empty() {
+fn add_triangle_mesh(painter: &Painter, meshes: &[CompositedTriangle<'_>]) {
+    if meshes.is_empty() {
         return;
     }
 
     let mut mesh = Mesh::default();
-    mesh.reserve_triangles(triangles.len());
-    for triangle in triangles {
+    mesh.reserve_triangles(meshes.len());
+    for composited in meshes {
         let base = mesh.vertices.len() as u32;
-        for vertex in triangle.vertices {
+        for vertex in composited.triangle.vertices {
             mesh.colored_vertex(vertex.pos, vertex.color);
         }
         mesh.add_triangle(base, base + 1, base + 2);
