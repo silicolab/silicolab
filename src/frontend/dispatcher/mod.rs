@@ -30,7 +30,7 @@ use crate::{
             EngineWorkerMessage, GromacsPipelineRequest, OptimizationWorkerMessage,
             QmWorkerMessage, engine_poll_frame, optimization_finished_message,
             request_next_optimization_poll, spawn_gromacs_build_job, spawn_gromacs_pipeline_job,
-            spawn_optimization_job, spawn_qm_job, spawn_update_check,
+            spawn_optimization_job, spawn_qm_job, spawn_self_update, spawn_update_check,
         },
         md_support::{
             gromacs_topology_path_for_entry, load_md_topology_for_entry, write_md_system_context,
@@ -201,6 +201,7 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SetGlass(on) => set_glass(state, on),
         AppAction::SetGlassIntensity { value, commit } => set_glass_intensity(state, value, commit),
         AppAction::SetCheckUpdates(on) => set_check_updates(state, on),
+        AppAction::SetAutoInstallUpdates(on) => set_auto_install_updates(state, on),
         AppAction::SetReopenLastProject(on) => set_reopen_last_project(state, on),
         AppAction::PickDefaultProjectDir => pick_default_project_dir(state),
         AppAction::RevealSettingsFile => reveal_settings_file(state),

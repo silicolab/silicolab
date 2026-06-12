@@ -119,3 +119,25 @@ launch path serve both WSL-hosted and natively installed tools.
 A project is a **directory of SQLite databases** (`backend/storage.rs`, via
 rusqlite) — not a single file and not a custom binary format. Treat the project
 directory as the unit of a project.
+
+## Updates
+
+Updating is split in two so detection is cheap and acting is opt-in:
+
+- `io/update_check.rs` only **detects** — one anonymous GitHub Releases query
+  per launch, compared against the compiled-in version. It never downloads.
+- `io/self_update.rs` **acts** — it downloads the release asset matching this
+  platform's target triple and replaces the running executable via the
+  `self_update` crate (which handles Windows's "can't overwrite a running exe"
+  through an atomic self-replace). `is_self_update_supported()` probes whether
+  the install directory is writable; portable / package-manager installs fall
+  back to the releases page instead of offering a one-click update that would
+  only error.
+
+Both run on `JobManager` worker threads (`spawn_update_check`,
+`spawn_self_update`) and report back through the usual channel-poll pattern, so
+the UI thread never blocks on network or disk. The default flow is **one-click
+manual**: the title bar surfaces an "Update" button that becomes a "Restart"
+button once installed. The `auto_install_updates` preference (off by default)
+makes a discovered update download itself; `maybe_auto_install_update` gates
+both the toggle and the background poll on the same conditions.

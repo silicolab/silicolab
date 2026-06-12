@@ -112,6 +112,13 @@ pub struct AppConfig {
     /// surfaces a notice — nothing is downloaded or installed automatically.
     #[serde(default = "default_check_updates")]
     pub check_updates: bool,
+    /// Whether a discovered update is downloaded and installed automatically
+    /// (still requiring a restart to apply), rather than waiting for the user to
+    /// click "Update". Off by default — the default flow is one-click manual —
+    /// and only ever acts when [`check_updates`](Self::check_updates) is on and
+    /// the install location is writable.
+    #[serde(default = "default_auto_install_updates")]
+    pub auto_install_updates: bool,
     /// App-wide default visual appearance applied to newly built or loaded
     /// structures (the Representation settings page). Deliberately **not**
     /// `#[serde(default)]` (pre-release cleanliness): a `settings.json` written
@@ -126,6 +133,10 @@ fn default_glass() -> bool {
 
 fn default_check_updates() -> bool {
     true
+}
+
+fn default_auto_install_updates() -> bool {
+    false
 }
 
 fn default_glass_intensity() -> f32 {
@@ -167,6 +178,7 @@ impl Default for AppConfig {
             glass: default_glass(),
             glass_intensity: default_glass_intensity(),
             check_updates: default_check_updates(),
+            auto_install_updates: default_auto_install_updates(),
             representation: RepresentationPrefs::default(),
         }
     }
