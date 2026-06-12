@@ -74,19 +74,6 @@ struct ChainResiduePoint {
     position: Point3<f32>,
 }
 
-pub(crate) fn build_biopolymer_cartoon_depth_buffer(
-    structure: &Structure,
-    viewport: &Projector,
-    visual_state: &ViewportVisualState,
-) -> Option<ScreenDepthBuffer> {
-    let biopolymer = usable_biopolymer(structure)?;
-    let triangles = cartoon_fragments(structure, biopolymer, viewport, visual_state)
-        .into_iter()
-        .flat_map(|fragment| fragment.triangles)
-        .collect::<Vec<_>>();
-    rasterize_cartoon_depth_buffer(viewport.rect, &triangles)
-}
-
 pub(crate) fn build_biopolymer_cartoon_scene(
     structure: &Structure,
     viewport: &Projector,
@@ -131,9 +118,13 @@ pub(super) fn sample_depth_buffer(depth_buffer: &ScreenDepthBuffer, pos: Pos2) -
     (depth > f32::NEG_INFINITY).then_some(depth)
 }
 
+/// Whether a surface-wireframe sample at `pos`/`depth` is in front of (or within
+/// an epsilon of) the opaque geometry recorded in `depth_buffer` — i.e. visible
+/// rather than occluded. `depth` is larger for nearer geometry, so the sample
+/// shows when it is at least as near as the stored opaque depth.
 pub(super) fn mesh_sample_visible(depth_buffer: &ScreenDepthBuffer, pos: Pos2, depth: f32) -> bool {
     match sample_depth_buffer(depth_buffer, pos) {
-        Some(cartoon_depth) => depth >= cartoon_depth - super::MESH_OCCLUSION_DEPTH_EPSILON,
+        Some(occluder_depth) => depth >= occluder_depth - super::MESH_OCCLUSION_DEPTH_EPSILON,
         None => true,
     }
 }
@@ -770,10 +761,19 @@ fn append_cartoon_silhouette(
     }
 }
 
-fn rasterize_cartoon_depth_buffer(
+/// Rasterize a low-resolution screen-space depth buffer from opaque mesh
+/// triangles (cartoon ribbons and/or the ball-and-stick base).
+///
+/// The wireframe ("mesh") surface can't join the triangle depth sort — it is
+/// drawn as screen-space line runs, not triangles — so it is clipped against
+/// this buffer instead. Seeding it with *all* opaque geometry (not just the
+/// cartoon) is what lets a ball-and-stick atom occlude the surface wireframe in
+/// front of it, the same way the cartoon already did.
+pub(crate) fn build_opaque_depth_buffer<'a>(
     rect: Rect,
-    triangles: &[PrimitiveTriangle],
+    triangles: impl IntoIterator<Item = &'a PrimitiveTriangle>,
 ) -> Option<ScreenDepthBuffer> {
+    let triangles = triangles.into_iter().collect::<Vec<_>>();
     if triangles.is_empty() || rect.width() <= 1.0 || rect.height() <= 1.0 {
         return None;
     }
