@@ -199,7 +199,7 @@ pub fn save_project_snapshot_ref(
                 path_to_string(&entry.save_path),
                 entry.revision as i64,
                 entry.origin.kind_token(),
-                entry.origin.trajectory().map(path_to_string),
+                entry.origin.stored_path().map(path_to_string),
             ],
         )?;
     }
