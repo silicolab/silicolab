@@ -26,6 +26,14 @@ const ARCHIVE_BIN_NAME: &str = "silicolab.exe";
 #[cfg(not(target_os = "windows"))]
 const ARCHIVE_BIN_NAME: &str = "silicolab";
 
+/// On macOS the release archive ships a `.app` bundle, so the executable is
+/// nested rather than at the archive root. `self_update` locates the binary by
+/// an *exact* path match against the archive entries (see `release.yml`, which
+/// packages the bundle without a leading `./`), so this must match the layout
+/// the workflow produces.
+#[cfg(target_os = "macos")]
+const MACOS_BIN_PATH_IN_ARCHIVE: &str = "silicolab.app/Contents/MacOS/silicolab";
+
 /// Download the latest release asset for this platform and replace the running
 /// executable with it. Returns the version that was installed.
 ///
@@ -34,7 +42,8 @@ const ARCHIVE_BIN_NAME: &str = "silicolab";
 /// of the old one; the process is still running the *old* code until it is
 /// restarted (see [`restart_into_new_binary`]).
 pub fn perform_update() -> Result<String> {
-    let status = self_update::backends::github::Update::configure()
+    let mut updater = self_update::backends::github::Update::configure();
+    updater
         .repo_owner(REPO_OWNER)
         .repo_name(REPO_NAME)
         .bin_name(ARCHIVE_BIN_NAME)
@@ -42,7 +51,14 @@ pub fn perform_update() -> Result<String> {
         // The GUI owns the confirmation step and draws its own progress, so the
         // crate's interactive prompt and CLI progress bar are both suppressed.
         .no_confirm(true)
-        .show_download_progress(false)
+        .show_download_progress(false);
+
+    // macOS ships a `.app` bundle, so the binary is nested; every other platform
+    // ships the bare executable at the archive root (the `bin_name` default).
+    #[cfg(target_os = "macos")]
+    updater.bin_path_in_archive(MACOS_BIN_PATH_IN_ARCHIVE);
+
+    let status = updater
         .build()
         .context("failed to configure the updater")?
         .update()
