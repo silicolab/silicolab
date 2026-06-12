@@ -20,15 +20,7 @@ pub(crate) fn render_pinned(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) 
             .max_rect(rect)
             .layout(Layout::top_down(Align::Min)),
     );
-    // Clip to the content rect, then let painting bleed into the panel's 10px
-    // right margin (up to the panel's own edge) so the edge-pinned scroll bar
-    // (see `render_primary_sidebar`'s negative `bar_outer_margin`) isn't
-    // clipped away. Expanded AFTER the intersection — the parent clip can be
-    // as tight as the content rect, which would cancel the expansion. Layout
-    // is still pinned to `rect`, so this stays cosmetic.
-    let mut clip = rect.intersect(ui.clip_rect());
-    clip.max.x += 10.0;
-    child.set_clip_rect(clip);
+    child.set_clip_rect(rect.intersect(ui.clip_rect()));
     add(&mut child);
     ui.advance_cursor_after_rect(rect);
 }

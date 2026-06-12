@@ -6,12 +6,6 @@ pub(crate) fn render_primary_sidebar(
     actions: &mut Vec<AppAction>,
 ) {
     let pal = crate::frontend::theme::palette(ui);
-    // Pin scroll bars to the panel's edge, macOS source-list style: pull them
-    // out through the sidebar's 10px right margin (bar right edge lands 2px
-    // shy of the divider hairline), so the bar and the divider don't read as
-    // two parallel bars with a dead gap between them. Inherited by every
-    // ScrollArea in the sidebar's views.
-    ui.spacing_mut().scroll.bar_outer_margin = -8.0;
     // Header strip (Claude Desktop-style): just the native traffic lights and
     // the sidebar-hide toggle — the view switcher lives in the segmented
     // control below, not crammed beside the lights. The sidebar panel has no

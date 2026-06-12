@@ -30,11 +30,14 @@ pub(crate) fn render_tasks_view(
     let search = state.tasks.task_list.search_query.to_lowercase();
     let pal = crate::frontend::theme::palette(ui);
     ScrollArea::vertical()
-        // Scroll only via wheel/trackpad; the scroll bar stays a non-interactive
-        // position indicator (Mac-native behaviour). This stops the bar from
-        // catching a drag that starts on the adjacent panel resize divider — the
-        // bug where dragging the divider scrolled instead of resizing.
-        .scroll_source(egui::scroll_area::ScrollSource::MOUSE_WHEEL)
+        // Wheel/trackpad plus content drag (touch-friendly), but the scroll bar
+        // stays a non-interactive position indicator: excluding SCROLL_BAR
+        // stops the bar from catching a drag that starts on the adjacent panel
+        // resize divider — the bug where dragging the divider scrolled instead
+        // of resizing.
+        .scroll_source(
+            egui::scroll_area::ScrollSource::MOUSE_WHEEL | egui::scroll_area::ScrollSource::DRAG,
+        )
         .show(ui, |ui| {
             for category in TASK_CATEGORIES {
                 let controllers = task_controllers()

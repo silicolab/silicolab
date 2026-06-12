@@ -26,7 +26,11 @@ pub(super) fn render_style_panel(
 
     ScrollArea::vertical()
         .auto_shrink([false, false])
-        .scroll_source(egui::scroll_area::ScrollSource::MOUSE_WHEEL)
+        // Wheel/trackpad plus content drag (touch-friendly); the scroll bar
+        // stays a non-interactive position indicator (SCROLL_BAR excluded).
+        .scroll_source(
+            egui::scroll_area::ScrollSource::MOUSE_WHEEL | egui::scroll_area::ScrollSource::DRAG,
+        )
         .show(ui, |ui| {
             scope_banner(ui, &pal, selection_len);
 
