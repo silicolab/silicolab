@@ -5,9 +5,9 @@ use super::{
     camera::Projector,
     render::{
         PickTarget, RenderScene, ScreenDepthBuffer, ViewportGeometry, any_atoms_drawn_as_cartoon,
-        any_atoms_drawn_as_surface, build_ball_and_stick_scene,
-        build_biopolymer_cartoon_depth_buffer, build_biopolymer_cartoon_scene,
-        build_cached_surface_scene, build_cell_scene, build_surface_scene,
+        any_atoms_drawn_as_surface, build_ball_and_stick_scene, build_biopolymer_cartoon_scene,
+        build_cached_surface_scene, build_cell_scene, build_opaque_depth_buffer,
+        build_surface_scene,
     },
 };
 
@@ -97,6 +97,8 @@ impl<'a> RepresentationComposer<'a> {
         } = self;
         let mut scene = RenderScene::default();
 
+        // Unit-cell wireframe first, so the compositor draws it behind the
+        // molecule (lines emitted before the first mesh pass are background).
         if visual_state.show_cell
             && let Some(cell) = &structure.cell
         {
@@ -108,57 +110,54 @@ impl<'a> RepresentationComposer<'a> {
         // when cartoon atoms are present. Both can be on at once.
         let draw_cartoon = any_atoms_drawn_as_cartoon(structure, visual_state);
         let draw_surface = draw_cartoon || any_atoms_drawn_as_surface(structure, visual_state);
-        if draw_surface {
-            match visual_state.surface.style {
-                super::SurfaceStyle::Fill => {
-                    append_surface_scene(
-                        &mut scene,
-                        structure,
-                        viewport,
-                        visual_state,
-                        None,
-                        &mut surface_cache,
-                    );
-                    if draw_cartoon {
-                        scene.append(build_biopolymer_cartoon_scene(
-                            structure,
-                            viewport,
-                            visual_state,
-                        ));
-                    }
-                }
-                super::SurfaceStyle::Mesh => {
-                    let cartoon_depth = if draw_cartoon {
-                        build_biopolymer_cartoon_depth_buffer(structure, viewport, visual_state)
-                    } else {
-                        None
-                    };
-                    if draw_cartoon {
-                        scene.append(build_biopolymer_cartoon_scene(
-                            structure,
-                            viewport,
-                            visual_state,
-                        ));
-                    }
-                    append_surface_scene(
-                        &mut scene,
-                        structure,
-                        viewport,
-                        visual_state,
-                        cartoon_depth.as_ref(),
-                        &mut surface_cache,
-                    );
-                }
-            }
-        }
 
-        scene.append(build_ball_and_stick_scene(
-            structure,
-            geometry,
-            viewport,
-            selection,
-            visual_state,
-        ));
+        // Build the opaque representations up front: the cartoon ribbon and the
+        // ball-and-stick base. Their triangles get depth-sorted against each
+        // other and the translucent surface by the compositor, and — for the
+        // wireframe surface — seed the depth buffer its line runs are clipped
+        // against. Nothing here depends on append order any more.
+        let cartoon_scene =
+            draw_cartoon.then(|| build_biopolymer_cartoon_scene(structure, viewport, visual_state));
+        let ball_stick_scene =
+            build_ball_and_stick_scene(structure, geometry, viewport, selection, visual_state);
+
+        // The wireframe ("mesh") surface is drawn as screen-space line runs that
+        // can't join the triangle depth sort, so it is clipped against a depth
+        // buffer of every opaque representation. Seeding it from both the cartoon
+        // and the base is what lets either occlude the surface lines in front of
+        // them. The filled surface needs no buffer — it composites as triangles.
+        let occluder_depth = (draw_surface
+            && visual_state.surface.style == super::SurfaceStyle::Mesh)
+            .then(|| {
+                build_opaque_depth_buffer(
+                    viewport.rect,
+                    cartoon_scene
+                        .iter()
+                        .chain(std::iter::once(&ball_stick_scene))
+                        .flat_map(RenderScene::opaque_triangles),
+                )
+            })
+            .flatten();
+
+        // Append the opaque representations, then the surface. The compositor
+        // sorts every mesh triangle globally, so this order only governs where
+        // each representation's overlay lines (cartoon silhouettes, surface
+        // wireframe) land — on top of the molecule rather than behind it.
+        if let Some(cartoon_scene) = cartoon_scene {
+            scene.append(cartoon_scene);
+        }
+        scene.append(ball_stick_scene);
+
+        if draw_surface {
+            append_surface_scene(
+                &mut scene,
+                structure,
+                viewport,
+                visual_state,
+                occluder_depth.as_ref(),
+                &mut surface_cache,
+            );
+        }
 
         ViewportSceneBuildResult {
             scene,
@@ -172,7 +171,7 @@ fn append_surface_scene(
     structure: &Structure,
     viewport: &Projector,
     visual_state: &ViewportVisualState,
-    cartoon_depth: Option<&ScreenDepthBuffer>,
+    occluder_depth: Option<&ScreenDepthBuffer>,
     surface_cache: &mut SurfaceCacheMode<'_>,
 ) {
     match surface_cache {
@@ -189,7 +188,7 @@ fn append_surface_scene(
                 viewport,
                 visual_state,
                 context.cache,
-                cartoon_depth,
+                occluder_depth,
             ));
         }
         SurfaceCacheMode::Uncached => {
@@ -197,7 +196,7 @@ fn append_surface_scene(
                 structure,
                 viewport,
                 visual_state,
-                cartoon_depth,
+                occluder_depth,
             ));
         }
     }

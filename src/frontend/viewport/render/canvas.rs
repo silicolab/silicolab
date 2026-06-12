@@ -232,4 +232,49 @@ mod tests {
         assert!(pixel[1] > pixel[0]);
         assert!(pixel[2] - pixel[0] >= 15);
     }
+
+    /// Occlusion must follow depth, not pass-append order. A translucent surface
+    /// *in front of* an opaque ribbon has to blend over it even when the surface
+    /// pass is appended first (the order the old composer used for Fill+cartoon,
+    /// which drew the cartoon flat on top and hid the surface entirely).
+    #[test]
+    fn nearer_translucent_surface_blends_over_farther_opaque_mesh() {
+        use super::super::PrimitiveMeshVertex;
+        use super::super::backend::{RenderScene, submit_scene_to_canvas};
+
+        // Larger depth == nearer the camera (see `Projector::project`). A flat
+        // triangle covering pixel (0, 0).
+        let triangle = |depth: f32, color: Color32| {
+            let vertex = |x: f32, y: f32| PrimitiveMeshVertex {
+                pos: Pos2::new(x, y),
+                depth,
+                color,
+            };
+            super::super::primitive_triangle(
+                vertex(-2.0, -2.0),
+                vertex(8.0, -2.0),
+                vertex(-2.0, 8.0),
+            )
+        };
+
+        let cartoon = triangle(0.0, Color32::from_rgb(220, 40, 40)); // opaque, far
+        let surface = triangle(1.0, Color32::from_rgba_unmultiplied(40, 80, 220, 128)); // near
+
+        let mut scene = RenderScene::default();
+        scene.push_transparent_meshes(vec![surface]);
+        scene.push_opaque_meshes(vec![cartoon]);
+
+        let mut canvas = HeadlessCanvas::new(2, 2, Color32::WHITE);
+        submit_scene_to_canvas(&mut canvas, &scene);
+
+        let pixel = canvas.pixels[0];
+        assert!(
+            pixel[2] > 90,
+            "near translucent surface should show its blue in front, got {pixel:?}"
+        );
+        assert!(
+            pixel[0] < 200,
+            "far opaque cartoon should be dimmed by the surface, got {pixel:?}"
+        );
+    }
 }

@@ -25,7 +25,7 @@ pub(super) use backend::{
 pub(super) use ball_stick::build_ball_and_stick_scene;
 pub(super) use canvas::HeadlessCanvas;
 pub(super) use cartoon::{
-    ScreenDepthBuffer, build_biopolymer_cartoon_depth_buffer, build_biopolymer_cartoon_scene,
+    ScreenDepthBuffer, build_biopolymer_cartoon_scene, build_opaque_depth_buffer,
 };
 pub(super) use cell::{build_cell_scene, draw_cell_labels};
 pub(super) use instances::build_molecule_instances;

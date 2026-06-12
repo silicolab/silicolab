@@ -71,14 +71,14 @@ pub(crate) fn build_cached_surface_scene(
     viewport: &Projector,
     visual_state: &ViewportVisualState,
     cache: &mut SurfaceCache,
-    cartoon_depth: Option<&ScreenDepthBuffer>,
+    occluder_depth: Option<&ScreenDepthBuffer>,
 ) -> RenderScene {
     if surface_cache_key.surface_chains.is_empty() && surface_cache_key.surface_atoms.is_empty() {
         return RenderScene::default();
     }
 
     let surface_geometry = cached_surface_geometry(cache, structure, surface_cache_key);
-    build_surface_scene_from_geometry(surface_geometry, viewport, visual_state, cartoon_depth)
+    build_surface_scene_from_geometry(surface_geometry, viewport, visual_state, occluder_depth)
 }
 
 /// World-space surface mesh (position, normal, translucent color) for the GPU
@@ -122,19 +122,19 @@ pub(crate) fn build_surface_scene(
     structure: &Structure,
     viewport: &Projector,
     visual_state: &ViewportVisualState,
-    cartoon_depth: Option<&ScreenDepthBuffer>,
+    occluder_depth: Option<&ScreenDepthBuffer>,
 ) -> RenderScene {
     let surface_geometry = SurfaceSceneGeometry {
         chains: surface_chain_geometries(structure, visual_state),
     };
-    build_surface_scene_from_geometry(&surface_geometry, viewport, visual_state, cartoon_depth)
+    build_surface_scene_from_geometry(&surface_geometry, viewport, visual_state, occluder_depth)
 }
 
 fn build_surface_scene_from_geometry(
     surface_geometry: &SurfaceSceneGeometry,
     viewport: &Projector,
     visual_state: &ViewportVisualState,
-    cartoon_depth: Option<&ScreenDepthBuffer>,
+    occluder_depth: Option<&ScreenDepthBuffer>,
 ) -> RenderScene {
     let mut transparent_meshes = Vec::new();
     let mut lines = Vec::new();
@@ -163,7 +163,7 @@ fn build_surface_scene_from_geometry(
                     chain_surface,
                     base_color,
                     visual_state.surface.transparency,
-                    cartoon_depth,
+                    occluder_depth,
                 ));
             }
         }
@@ -349,7 +349,7 @@ fn build_surface_mesh_lines(
     chain_surface: &SurfaceChainGeometry,
     base_color: Color32,
     transparency: f32,
-    cartoon_depth: Option<&ScreenDepthBuffer>,
+    occluder_depth: Option<&ScreenDepthBuffer>,
 ) -> Vec<LineSegmentPrimitive> {
     let view_direction = camera_forward_world(viewport);
     let stroke_color = mesh_stroke_color(base_color, transparency);
@@ -386,7 +386,7 @@ fn build_surface_mesh_lines(
                 projected[start as usize].depth,
                 projected[end as usize].pos,
                 projected[end as usize].depth,
-                cartoon_depth,
+                occluder_depth,
             ) {
                 lines.push(LineSegmentPrimitive {
                     start: visible_run.start,
@@ -685,9 +685,9 @@ fn visible_mesh_line_runs(
     start_depth: f32,
     end: Pos2,
     end_depth: f32,
-    cartoon_depth: Option<&ScreenDepthBuffer>,
+    occluder_depth: Option<&ScreenDepthBuffer>,
 ) -> Vec<VisibleLineRun> {
-    let Some(depth_buffer) = cartoon_depth else {
+    let Some(depth_buffer) = occluder_depth else {
         return vec![VisibleLineRun { start, end }];
     };
 
