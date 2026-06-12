@@ -178,7 +178,7 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         panel: TaskPanelKind::QmPrompt,
         outcome: TaskOutcome::Report,
         backend: TaskBackend::BackgroundNative,
-        uses_run_directory: false,
+        uses_run_directory: true,
     },
     TaskController {
         id: "qm-optimize",
@@ -192,7 +192,7 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         panel: TaskPanelKind::QmPrompt,
         outcome: TaskOutcome::CreateEntry,
         backend: TaskBackend::BackgroundNative,
-        uses_run_directory: false,
+        uses_run_directory: true,
     },
     TaskController {
         id: "qm-frequencies",
@@ -206,7 +206,7 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         panel: TaskPanelKind::QmPrompt,
         outcome: TaskOutcome::Report,
         backend: TaskBackend::BackgroundNative,
-        uses_run_directory: false,
+        uses_run_directory: true,
     },
     TaskController {
         id: "translate-into-cell",
