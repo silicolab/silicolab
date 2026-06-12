@@ -1,8 +1,9 @@
 name: CI
 
+# PR-only CI: branch protection requires these checks and an up-to-date
+# branch, so the pull_request run always tests the exact tree that lands on
+# main — no duplicate post-merge run needed.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
