@@ -94,7 +94,7 @@ pub(crate) fn build_surface_world_mesh(
         return Vec::new();
     }
     let geometry = cached_surface_geometry(cache, structure, surface_cache_key);
-    let alpha = (1.0 - visual_state.surface.transparency).clamp(0.08, 1.0);
+    let alpha = (1.0 - visual_state.surface.transparency).clamp(0.0, 1.0);
     let mut mesh = Vec::new();
     for chain_surface in &geometry.chains {
         let base_color = visual_state
@@ -267,9 +267,16 @@ where
     chains
 }
 
+/// Project every surface triangle for the filled style. The mesh is a closed,
+/// watertight shell, so — unlike the wireframe — we keep *all* faces instead of
+/// back-face culling. The compositor sorts the translucent triangles
+/// back-to-front and alpha-blends them, drawing each far wall before the near
+/// wall in front of it; that fills the concave necks and pockets where a
+/// normal-only cull would punch holes (the wall there is front-most yet faces
+/// away from the camera, and with no depth buffer in this pass a cull cannot
+/// tell "hidden" from "visible but angled away"). The GPU surface pipeline
+/// renders the same shell with `cull_mode: None`, so both paths now match.
 fn build_projected_surface_triangles(
-    viewport: &Projector,
-    surface_vertices: &[SurfaceMeshVertex],
     projected_vertices: &[PrimitiveMeshVertex],
     triangles: &[SurfaceTriangleGeometry],
 ) -> Vec<PrimitiveTriangle> {
@@ -277,16 +284,6 @@ fn build_projected_surface_triangles(
         .iter()
         .filter_map(|triangle| {
             let [a, b, c] = triangle.indices;
-            let view_direction = camera_forward_world(viewport);
-            let normal = normalize_vector3(
-                surface_vertices[a as usize].normal
-                    + surface_vertices[b as usize].normal
-                    + surface_vertices[c as usize].normal,
-                surface_vertices[a as usize].normal,
-            );
-            if normal.dot(&view_direction) <= 0.0 {
-                return None;
-            }
             let first = *projected_vertices.get(a as usize)?;
             let second = *projected_vertices.get(b as usize)?;
             let third = *projected_vertices.get(c as usize)?;
@@ -301,30 +298,33 @@ fn build_surface_fill_triangles(
     base_color: Color32,
     visual_state: &ViewportVisualState,
 ) -> Vec<PrimitiveTriangle> {
-    let surface_color = surface_fill_color(base_color, visual_state.surface.transparency);
+    // Shade the surface as an opaque colour and premultiply the transparency
+    // exactly once, here at the end. `Color32` stores premultiplied alpha, so
+    // baking the alpha into `surface_fill_color` and then rebuilding the colour
+    // in `shade_union_surface_color` premultiplied it twice — darkening the
+    // surface toward black through the midrange, which is invisible over a dark
+    // background but glaring over a light one.
+    let tint = surface_fill_color(base_color);
+    let alpha = surface_alpha(visual_state.surface.transparency);
     let projected_vertices = chain_surface
         .vertices
         .iter()
         .map(|vertex| {
             let projected = viewport.project(vertex.position);
+            let shaded = shade_union_surface_color(
+                viewport,
+                tint,
+                vertex.normal,
+                visual_state.lighting.preset,
+            );
             PrimitiveMeshVertex {
                 pos: projected.pos,
                 depth: projected.depth,
-                color: shade_union_surface_color(
-                    viewport,
-                    surface_color,
-                    vertex.normal,
-                    visual_state.lighting.preset,
-                ),
+                color: Color32::from_rgba_unmultiplied(shaded.r(), shaded.g(), shaded.b(), alpha),
             }
         })
         .collect::<Vec<_>>();
-    build_projected_surface_triangles(
-        viewport,
-        &chain_surface.vertices,
-        &projected_vertices,
-        &chain_surface.triangles,
-    )
+    build_projected_surface_triangles(&projected_vertices, &chain_surface.triangles)
 }
 
 fn build_surface_chain_geometry(
@@ -436,13 +436,19 @@ impl SurfaceMeshBuilder {
         second: SurfaceMeshVertex,
         third: SurfaceMeshVertex,
     ) {
-        let normal = (second.position - first.position).cross(&(third.position - first.position));
-        if normal.norm_squared() <= 0.000001 {
-            return;
-        }
+        // Reject only triangles that collapse once their corners are welded —
+        // i.e. two corners land on the same grid vertex. Dropping those leaves
+        // no crack, because the face they would have covered is a degenerate
+        // point that the neighbouring cell omits too. A thin-but-real sliver
+        // (three distinct welded vertices) must be kept: each of its edges is
+        // shared with a neighbour, so culling it on area instead would tear a
+        // one-triangle hole in the surface.
         let a = self.vertex_index(first);
         let b = self.vertex_index(second);
         let c = self.vertex_index(third);
+        if a == b || b == c || a == c {
+            return;
+        }
         self.triangles
             .push(SurfaceTriangleGeometry { indices: [a, b, c] });
     }
@@ -595,8 +601,15 @@ fn polygonize_surface_tetra_mesh(
             }
         }
         4 => {
-            builder.push_triangle(vertices[0], vertices[1], vertices[2]);
-            builder.push_triangle(vertices[0], vertices[2], vertices[3]);
+            // The 2-in/2-out case crosses four edges, forming a quad. The
+            // crossing points are collected in edge-list order, not in order
+            // around the quad's boundary: walking the four tetra faces shows
+            // the cyclic order is always vertices[0,1,3,2], so the only real
+            // diagonal is vertices[0]-vertices[3]. Fanning on vertices[0]-[2]
+            // (a boundary edge) folds the two triangles over each other and
+            // leaves a hole in every such cell — the gaps that broke the fill.
+            builder.push_triangle(vertices[0], vertices[1], vertices[3]);
+            builder.push_triangle(vertices[0], vertices[3], vertices[2]);
         }
         _ => {}
     }
@@ -652,27 +665,24 @@ fn shade_union_surface_color(
     Color32::from_rgba_unmultiplied(lit.r(), lit.g(), lit.b(), base_color.a())
 }
 
-fn surface_fill_color(base_color: Color32, transparency: f32) -> Color32 {
-    let tinted = mix_color(base_color, Color32::WHITE, 0.18);
-    Color32::from_rgba_unmultiplied(
-        tinted.r(),
-        tinted.g(),
-        tinted.b(),
-        surface_alpha(transparency),
-    )
+/// Opaque base tint for the filled surface. The transparency is applied once,
+/// after shading, by the caller — folding it in here as well would premultiply
+/// the colour twice (see [`build_surface_fill_triangles`]).
+fn surface_fill_color(base_color: Color32) -> Color32 {
+    mix_color(base_color, Color32::WHITE, 0.18)
 }
 
 fn mesh_stroke_color(base_color: Color32, transparency: f32) -> Color32 {
     let tinted = darken(base_color, 0.12);
-    let alpha = ((1.0 - transparency.clamp(0.0, 1.0)) * 255.0)
-        .round()
-        .clamp(40.0, 190.0) as u8;
+    let alpha = ((1.0 - transparency.clamp(0.0, 1.0)) * 255.0).round() as u8;
     Color32::from_rgba_unmultiplied(tinted.r(), tinted.g(), tinted.b(), alpha)
 }
 
 fn surface_alpha(transparency: f32) -> u8 {
-    let effective_opacity = (1.0 - transparency.clamp(0.0, 1.0) * 0.45).clamp(0.55, 1.0);
-    (effective_opacity * 255.0).round().clamp(140.0, 245.0) as u8
+    // Linear over the full range so the slider spans completely transparent
+    // (alpha 0) to completely opaque (alpha 255), matching the GPU surface.
+    let opacity = 1.0 - transparency.clamp(0.0, 1.0);
+    (opacity * 255.0).round() as u8
 }
 
 struct VisibleLineRun {
@@ -721,4 +731,181 @@ fn visible_mesh_line_runs(
         });
     }
     runs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::{Rect, Vec2};
+
+    /// `Color32` is premultiplied, so the fill colour must fold in its alpha
+    /// exactly once. The un-premultiplied surface tint therefore has to stay the
+    /// same bright colour at every opacity — if alpha were premultiplied twice it
+    /// would scale the RGB down with alpha, darkening the surface toward black
+    /// (visible as a blue→black fade over a light background).
+    #[test]
+    fn fill_colour_does_not_darken_with_opacity() {
+        let atoms = [
+            SurfaceAtom {
+                position: Point3::new(0.0, 0.0, 0.0),
+                radius: 2.0,
+            },
+            SurfaceAtom {
+                position: Point3::new(1.6, 0.4, 0.0),
+                radius: 2.0,
+            },
+        ];
+        let chain = build_surface_chain_geometry('A', &atoms, SurfaceStyle::Fill).unwrap();
+
+        let unmultiplied_tint = |transparency: f32| {
+            let mut visual = ViewportVisualState::default();
+            visual.surface.style = SurfaceStyle::Fill;
+            visual.surface.transparency = transparency;
+            let triangles = build_surface_fill_triangles(
+                &chain,
+                &test_projector(),
+                Color32::from_rgb(120, 150, 210),
+                &visual,
+            );
+            let color = triangles[0].vertices[0].color;
+            let [r, g, b, _] = eframe::egui::Rgba::from(color).to_srgba_unmultiplied();
+            [r, g, b]
+        };
+
+        let opaque = unmultiplied_tint(0.0);
+        let faint = unmultiplied_tint(0.5);
+        for channel in 0..3 {
+            assert!(
+                (opaque[channel] as i32 - faint[channel] as i32).abs() <= 4,
+                "opacity must not change the underlying tint: opaque {opaque:?} vs faint {faint:?}",
+            );
+        }
+        assert!(
+            opaque[2] > 180,
+            "surface should read as a light blue tint, not near-black: {opaque:?}"
+        );
+    }
+
+    #[test]
+    fn surface_alpha_spans_completely_transparent_to_opaque() {
+        assert_eq!(surface_alpha(0.0), 255);
+        assert_eq!(surface_alpha(1.0), 0);
+        assert_eq!(surface_alpha(0.5), 128);
+    }
+
+    fn test_projector() -> Projector {
+        Projector::new(
+            Rect::from_min_size(Pos2::ZERO, Vec2::splat(2000.0)),
+            Point3::origin(),
+            10.0,
+            1000.0,
+            0.0,
+            0.0,
+            Vec2::ZERO,
+        )
+    }
+
+    /// The filled style renders the whole closed shell, so every mesh triangle
+    /// must reach the scene — a back-face cull would drop roughly half and tear
+    /// holes in the concave necks and pockets that face away from the camera.
+    #[test]
+    fn filled_surface_keeps_every_face() {
+        let atoms = [
+            SurfaceAtom {
+                position: Point3::new(0.0, 0.0, 0.0),
+                radius: 2.0,
+            },
+            SurfaceAtom {
+                position: Point3::new(1.6, 0.4, 0.0),
+                radius: 2.0,
+            },
+        ];
+        let chain = build_surface_chain_geometry('A', &atoms, SurfaceStyle::Fill)
+            .expect("two overlapping atoms should produce a surface mesh");
+
+        let triangles = build_surface_fill_triangles(
+            &chain,
+            &test_projector(),
+            Color32::from_rgb(120, 150, 210),
+            &ViewportVisualState::default(),
+        );
+
+        assert_eq!(triangles.len(), chain.triangles.len());
+    }
+
+    /// The union-of-spheres isosurface is a closed volume that never reaches the
+    /// padded grid boundary, so a correctly meshed surface is watertight: every
+    /// undirected edge is shared by exactly two triangles. The 2-in/2-out
+    /// tetrahedron case used to fan the quad across a boundary edge instead of a
+    /// diagonal, folding its two triangles over each other and leaving a hole in
+    /// every such cell — the polygonal fragments and gaps this regression guards
+    /// against. A single triangle touching an edge (count != 2) is a crack.
+    fn assert_watertight(atoms: &[SurfaceAtom], spacing: f32) {
+        let mesh = build_union_surface_mesh(atoms, spacing)
+            .expect("overlapping atoms should produce a surface mesh");
+        assert!(!mesh.triangles.is_empty());
+
+        let mut edge_use = HashMap::<(u32, u32), u32>::new();
+        for triangle in &mesh.triangles {
+            let [a, b, c] = triangle.indices;
+            for (start, end) in [(a, b), (b, c), (c, a)] {
+                let edge = if start <= end {
+                    (start, end)
+                } else {
+                    (end, start)
+                };
+                *edge_use.entry(edge).or_default() += 1;
+            }
+        }
+
+        let non_manifold = edge_use.values().filter(|count| **count != 2).count();
+        assert_eq!(
+            non_manifold,
+            0,
+            "surface mesh has {non_manifold} non-manifold edges across {} triangles; \
+             it should be a closed shell",
+            mesh.triangles.len()
+        );
+    }
+
+    #[test]
+    fn two_atom_surface_mesh_is_watertight() {
+        let atoms = [
+            SurfaceAtom {
+                position: Point3::new(0.0, 0.0, 0.0),
+                radius: 2.0,
+            },
+            SurfaceAtom {
+                position: Point3::new(1.6, 0.4, 0.0),
+                radius: 2.0,
+            },
+        ];
+        assert_watertight(&atoms, SURFACE_FILL_GRID_SPACING);
+        assert_watertight(&atoms, SURFACE_MESH_GRID_SPACING);
+    }
+
+    #[test]
+    fn cluster_surface_mesh_is_watertight() {
+        // An off-lattice cluster of differently sized atoms exercises plenty of
+        // 2-in/2-out tetrahedra and near-vertex crossings at once.
+        let atoms = [
+            SurfaceAtom {
+                position: Point3::new(0.0, 0.0, 0.0),
+                radius: 1.7,
+            },
+            SurfaceAtom {
+                position: Point3::new(1.3, 0.9, 0.2),
+                radius: 2.1,
+            },
+            SurfaceAtom {
+                position: Point3::new(-0.7, 1.4, 0.8),
+                radius: 1.9,
+            },
+            SurfaceAtom {
+                position: Point3::new(0.5, -1.2, 1.1),
+                radius: 1.6,
+            },
+        ];
+        assert_watertight(&atoms, SURFACE_FILL_GRID_SPACING);
+    }
 }
