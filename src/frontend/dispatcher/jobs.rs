@@ -16,6 +16,10 @@ pub(crate) fn poll_update_check(state: &mut AppState, ctx: &egui::Context) {
                 env!("CARGO_PKG_VERSION")
             ));
             state.ui.available_update = Some(update);
+            // Honor the opt-in auto-install preference: a found update starts
+            // downloading immediately when enabled (and writable), otherwise it
+            // just waits for the one-click button in the title bar.
+            maybe_auto_install_update(state);
         }
         Ok(Ok(None)) => {
             state

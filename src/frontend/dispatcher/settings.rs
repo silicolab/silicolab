@@ -73,6 +73,44 @@ pub(crate) fn set_check_updates(state: &mut AppState, on: bool) {
     }
 }
 
+/// Persist whether discovered updates install themselves automatically. If a
+/// newer release is already known and the install is writable, switching this
+/// on starts the download right away (unless one is already running), so the
+/// toggle gives immediate effect rather than waiting for the next launch.
+pub(crate) fn set_auto_install_updates(state: &mut AppState, on: bool) {
+    state.config.auto_install_updates = on;
+    if let Err(error) = save_config(&state.config) {
+        state.set_message(format!("Could not save update preference: {error}"));
+    }
+    if on {
+        maybe_auto_install_update(state);
+    }
+}
+
+/// Start an automatic update install when one is warranted: the user opted in,
+/// a newer release was found, the install location is writable, and no
+/// self-update is already in flight or finished. Shared by the settings toggle
+/// and the background update-check poll so both honor the same gate.
+pub(crate) fn maybe_auto_install_update(state: &mut AppState) {
+    if !state.config.auto_install_updates
+        || state.ui.available_update.is_none()
+        || state.jobs.self_update.is_some()
+        || !matches!(state.ui.self_update, SelfUpdateStatus::Idle)
+        || !crate::io::self_update::is_self_update_supported()
+    {
+        return;
+    }
+    let version = state
+        .ui
+        .available_update
+        .as_ref()
+        .map(|update| update.version.clone())
+        .unwrap_or_default();
+    state.ui.self_update = SelfUpdateStatus::Downloading;
+    state.jobs.self_update = Some(spawn_self_update());
+    state.set_message(format!("Downloading SilicoLab {version}…"));
+}
+
 /// Persist whether the next launch reopens the last project. The stored field
 /// is `closed_to_scratch` (set when the user closes to scratch); the setting is
 /// its inverse so it reads naturally as "reopen last project on launch".

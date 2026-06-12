@@ -167,6 +167,10 @@ pub enum AppAction {
     /// Persisted; switching it on also runs a check right away so the toggle
     /// gives immediate feedback.
     SetCheckUpdates(bool),
+    /// Whether a discovered update downloads and installs itself automatically
+    /// (`true`) or waits for a one-click "Update" (`false`). Persisted; only
+    /// acts when update checks are on and the install is writable.
+    SetAutoInstallUpdates(bool),
     /// Whether to reopen the last project on launch (`true`) or start in a blank
     /// scratch workspace (`false`). Maps to the inverse of
     /// `AppConfig::closed_to_scratch`; persisted.
