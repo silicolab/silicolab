@@ -21,10 +21,15 @@ jobs:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
+          - target: x86_64-apple-darwin
+            os: macos-latest
           - target: x86_64-pc-windows-msvc
             os: windows-latest
+          # Build Linux on the oldest supported runner so the binary links an
+          # older glibc and runs on more distributions (newer glibc is backward
+          # but not forward compatible).
           - target: x86_64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-22.04
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -46,15 +51,58 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package (Unix)
-        if: runner.os != 'Windows'
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
           ARCHIVE="$BIN_NAME-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/$BIN_NAME" dist/
           cp README.md LICENSE-MIT LICENSE-APACHE dist/
-          tar -czf "$ARCHIVE" -C dist .
+          # List members explicitly (not `.`) so archive entries have no leading
+          # `./` — self_update matches the binary path exactly and a `./` prefix
+          # would make it unfindable.
+          tar -czf "$ARCHIVE" -C dist "$BIN_NAME" README.md LICENSE-MIT LICENSE-APACHE
+          echo "ASSET=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          APP="$BIN_NAME.app"
+          mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+          cp "target/${{ matrix.target }}/release/$BIN_NAME" "$APP/Contents/MacOS/$BIN_NAME"
+          chmod +x "$APP/Contents/MacOS/$BIN_NAME"
+          cat > "$APP/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleName</key><string>SilicoLab</string>
+            <key>CFBundleDisplayName</key><string>SilicoLab</string>
+            <key>CFBundleIdentifier</key><string>com.silicolab.silicolab</string>
+            <key>CFBundleVersion</key><string>${VERSION}</string>
+            <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+            <key>CFBundleExecutable</key><string>${BIN_NAME}</string>
+            <key>CFBundlePackageType</key><string>APPL</string>
+            <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+            <key>NSHighResolutionCapable</key><true/>
+            <key>LSMinimumSystemVersion</key><string>11.0</string>
+          </dict>
+          </plist>
+          PLIST
+          # Free ad-hoc signature: lets the app run on Apple Silicon (which kills
+          # unsigned binaries). It is NOT notarized, so users still clear the
+          # download quarantine on first open (see the release notes).
+          codesign --force --deep --sign - "$APP"
+          ARCHIVE="$BIN_NAME-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+          mkdir -p dist
+          cp -R "$APP" dist/
+          cp README.md LICENSE-MIT LICENSE-APACHE dist/
+          # Explicit members → no leading `./` (self_update needs an exact match
+          # on `silicolab.app/Contents/MacOS/silicolab`).
+          tar -czf "$ARCHIVE" -C dist "$APP" README.md LICENSE-MIT LICENSE-APACHE
           echo "ASSET=$ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Package (Windows)
@@ -90,3 +138,18 @@ jobs:
           files: artifacts/*
           draft: true
           generate_release_notes: true
+          append_body: true
+          body: |
+            ## Installation notes
+
+            **macOS** — the app is ad-hoc signed but not notarized (this is a
+            free open-source project), so on first launch macOS will say it
+            "cannot be opened because Apple cannot check it". To allow it, either
+            right-click the app and choose **Open** once, or run:
+
+            ```sh
+            xattr -dr com.apple.quarantine /Applications/silicolab.app
+            ```
+
+            (adjust the path to wherever you put it). Apple Silicon and Intel
+            builds are provided separately.
