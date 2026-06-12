@@ -132,6 +132,25 @@ pub fn spawn_update_check() -> RunningUpdateCheck {
     RunningUpdateCheck { receiver }
 }
 
+/// An in-flight one-click self-update: the worker downloads the matching
+/// release asset and replaces the running executable, then sends the installed
+/// version (or the failure). Like [`RunningUpdateCheck`] there is no cancel —
+/// the replace is a single blocking operation and the result is ignored if the
+/// handle was dropped.
+pub struct RunningSelfUpdate {
+    pub receiver: Receiver<anyhow::Result<String>>,
+}
+
+/// Spawn the download-and-replace on a worker thread and return the polling
+/// handle. The blocking work lives entirely in [`crate::io::self_update`].
+pub fn spawn_self_update() -> RunningSelfUpdate {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(crate::io::self_update::perform_update());
+    });
+    RunningSelfUpdate { receiver }
+}
+
 #[derive(Default)]
 pub struct JobManager {
     pub optimizer: Option<RunningOptimization>,
@@ -142,6 +161,9 @@ pub struct JobManager {
     /// In-flight check of GitHub Releases for a newer version (startup, or the
     /// moment the setting is switched on).
     pub update_check: Option<RunningUpdateCheck>,
+    /// In-flight one-click self-update (download + replace the executable),
+    /// started when the user clicks the update badge.
+    pub self_update: Option<RunningSelfUpdate>,
 }
 
 impl JobManager {
