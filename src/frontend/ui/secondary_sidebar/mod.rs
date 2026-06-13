@@ -1,4 +1,4 @@
-use eframe::egui::{self, Align, Button, Frame, Layout, Margin, RichText, ScrollArea, Stroke};
+use eframe::egui::{self, Align, Button, Frame, Layout, Margin, RichText, Stroke};
 
 use crate::{
     backend::tasks::TaskPanelKind,
@@ -8,7 +8,7 @@ use crate::{
     },
 };
 
-use super::{core_button_text_color, with_core_button_style};
+use super::{core_button_text_color, docked_sidebar_scroll_area, with_core_button_style};
 
 mod md_run;
 mod md_system;
@@ -25,7 +25,7 @@ pub(crate) fn render_secondary_sidebar(
     ui: &mut egui::Ui,
     actions: &mut Vec<AppAction>,
 ) {
-    ScrollArea::vertical()
+    docked_sidebar_scroll_area()
         .auto_shrink([false, true])
         .show(ui, |ui| {
             render_secondary_sidebar_content(state, ui, actions);

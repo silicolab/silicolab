@@ -195,7 +195,7 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
                     // title bar band) manages its own padding.
                     .inner_margin(Margin {
                         left: 10,
-                        right: 10,
+                        right: 2,
                         top: 0,
                         bottom: 10,
                     }),
@@ -208,6 +208,7 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
 
     egui::Panel::top("title_bar")
         .exact_size(32.0)
+        .show_separator_line(false)
         .frame(
             Frame::default()
                 .fill(crate::frontend::theme::chrome_fill(pal.title_bar, glass))
@@ -240,7 +241,12 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
             .frame(
                 Frame::default()
                     .fill(crate::frontend::theme::chrome_fill(pal.sidebar, glass))
-                    .inner_margin(Margin::symmetric(10, 10)),
+                    .inner_margin(Margin {
+                        left: 10,
+                        right: 2,
+                        top: 10,
+                        bottom: 10,
+                    }),
             )
             .show_inside(ui, |ui| {
                 render_pinned(ui, |ui| render_secondary_sidebar(state, ui, actions));
