@@ -205,6 +205,30 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SetupRemoteHostKey(id) => setup_remote_host_key(state, id),
         AppAction::OpenRemoteHostsSettings => open_remote_hosts_settings(state),
         AppAction::RunConsoleCommand(command) => run_console_command(state, &command),
+        AppAction::SendAgentMessage(text) => {
+            crate::frontend::agent::send_agent_message(state, &text, ctx)
+        }
+        AppAction::CancelAgent => crate::frontend::agent::cancel_agent(state, ctx),
+        AppAction::ApproveToolCall(id) => {
+            crate::frontend::agent::approve_tool_call(state, &id, ctx)
+        }
+        AppAction::RejectToolCall(id) => crate::frontend::agent::reject_tool_call(state, &id, ctx),
+        AppAction::SwitchProviderModel { provider, model } => {
+            crate::frontend::agent::switch_provider_model(state, &provider, &model)
+        }
+        AppAction::SetAssistantEnabled(on) => {
+            crate::frontend::agent::set_assistant_enabled(state, on)
+        }
+        AppAction::SetAssistantEffort(effort) => {
+            crate::frontend::agent::set_assistant_effort(state, effort)
+        }
+        AppAction::SetAssistantBaseUrl(url) => {
+            crate::frontend::agent::set_assistant_base_url(state, &url)
+        }
+        AppAction::SetAssistantApiKey(key) => {
+            crate::frontend::agent::set_assistant_api_key(state, &key)
+        }
+        AppAction::ClearAssistantApiKey => crate::frontend::agent::clear_assistant_api_key(state),
         AppAction::SetThemeMode(mode) => set_theme_mode(state, mode, ctx),
         AppAction::SetColorScheme(scheme) => set_color_scheme(state, scheme, ctx),
         AppAction::SetRepresentation(edit) => set_representation(state, edit),

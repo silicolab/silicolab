@@ -1,4 +1,5 @@
 pub mod formats;
+pub mod llm;
 pub mod pdb_fetch;
 pub mod sdfrust_bridge;
 pub mod self_update;

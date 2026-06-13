@@ -1,4 +1,5 @@
 mod actions;
+mod agent;
 mod app;
 mod block_editor;
 mod cli;
