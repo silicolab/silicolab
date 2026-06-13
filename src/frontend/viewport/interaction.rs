@@ -1,12 +1,16 @@
 use eframe::egui::{self, Response, Vec2};
 
 use crate::domain::Structure;
+use crate::frontend::navigation;
 
 use super::{
     ViewportVisualState,
     camera::ViewCamera,
     render::{PickTarget, pick_atom},
 };
+
+/// Navigation tuning for the OS this binary targets (see [`navigation`]).
+const NAV_PROFILE: navigation::InputProfile = navigation::platform_profile();
 
 #[derive(Default)]
 pub struct ViewportInteraction {
@@ -108,17 +112,24 @@ pub(super) fn update_camera_from_response(
         }
     }
 
+    // Trackpad two-finger scroll pans; mouse wheel, pinch (macOS), and
+    // Ctrl/Cmd+scroll zoom. The device split is handled by `route_events`.
     if response.hovered() {
-        ui.input(|input| {
-            if input.smooth_scroll_delta.y.abs() > f32::EPSILON {
-                let next_zoom =
-                    (camera.zoom - input.smooth_scroll_delta.y * 0.001).clamp(-0.8, 2.0);
-                if (next_zoom - camera.zoom).abs() > f32::EPSILON {
-                    camera.zoom = next_zoom;
-                    camera_changed = true;
-                }
+        let nav = ui.input(|input| navigation::route_events(&input.events, &NAV_PROFILE));
+        if nav.pan != Vec2::ZERO {
+            camera.pan += nav.pan;
+            camera_changed = true;
+        }
+        if (nav.zoom - 1.0).abs() > f32::EPSILON {
+            // `camera.zoom` is additive, where the projected scale is
+            // proportional to `(1.0 + zoom)` (see viewport/mod.rs); fold the
+            // multiplicative scroll factor into that representation.
+            let next_zoom = ((1.0 + camera.zoom) * nav.zoom - 1.0).clamp(-0.8, 2.0);
+            if (next_zoom - camera.zoom).abs() > f32::EPSILON {
+                camera.zoom = next_zoom;
+                camera_changed = true;
             }
-        });
+        }
     }
 
     camera_changed
