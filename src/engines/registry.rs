@@ -320,8 +320,8 @@ pub fn query_version(launch: &EngineLaunch, arg: &str) -> Option<String> {
 /// line whose label contains "version" (GROMACS prints
 /// `GROMACS version:    2026.2`), which avoids false positives like the
 /// echoed `gmx --version` command line. Falls back to the first non-empty
-/// line.
-fn extract_version(blob: &str) -> Option<String> {
+/// line. Also used by `engines::remote` to parse a remote `--version` blob.
+pub(crate) fn extract_version(blob: &str) -> Option<String> {
     for line in blob.lines().map(str::trim) {
         if let Some((label, value)) = line.split_once(':')
             && label.to_ascii_lowercase().contains("version")

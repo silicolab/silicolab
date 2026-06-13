@@ -508,7 +508,7 @@ mod tests {
             BuildRequest {
                 structure,
                 working_dir: build_dir,
-                gmx_launch: launch.clone(),
+                compute: launch.clone().into(),
                 force_field: "amber99sb-ildn".to_string(),
                 water: WaterModel::Tip3p,
                 box_config: MdSystemConfig::with_uniform_padding(10.0, BoxShape::Cubic),
@@ -550,7 +550,7 @@ mod tests {
         let results = run_pipeline(
             system,
             specs,
-            launch.clone(),
+            launch.clone().into(),
             Duration::from_secs(900),
             Arc::clone(&cancel),
             |_| {},

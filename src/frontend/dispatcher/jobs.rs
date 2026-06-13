@@ -87,6 +87,79 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     poll_trajectory_jobs(state, ctx);
     poll_update_check(state, ctx);
     poll_self_update(state, ctx);
+    poll_remote_probe(state, ctx);
+}
+
+/// Drain a finished Remote Hosts probe (passwordless check / GROMACS detect) and
+/// apply it: connection status, or the detected engine launch + version cached
+/// onto the host. Runs off the UI thread, so the panel stays responsive while a
+/// slow or dead host is probed.
+pub(crate) fn poll_remote_probe(state: &mut AppState, ctx: &egui::Context) {
+    use crate::engines::registry::EngineLaunch;
+    use crate::frontend::jobs::RemoteProbeOutcome;
+    use crate::frontend::state::RemoteHostStatus;
+
+    let Some(probe) = state.jobs.remote_probe.take() else {
+        return;
+    };
+    match probe.receiver.try_recv() {
+        Ok(RemoteProbeOutcome::Passwordless(true)) => {
+            state
+                .ui
+                .settings
+                .remote_status
+                .insert(probe.host_id.clone(), RemoteHostStatus::Ready);
+            // Clear a now-satisfied bootstrap prompt for this host.
+            if matches!(&state.ui.settings.remote_bootstrap, Some((id, _)) if *id == probe.host_id)
+            {
+                state.ui.settings.remote_bootstrap = None;
+            }
+            state.set_message("Connected: passwordless login works".to_string());
+        }
+        Ok(RemoteProbeOutcome::Passwordless(false)) => {
+            state
+                .ui
+                .settings
+                .remote_status
+                .insert(probe.host_id, RemoteHostStatus::NeedsSetup);
+            state.set_message(
+                "Reachable, but passwordless login isn't set up — use 'Set up passwordless login'."
+                    .to_string(),
+            );
+        }
+        Ok(RemoteProbeOutcome::Detected(Some((program, version)))) => {
+            let key = EngineId::GROMACS.as_str().to_string();
+            if let Some(host) = state.config.remote_hosts.get_mut(&probe.host_id) {
+                host.engines
+                    .insert(key.clone(), EngineLaunch::native(&program));
+                host.engine_versions.insert(key, version.clone());
+            }
+            if let Some(draft) = state.ui.settings.remote_host_drafts.get_mut(&probe.host_id) {
+                draft.gmx_program = program;
+            }
+            if let Err(error) = save_config(&state.config) {
+                state.set_message(format!("Detected GROMACS, but could not save: {error}"));
+            } else {
+                state.set_message(format!("Detected GROMACS {version} on the remote host"));
+            }
+        }
+        Ok(RemoteProbeOutcome::Detected(None)) => {
+            state.set_message(
+                "No GROMACS found on the remote host — set its path manually, or check the prelude."
+                    .to_string(),
+            );
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => {
+            state.jobs.remote_probe = Some(probe);
+            ctx.request_repaint_after(Duration::from_millis(400));
+        }
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            state.ui.settings.remote_status.insert(
+                probe.host_id,
+                RemoteHostStatus::Unreachable("probe worker stopped".to_string()),
+            );
+        }
+    }
 }
 
 /// Drain a finished background trajectory decode (if any) into playback state,
