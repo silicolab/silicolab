@@ -268,6 +268,15 @@ fn message_to_json(message: &ChatMessage) -> Value {
         }
     }
 
+    // Anthropic rejects an empty `content` array. An assistant turn can carry
+    // nothing renderable (an empty-text end_turn, or a refusal with no body once
+    // any foreign reasoning is stripped above), which would otherwise replay as
+    // `content: []` and 400 the next request. Emit a minimal placeholder so the
+    // transcript stays valid.
+    if blocks.is_empty() {
+        blocks.push(json!({ "type": "text", "text": "(no content)" }));
+    }
+
     json!({ "role": role, "content": blocks })
 }
 
@@ -793,5 +802,22 @@ mod tests {
             LlmError::BadRequest(message) => assert_eq!(message, "bad model"),
             _ => panic!("expected BadRequest"),
         }
+    }
+
+    #[test]
+    fn empty_assistant_turn_renders_nonempty_content() {
+        // An empty end_turn (no text, tool calls, or reasoning) must not
+        // serialize to an empty `content` array — Anthropic 400s on that.
+        let empty = AssistantTurn {
+            text: String::new(),
+            tool_calls: Vec::new(),
+            reasoning: ReasoningBlob::Anthropic(Vec::new()),
+            stop: StopReason::EndTurn,
+            usage: Usage::default(),
+        };
+        let rendered = message_to_json(&encode_assistant(&empty));
+        let blocks = rendered["content"].as_array().unwrap();
+        assert!(!blocks.is_empty(), "content array must never be empty");
+        assert_eq!(rendered["role"], "assistant");
     }
 }
