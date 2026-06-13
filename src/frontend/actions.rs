@@ -109,6 +109,69 @@ pub enum AppAction {
     ImportCustomForceFieldFile,
     StartMdRun,
     CancelMdRunPrompt,
+    // --- Build Disordered System (molecular packing) ---
+    /// Launch the packing run from the current draft.
+    StartDisorder,
+    /// Cancel an in-flight packing run (or discard the draft if none is running).
+    CancelDisorderPrompt,
+    /// Set the result entry's name.
+    SetDisorderName(String),
+    /// Add a molecule row, optionally seeded with a specific entry id.
+    AddDisorderComponent(Option<u64>),
+    /// Remove the molecule row at this index.
+    RemoveDisorderComponent(usize),
+    /// Point the molecule row at a workspace entry.
+    SetDisorderComponentEntry {
+        index: usize,
+        entry_id: u64,
+    },
+    /// Set a molecule row's copy count (Count mode).
+    SetDisorderComponentCount {
+        index: usize,
+        count: u32,
+    },
+    /// Set a molecule row's density/concentration value (non-Count modes).
+    SetDisorderComponentAmount {
+        index: usize,
+        value: f32,
+    },
+    /// Switch how component amounts are specified (count / density / molarity).
+    SetDisorderAmountMode(crate::frontend::state::DisorderAmount),
+    /// Choose the region shape (box / sphere / cylinder).
+    SetDisorderRegionKind(crate::frontend::state::DisorderRegionKind),
+    /// Set one box edge length (axis 0/1/2), in Å.
+    SetDisorderBoxLength {
+        axis: usize,
+        value: f32,
+    },
+    /// Set the sphere radius (Å).
+    SetDisorderSphereRadius(f32),
+    /// Set the cylinder radius and length (Å).
+    SetDisorderCylinder {
+        radius: f32,
+        length: f32,
+    },
+    /// Pack outside the region (`true`) rather than inside.
+    SetDisorderSense(bool),
+    /// Set the minimum inter-molecular spacing (Å).
+    SetDisorderTolerance(f32),
+    /// Set the RNG seed.
+    SetDisorderSeed(u64),
+    /// Pick a fresh random seed.
+    RandomizeDisorderSeed,
+    /// Choose an existing entry to pack around (`None` clears it).
+    SetDisorderObstacle(Option<u64>),
+    /// Stamp the region as the result's simulation cell.
+    SetDisorderSetCell(bool),
+    /// Pack periodically (no clashes across box edges).
+    SetDisorderPeriodic(bool),
+    /// Show or hide the advanced packing controls.
+    SetDisorderShowAdvanced(bool),
+    /// Set the optimizer limits (advanced).
+    SetDisorderLimits {
+        max_restarts: u32,
+        max_steps: u32,
+    },
     /// Select the Run MD preset; rebuilds the stage sequence for the system.
     SetMdRunPreset(crate::workflows::molecular_dynamics::PresetId),
     /// Set a system-type override (membrane/ligand/nucleic) for the run. Edits

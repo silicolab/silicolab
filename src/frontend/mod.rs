@@ -4,6 +4,7 @@ mod app;
 mod block_editor;
 mod cli;
 pub(crate) mod console;
+mod disorder_commands;
 mod dispatcher;
 mod glass;
 mod jobs;
