@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#2A2A30"/>
+      <stop offset="1" stop-color="#141416"/>
+    </linearGradient>
+    <radialGradient id="ambient" cx="0.5" cy="0.46" r="0.58">
+      <stop offset="0" stop-color="#8D9FFF" stop-opacity="0.16"/>
+      <stop offset="100%" stop-color="#8D9FFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#F1E9FF" stop-opacity="0.98"/>
+      <stop offset="34%" stop-color="#BC82F3" stop-opacity="0.55"/>
+      <stop offset="100%" stop-color="#AA6EEE" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- full-bleed background (no rounded corners; squircle baked by gen-icons.py) -->
+  <rect width="1024" height="1024" fill="url(#bg)"/>
+  <rect width="1024" height="1024" fill="url(#ambient)"/>
+  <ellipse cx="512" cy="90" rx="660" ry="240" fill="#ffffff" opacity="0.05"/>
+
+  <!-- hexagon molecular ring (point-up, R=330) -->
+  <path d="M512 182 L798 347 L798 677 L512 842 L226 677 L226 347 Z"
+        fill="none" stroke="#EAEAEE" stroke-width="34" stroke-linejoin="round"/>
+
+  <!-- three internal bonds to alternating vertices (upward Y) -->
+  <g stroke="#EAEAEE" stroke-width="26" stroke-linecap="round">
+    <line x1="512" y1="512" x2="512" y2="182"/>
+    <line x1="512" y1="512" x2="798" y2="677"/>
+    <line x1="512" y1="512" x2="226" y2="677"/>
+  </g>
+
+  <!-- atom dots at the three bonded vertices -->
+  <g fill="#EAEAEE">
+    <circle cx="512" cy="182" r="38"/>
+    <circle cx="798" cy="677" r="38"/>
+    <circle cx="226" cy="677" r="38"/>
+  </g>
+
+  <!-- violet glow + pure-white core (anchors the Mono appearance) -->
+  <circle cx="512" cy="512" r="190" fill="url(#glow)"/>
+  <circle cx="512" cy="512" r="66" fill="#FBFAFF"/>
+</svg>
