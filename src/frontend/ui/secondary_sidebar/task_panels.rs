@@ -191,38 +191,81 @@ pub(crate) fn render_qm_task_panel(
     use crate::engines::qm::{QmKind, QmMethod};
 
     if let Some(prompt) = &mut state.ui.pending_qm {
+        let presets = QmMethod::presets();
+        let method_is_composite = matches!(prompt.method, QmMethod::Composite(_));
+
         egui::Grid::new("sidebar_qm_options")
             .num_columns(2)
             .spacing([8.0, 6.0])
             .show(ui, |ui| {
                 ui.label("Method:");
+                let is_custom = !presets.iter().any(|m| m == &prompt.method);
                 egui::ComboBox::from_id_salt("qm_method")
-                    .selected_text(prompt.method.label())
+                    .selected_text(if is_custom {
+                        format!("Custom: {}", prompt.method.label())
+                    } else {
+                        prompt.method.label()
+                    })
                     .show_ui(ui, |ui| {
-                        for method in QmMethod::presets() {
+                        for method in &presets {
                             let label = method.label();
-                            ui.selectable_value(&mut prompt.method, method, label);
+                            ui.selectable_value(&mut prompt.method, method.clone(), label);
+                        }
+                        if ui
+                            .selectable_label(is_custom, "Custom functional…")
+                            .clicked()
+                        {
+                            let name = if prompt.custom_functional.trim().is_empty() {
+                                "pbe".to_string()
+                            } else {
+                                prompt.custom_functional.clone()
+                            };
+                            prompt.custom_functional = name.clone();
+                            prompt.method = QmMethod::Dft(name);
                         }
                     });
                 ui.end_row();
 
+                // Free-text functional name, shown when the method is a DFT
+                // functional outside the preset list.
+                if !presets.iter().any(|m| m == &prompt.method)
+                    && matches!(prompt.method, QmMethod::Dft(_))
+                {
+                    ui.label("Functional:");
+                    if ui
+                        .text_edit_singleline(&mut prompt.custom_functional)
+                        .changed()
+                    {
+                        prompt.method = QmMethod::Dft(prompt.custom_functional.clone());
+                    }
+                    ui.end_row();
+                }
+
                 ui.label("Basis set:");
-                egui::ComboBox::from_id_salt("qm_basis")
-                    .selected_text(prompt.basis.clone())
-                    .show_ui(ui, |ui| {
-                        // chemx's bundled basis sets (H–Ar), smallest to largest.
-                        for basis in [
-                            "sto-3g",
-                            "6-31g",
-                            "6-311g(d,p)",
-                            "cc-pvdz",
-                            "cc-pvtz",
-                            "def2-svp",
-                            "def2-tzvp",
-                        ] {
-                            ui.selectable_value(&mut prompt.basis, basis.to_string(), basis);
-                        }
-                    });
+                // A composite carries its own implied basis.
+                if method_is_composite {
+                    ui.label("(implied by composite)");
+                } else {
+                    egui::ComboBox::from_id_salt("qm_basis")
+                        .selected_text(prompt.basis.clone())
+                        .show_ui(ui, |ui| {
+                            // chemx's bundled basis sets, smallest to largest.
+                            for basis in [
+                                "sto-3g",
+                                "6-31g",
+                                "6-311g(d,p)",
+                                "cc-pvdz",
+                                "cc-pvtz",
+                                "cc-pvqz",
+                                "def2-svp",
+                                "def2-tzvp",
+                                "def2-tzvpp",
+                                "def2-qzvp",
+                            ] {
+                                ui.selectable_value(&mut prompt.basis, basis.to_string(), basis);
+                            }
+                        });
+                }
                 ui.end_row();
 
                 ui.label("Charge:");
@@ -244,9 +287,11 @@ pub(crate) fn render_qm_task_panel(
             "Vibrational frequencies",
         );
         ui.checkbox(
-            &mut prompt.compute_properties,
-            "Compute dipole and atomic charges",
+            &mut prompt.options.compute_properties,
+            "Compute dipole, charges & bond orders",
         );
+
+        render_qm_advanced(ui, prompt, method_is_composite);
 
         ui.separator();
         ui.horizontal(|ui| {
@@ -275,6 +320,198 @@ pub(crate) fn render_qm_task_panel(
     } else {
         ui.label("QM configuration is unavailable.");
     }
+}
+
+/// Common implicit-solvation solvent names offered in the panel dropdown. chemx
+/// accepts more (especially for SMD); the console `qm` command takes any name.
+const QM_SOLVENTS: &[&str] = &[
+    "water",
+    "acetonitrile",
+    "methanol",
+    "ethanol",
+    "dmso",
+    "acetone",
+    "thf",
+    "dmf",
+    "toluene",
+    "benzene",
+    "chloroform",
+];
+
+/// The "Advanced (chemx 0.3)" collapsing section of the QM panel: dispersion,
+/// solvation, SCF backend, relativity, smearing, FOD, and thermochemistry knobs.
+/// Options that do not apply to the chosen method are hidden rather than shown
+/// disabled.
+fn render_qm_advanced(
+    ui: &mut egui::Ui,
+    prompt: &mut crate::frontend::state::QmPrompt,
+    method_is_composite: bool,
+) {
+    use crate::engines::qm::{CpcmDielectric, QmDispersion, QmMethod, QmScfBackend, QmSolvation};
+
+    let method_is_post_hf = matches!(
+        prompt.method,
+        QmMethod::Mp2 | QmMethod::Ccsd | QmMethod::CcsdT
+    );
+    let method_is_mp2 = matches!(prompt.method, QmMethod::Mp2);
+
+    egui::CollapsingHeader::new("Advanced (chemx 0.3)")
+        .default_open(false)
+        .show(ui, |ui| {
+            // Dispersion — composites carry their own; post-HF has none.
+            if !method_is_composite && !method_is_post_hf {
+                ui.horizontal(|ui| {
+                    ui.label("Dispersion:");
+                    egui::ComboBox::from_id_salt("qm_disp")
+                        .selected_text(match prompt.options.dispersion {
+                            None => "none",
+                            Some(QmDispersion::D3Bj) => "D3(BJ)",
+                            Some(QmDispersion::D4) => "D4",
+                        })
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut prompt.options.dispersion, None, "none");
+                            ui.selectable_value(
+                                &mut prompt.options.dispersion,
+                                Some(QmDispersion::D3Bj),
+                                "D3(BJ)",
+                            );
+                            ui.selectable_value(
+                                &mut prompt.options.dispersion,
+                                Some(QmDispersion::D4),
+                                "D4",
+                            );
+                        });
+                });
+            }
+
+            // Solvation: model + solvent name, reassembled each frame.
+            let (mut model, mut name) = match &prompt.options.solvation {
+                None => (0u8, "water".to_string()),
+                Some(QmSolvation::Cpcm(CpcmDielectric::Named(n))) => (1, n.clone()),
+                Some(QmSolvation::Cpcm(CpcmDielectric::Epsilon(_))) => (1, "water".to_string()),
+                Some(QmSolvation::Smd(n)) => (2, n.clone()),
+                Some(QmSolvation::Alpb(n)) => (3, n.clone()),
+                Some(QmSolvation::Gbsa(n)) => (4, n.clone()),
+            };
+            ui.horizontal(|ui| {
+                ui.label("Solvation:");
+                egui::ComboBox::from_id_salt("qm_solv_model")
+                    .selected_text(match model {
+                        1 => "C-PCM",
+                        2 => "SMD",
+                        3 => "ALPB",
+                        4 => "GBSA",
+                        _ => "none",
+                    })
+                    .show_ui(ui, |ui| {
+                        for (value, label) in [
+                            (0, "none"),
+                            (1, "C-PCM"),
+                            (2, "SMD"),
+                            (3, "ALPB"),
+                            (4, "GBSA"),
+                        ] {
+                            ui.selectable_value(&mut model, value as u8, label);
+                        }
+                    });
+                if model != 0 {
+                    egui::ComboBox::from_id_salt("qm_solv_name")
+                        .selected_text(name.clone())
+                        .show_ui(ui, |ui| {
+                            for s in QM_SOLVENTS {
+                                ui.selectable_value(&mut name, s.to_string(), *s);
+                            }
+                        });
+                }
+            });
+            prompt.options.solvation = match model {
+                1 => Some(QmSolvation::Cpcm(CpcmDielectric::Named(name))),
+                2 => Some(QmSolvation::Smd(name)),
+                3 => Some(QmSolvation::Alpb(name)),
+                4 => Some(QmSolvation::Gbsa(name)),
+                _ => None,
+            };
+
+            // SCF backend.
+            ui.horizontal(|ui| {
+                ui.label("SCF backend:");
+                egui::ComboBox::from_id_salt("qm_backend")
+                    .selected_text(prompt.options.scf_backend.label())
+                    .show_ui(ui, |ui| {
+                        for backend in [
+                            QmScfBackend::InCore,
+                            QmScfBackend::Direct,
+                            QmScfBackend::RiJk,
+                            QmScfBackend::Cosx,
+                        ] {
+                            ui.selectable_value(
+                                &mut prompt.options.scf_backend,
+                                backend,
+                                backend.label(),
+                            );
+                        }
+                    });
+            });
+
+            // DFT grid level override.
+            let mut grid_override = prompt.options.grid_level.is_some();
+            ui.horizontal(|ui| {
+                if ui
+                    .checkbox(&mut grid_override, "Override DFT grid")
+                    .changed()
+                {
+                    prompt.options.grid_level = grid_override.then_some(3);
+                }
+                if let Some(level) = &mut prompt.options.grid_level {
+                    ui.add(egui::DragValue::new(level).range(0..=4));
+                }
+            });
+
+            // Fermi smearing.
+            let mut smear_on = prompt.options.smearing_temperature_k.is_some();
+            ui.horizontal(|ui| {
+                if ui.checkbox(&mut smear_on, "Fermi smearing (K)").changed() {
+                    prompt.options.smearing_temperature_k = smear_on.then_some(1000.0);
+                }
+                if let Some(temp) = &mut prompt.options.smearing_temperature_k {
+                    ui.add(egui::DragValue::new(temp).range(1.0..=50_000.0).speed(50.0));
+                }
+            });
+
+            // Method-specific toggles.
+            if method_is_mp2 {
+                ui.checkbox(&mut prompt.options.ri_mp2, "RI-MP2 (density-fit MP2)");
+            }
+            if method_is_post_hf {
+                ui.checkbox(
+                    &mut prompt.options.all_electron,
+                    "All-electron (no frozen core)",
+                );
+            }
+            ui.checkbox(&mut prompt.options.x2c, "X2C scalar relativity");
+            ui.checkbox(&mut prompt.options.fod, "FOD multireference diagnostic");
+            ui.checkbox(
+                &mut prompt.options.single_point_hessian,
+                "Single-point Hessian (approx. frequencies)",
+            );
+
+            // Thermochemistry parameters (used by frequency runs).
+            egui::Grid::new("qm_thermo")
+                .num_columns(2)
+                .spacing([8.0, 6.0])
+                .show(ui, |ui| {
+                    ui.label("Symmetry number σ:");
+                    ui.add(egui::DragValue::new(&mut prompt.options.symmetry_number).range(1..=48));
+                    ui.end_row();
+                    ui.label("quasi-RRHO ω₀ (cm⁻¹):");
+                    ui.add(
+                        egui::DragValue::new(&mut prompt.options.qrrho_w0_cm1)
+                            .range(1.0..=1000.0)
+                            .speed(1.0),
+                    );
+                    ui.end_row();
+                });
+        });
 }
 
 pub(crate) fn render_supercell_task_panel(

@@ -15,7 +15,10 @@ use std::sync::{Arc, atomic::AtomicBool};
 use anyhow::{Result, anyhow, bail};
 
 use crate::{
-    engines::qm::{QmKind, QmMethod, QmRequest},
+    engines::qm::{
+        CpcmDielectric, QmDispersion, QmKind, QmMethod, QmOptions, QmRequest, QmScfBackend,
+        QmSolvation,
+    },
     frontend::state::AppState,
     io::structure_paths::default_structure_save_path,
     workflows::qm::run_qm_calculation,
@@ -25,17 +28,56 @@ use crate::{
 pub fn qm_command(state: &mut AppState, args: &[String]) -> Result<String> {
     let Some(sub) = args.first().map(String::as_str) else {
         bail!(
-            "usage: qm <energy|optimize|freq> [--method <m>] [--basis <name>] \
-             [--charge <int>] [--spin <2S+1>] [--properties]"
+            "usage: qm <energy|optimize|freq> [options]\n\
+             \n\
+             core:     --method <m>   hf|rhf|uhf|rohf|mp2|ccsd|ccsd(t), a functional \
+             (pbe, b3lyp, r2scan, wb97m-v, b2plyp, …) with an optional -d3/-d4 suffix, \
+             or a composite (r2scan-3c, b97-3c, pbeh-3c, b3lyp-3c)\n\
+             \x20         --basis <name>   e.g. def2-svp, cc-pvtz (ignored for composites)\n\
+             \x20         --charge <int>   --spin <2S+1>   --properties\n\
+             dispersion: --dispersion d3|d4   (or use a -d3/-d4 method suffix)\n\
+             solvation:  --solvent <name> | --eps <ε> | --smd <name> | --alpb <name> | --gbsa <name>\n\
+             backend:    --direct | --ri | --cosx   --ri-mp2   --x2c   --all-electron   --grid <0..4>\n\
+             advanced:   --smear <K>   --fod   --sph   --symmetry-number <int>   --qrrho-w0 <cm-1>"
         );
     };
+    // `qm recommend <task>` prints chemx's recommended level of theory for a
+    // task and needs no active structure.
+    if sub == "recommend" {
+        return qm_recommend(&args[1..]);
+    }
     let kind = match sub {
         "energy" | "sp" | "single-point" => QmKind::SinglePoint,
         "optimize" | "opt" => QmKind::Optimize,
         "freq" | "frequencies" => QmKind::Frequencies,
-        other => bail!("unknown qm subcommand `{other}` (expected energy, optimize, or freq)"),
+        other => {
+            bail!("unknown qm subcommand `{other}` (expected energy, optimize, freq, or recommend)")
+        }
     };
     run(state, kind, &args[1..])
+}
+
+/// `qm recommend <task>`: chemx's data-driven level-of-theory guidance.
+fn qm_recommend(args: &[String]) -> Result<String> {
+    let tasks = chemx::guardrails::recommendation_tasks().join(", ");
+    let Some(task) = args.first() else {
+        bail!("usage: qm recommend <task>  (available: {tasks})");
+    };
+    let rec = chemx::guardrails::recommend(task)
+        .ok_or_else(|| anyhow!("unknown task `{task}` (available: {tasks})"))?;
+    let mut out = format!("recommended level of theory for {}:\n", rec.task);
+    out.push_str(&format!("  level:     {}\n", rec.level));
+    out.push_str(&format!("  rationale: {}\n", rec.rationale));
+    if !rec.invocation.is_empty() {
+        out.push_str("  run:\n");
+        for inv in rec.invocation {
+            out.push_str(&format!("    {inv}\n"));
+        }
+    }
+    for note in rec.notes {
+        out.push_str(&format!("  note: {note}\n"));
+    }
+    Ok(out.trim_end().to_string())
 }
 
 fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
@@ -43,14 +85,15 @@ fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
         bail!("no active structure; open one before `qm`");
     }
     let flags = QmFlags::parse(args)?;
-    let method = flags
+    let (method, suffix_dispersion) = flags
         .str("method")
         .map(QmMethod::parse)
-        .unwrap_or_else(|| QmMethod::Dft("b3lyp".to_string()));
+        .unwrap_or_else(|| (QmMethod::Dft("b3lyp".to_string()), None));
     let basis = flags.str("basis").unwrap_or("def2-svp").to_string();
     let charge = flags.int("charge")?.unwrap_or(0);
     let multiplicity = flags.uint("spin")?.or(flags.uint("mult")?).unwrap_or(1);
-    let compute_properties = flags.flag("properties");
+
+    let options = build_options(&flags, suffix_dispersion)?;
 
     let request = QmRequest {
         structure: state.structure().clone(),
@@ -59,7 +102,7 @@ fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
         charge,
         multiplicity,
         kind,
-        compute_properties,
+        options,
     };
 
     // Synchronous: a throwaway cancel flag and a no-op progress sink.
@@ -135,6 +178,108 @@ impl QmFlags {
             })
             .transpose()
     }
+
+    fn float(&self, key: &str) -> Result<Option<f64>> {
+        self.values
+            .get(key)
+            .map(|v| {
+                v.parse::<f64>()
+                    .map_err(|_| anyhow!("--{key} must be a number, got `{v}`"))
+            })
+            .transpose()
+    }
+}
+
+/// Assemble the advanced [`QmOptions`] from parsed flags. `suffix_dispersion`
+/// is the `-d3`/`-d4` correction split off the `--method` keyword, if any.
+fn build_options(flags: &QmFlags, suffix_dispersion: Option<QmDispersion>) -> Result<QmOptions> {
+    // Dispersion: a `-d3`/`-d4` method suffix or an explicit `--dispersion`,
+    // not both.
+    let flag_dispersion = flags
+        .str("dispersion")
+        .map(|v| match v.to_ascii_lowercase().as_str() {
+            "d3" | "d3bj" | "d3(bj)" => Ok(QmDispersion::D3Bj),
+            "d4" => Ok(QmDispersion::D4),
+            other => Err(anyhow!("--dispersion must be d3 or d4, got `{other}`")),
+        })
+        .transpose()?;
+    let dispersion = match (suffix_dispersion, flag_dispersion) {
+        (Some(_), Some(_)) => {
+            bail!("specify dispersion once: a -d3/-d4 method suffix or --dispersion, not both")
+        }
+        (a, b) => a.or(b),
+    };
+
+    // Solvation: at most one model.
+    let solvation = build_solvation(flags)?;
+
+    // SCF backend: at most one of --direct / --ri / --cosx.
+    let backend = [
+        (flags.flag("direct"), QmScfBackend::Direct),
+        (flags.flag("ri"), QmScfBackend::RiJk),
+        (flags.flag("cosx"), QmScfBackend::Cosx),
+    ];
+    let chosen: Vec<QmScfBackend> = backend
+        .iter()
+        .filter(|(on, _)| *on)
+        .map(|(_, b)| *b)
+        .collect();
+    if chosen.len() > 1 {
+        bail!("choose at most one SCF backend: --direct, --ri, or --cosx");
+    }
+    let scf_backend = chosen.first().copied().unwrap_or_default();
+
+    let grid_level = flags
+        .uint("grid")?
+        .map(|g| {
+            if g > 4 {
+                Err(anyhow!("--grid must be 0..=4, got {g}"))
+            } else {
+                Ok(g as usize)
+            }
+        })
+        .transpose()?;
+
+    let mut options = QmOptions {
+        compute_properties: flags.flag("properties") || flags.flag("props"),
+        dispersion,
+        solvation,
+        scf_backend,
+        ri_mp2: flags.flag("ri-mp2"),
+        x2c: flags.flag("x2c"),
+        all_electron: flags.flag("all-electron"),
+        grid_level,
+        smearing_temperature_k: flags.float("smear")?,
+        fod: flags.flag("fod"),
+        single_point_hessian: flags.flag("sph"),
+        symmetry_number: flags.uint("symmetry-number")?.unwrap_or(1),
+        ..QmOptions::default()
+    };
+    if let Some(w0) = flags.float("qrrho-w0")? {
+        options.qrrho_w0_cm1 = w0;
+    }
+    Ok(options)
+}
+
+/// Resolve the (at most one) solvation flag into a [`QmSolvation`].
+fn build_solvation(flags: &QmFlags) -> Result<Option<QmSolvation>> {
+    let candidates = [
+        flags
+            .str("solvent")
+            .map(|n| QmSolvation::Cpcm(CpcmDielectric::Named(n.to_string()))),
+        flags
+            .float("eps")?
+            .map(|e| QmSolvation::Cpcm(CpcmDielectric::Epsilon(e))),
+        flags.str("smd").map(|n| QmSolvation::Smd(n.to_string())),
+        flags.str("alpb").map(|n| QmSolvation::Alpb(n.to_string())),
+        flags.str("gbsa").map(|n| QmSolvation::Gbsa(n.to_string())),
+    ];
+    let mut chosen = candidates.into_iter().flatten();
+    let first = chosen.next();
+    if chosen.next().is_some() {
+        bail!("choose at most one solvation model: --solvent, --eps, --smd, --alpb, or --gbsa");
+    }
+    Ok(first)
 }
 
 #[cfg(test)]
@@ -169,6 +314,29 @@ mod tests {
                 },
             ],
         )
+    }
+
+    #[test]
+    fn qm_recommend_reports_a_level_of_theory() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        // `recommend` needs no structure and should name a level and a run line.
+        let out = qm_command(
+            &mut state,
+            &["recommend".to_string(), "general".to_string()],
+        )
+        .expect("qm recommend general should succeed");
+        assert!(
+            out.contains("level:"),
+            "recommendation should name a level: {out}"
+        );
+        // An unknown task lists the available ones rather than panicking.
+        assert!(
+            qm_command(
+                &mut state,
+                &["recommend".to_string(), "nonsense".to_string()]
+            )
+            .is_err()
+        );
     }
 
     #[test]
