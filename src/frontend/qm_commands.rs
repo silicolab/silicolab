@@ -80,7 +80,10 @@ fn qm_recommend(args: &[String]) -> Result<String> {
     Ok(out.trim_end().to_string())
 }
 
-fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
+/// Assemble a [`QmRequest`] from the active structure and parsed `--flags`.
+/// Shared by the synchronous `run` and the agent's async `run_qm` tool so the two
+/// build the exact same request.
+fn assemble_qm_request(state: &AppState, kind: QmKind, args: &[String]) -> Result<QmRequest> {
     if state.structure().atoms.is_empty() {
         bail!("no active structure; open one before `qm`");
     }
@@ -92,10 +95,8 @@ fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
     let basis = flags.str("basis").unwrap_or("def2-svp").to_string();
     let charge = flags.int("charge")?.unwrap_or(0);
     let multiplicity = flags.uint("spin")?.or(flags.uint("mult")?).unwrap_or(1);
-
     let options = build_options(&flags, suffix_dispersion)?;
-
-    let request = QmRequest {
+    Ok(QmRequest {
         structure: state.structure().clone(),
         method,
         basis,
@@ -103,7 +104,26 @@ fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
         multiplicity,
         kind,
         options,
+    })
+}
+
+/// Map a `qm <subcommand>` line (subcommand + flags) to a [`QmRequest`] for the
+/// agent's async tool. Mirrors [`qm_command`]'s subcommand dispatch.
+pub fn build_agent_qm_request(state: &AppState, args: &[String]) -> Result<QmRequest> {
+    let Some(sub) = args.first().map(String::as_str) else {
+        bail!("usage: qm <energy|optimize|freq> [options]");
     };
+    let kind = match sub {
+        "energy" | "sp" | "single-point" => QmKind::SinglePoint,
+        "optimize" | "opt" => QmKind::Optimize,
+        "freq" | "frequencies" => QmKind::Frequencies,
+        other => bail!("unknown qm subcommand `{other}` (expected energy, optimize, or freq)"),
+    };
+    assemble_qm_request(state, kind, &args[1..])
+}
+
+fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
+    let request = assemble_qm_request(state, kind, args)?;
 
     // Synchronous: a throwaway cancel flag and a no-op progress sink.
     let cancel = Arc::new(AtomicBool::new(false));
@@ -370,6 +390,73 @@ mod tests {
             state.structure().title
         );
         assert!(summary.contains("geometry optimization"));
+    }
+
+    #[test]
+    fn build_agent_qm_request_maps_subcommands() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let save_path = default_structure_save_path(&water(), None);
+        state.entries.add_entry(water(), None, save_path);
+
+        let request = super::build_agent_qm_request(
+            &state,
+            &[
+                "optimize".to_string(),
+                "--basis".to_string(),
+                "sto-3g".to_string(),
+            ],
+        )
+        .expect("agent qm request should build");
+        assert!(matches!(request.kind, super::QmKind::Optimize));
+        assert_eq!(request.basis, "sto-3g");
+        // Unknown subcommand is rejected.
+        assert!(super::build_agent_qm_request(&state, &["bogus".to_string()]).is_err());
+    }
+
+    #[test]
+    fn agent_qm_request_runs_off_thread() {
+        use crate::frontend::jobs::{QmWorkerMessage, spawn_qm_job};
+        use std::time::{Duration, Instant};
+
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let save_path = default_structure_save_path(&water(), None);
+        state.entries.add_entry(water(), None, save_path);
+
+        let request = super::build_agent_qm_request(
+            &state,
+            &[
+                "energy".to_string(),
+                "--method".to_string(),
+                "rhf".to_string(),
+                "--basis".to_string(),
+                "sto-3g".to_string(),
+            ],
+        )
+        .expect("request builds");
+
+        // Spawn the same job the agent's heavy path uses and poll it to
+        // completion, exactly as `poll_heavy_qm` does (minus the agent loop).
+        let job = spawn_qm_job(request);
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let mut summary = None;
+        while Instant::now() < deadline {
+            match job.receiver.try_recv() {
+                Ok(QmWorkerMessage::Finished(outcome)) => {
+                    summary = Some(outcome.summary);
+                    break;
+                }
+                Ok(QmWorkerMessage::Failed(error)) => panic!("qm job failed: {error}"),
+                Ok(QmWorkerMessage::Progress { .. }) => {}
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+        assert!(
+            summary.is_some(),
+            "async qm job should finish with a summary"
+        );
     }
 
     #[test]

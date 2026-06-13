@@ -34,6 +34,7 @@ pub enum SettingCategory {
     General,
     Representation,
     Engines,
+    Assistant,
     Tasks,
     Advanced,
 }
@@ -46,6 +47,7 @@ impl SettingCategory {
             SettingCategory::General => "General",
             SettingCategory::Representation => "Representation",
             SettingCategory::Engines => "Engines",
+            SettingCategory::Assistant => "Assistant",
             SettingCategory::Tasks => "Tasks",
             SettingCategory::Advanced => "Advanced",
         }
@@ -53,10 +55,11 @@ impl SettingCategory {
 }
 
 /// Stable iteration order for categories in the rendered panel and the rail.
-pub const CATEGORY_ORDER: [SettingCategory; 5] = [
+pub const CATEGORY_ORDER: [SettingCategory; 6] = [
     SettingCategory::General,
     SettingCategory::Representation,
     SettingCategory::Engines,
+    SettingCategory::Assistant,
     SettingCategory::Tasks,
     SettingCategory::Advanced,
 ];
@@ -363,6 +366,266 @@ fn render_tasks_placeholder(
     );
 }
 
+// --- Assistant ------------------------------------------------------------ //
+
+/// The in-app LLM assistant settings: enable, provider, model, effort, and a
+/// read-only API-key status. The provider list is data-driven from
+/// `frontend::agent::registry`, so adding GLM/DeepSeek/OpenRouter is a config
+/// row there, not new UI. Every control emits an `AppAction`; the key is never
+/// stored, only read from its environment variable.
+fn render_assistant_settings(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+) {
+    use crate::frontend::agent::registry;
+
+    let pal = crate::frontend::theme::palette(ui);
+
+    let mut enabled = state.config.assistant.enabled;
+    if ui.checkbox(&mut enabled, "Enable the assistant").changed() {
+        actions.push(AppAction::SetAssistantEnabled(enabled));
+    }
+    ui.label(
+        RichText::new(
+            "Drives SilicoLab with the same console commands a user types. Pay your provider \
+             directly; the API key is read from an environment variable and never stored.",
+        )
+        .small()
+        .color(pal.text_tertiary),
+    );
+    ui.add_space(6.0);
+
+    let provider = registry::active_provider(&state.config.assistant);
+    let current_model = state.config.assistant.model.clone();
+
+    // Provider picker (data-driven).
+    ui.horizontal(|ui| {
+        ui.label("Provider");
+        egui::ComboBox::from_id_salt("assistant.provider")
+            .selected_text(provider.label)
+            .show_ui(ui, |ui| {
+                for spec in registry::PROVIDERS {
+                    if ui
+                        .selectable_label(spec.id == provider.id, spec.label)
+                        .clicked()
+                        && spec.id != provider.id
+                    {
+                        // Switching provider resets to its first model.
+                        let model = spec
+                            .models
+                            .first()
+                            .map(|model| model.id.to_string())
+                            .unwrap_or_default();
+                        actions.push(AppAction::SwitchProviderModel {
+                            provider: spec.id.to_string(),
+                            model,
+                        });
+                    }
+                }
+            });
+    });
+
+    // Model picker.
+    let selected_model_label = provider
+        .models
+        .iter()
+        .find(|model| model.id == current_model)
+        .map(|model| model.label)
+        .unwrap_or(current_model.as_str());
+    ui.horizontal(|ui| {
+        ui.label("Model");
+        egui::ComboBox::from_id_salt("assistant.model")
+            .selected_text(selected_model_label)
+            .show_ui(ui, |ui| {
+                for model in provider.models {
+                    if ui
+                        .selectable_label(model.id == current_model, model.label)
+                        .clicked()
+                        && model.id != current_model
+                    {
+                        actions.push(AppAction::SwitchProviderModel {
+                            provider: provider.id.to_string(),
+                            model: model.id.to_string(),
+                        });
+                    }
+                }
+            });
+    });
+
+    // Free-text model id — model ids drift, and OpenRouter/local take arbitrary
+    // ids, so let the user type one directly. Committed on Enter / focus loss.
+    if let Some(model) = committed_text_field(
+        ui,
+        "assistant.model_text",
+        "Model id",
+        &current_model,
+        "e.g. deepseek-reasoner",
+    ) && model != current_model
+    {
+        actions.push(AppAction::SwitchProviderModel {
+            provider: provider.id.to_string(),
+            model,
+        });
+    }
+
+    // Base-URL override for OpenAI-compatible providers (self-hosted gateway,
+    // a regional endpoint, or a local server on a non-default port).
+    if provider.kind == registry::ProviderKind::OpenAiCompat {
+        let current_base = registry::effective_base_url(&state.config.assistant, provider);
+        if let Some(base) = committed_text_field(
+            ui,
+            "assistant.base_url",
+            "Base URL",
+            &current_base,
+            provider.base_url,
+        ) && base != current_base
+        {
+            actions.push(AppAction::SetAssistantBaseUrl(base));
+        }
+    }
+
+    // Effort picker — only meaningful where the model accepts it.
+    let caps = provider.caps_for(&current_model);
+    let current_effort = state.config.assistant.effort;
+    ui.horizontal(|ui| {
+        ui.label("Effort");
+        let combo =
+            egui::ComboBox::from_id_salt("assistant.effort").selected_text(current_effort.label());
+        ui.add_enabled_ui(caps.supports_effort, |ui| {
+            combo.show_ui(ui, |ui| {
+                for effort in crate::io::llm::types::Effort::all() {
+                    if ui
+                        .selectable_label(*effort == current_effort, effort.label())
+                        .clicked()
+                        && *effort != current_effort
+                    {
+                        actions.push(AppAction::SetAssistantEffort(*effort));
+                    }
+                }
+            });
+        });
+    });
+    if !caps.supports_effort {
+        ui.label(
+            RichText::new("This model does not use a reasoning-effort setting.")
+                .small()
+                .color(pal.text_tertiary),
+        );
+    }
+
+    // API key: environment variable (preferred) or OS keychain. Never config.
+    ui.add_space(6.0);
+    if provider.key_env.is_empty() {
+        ui.label(
+            RichText::new("This provider needs no API key.")
+                .small()
+                .color(pal.text_tertiary),
+        );
+        return;
+    }
+
+    let (icon, text, color) = match registry::key_source(provider) {
+        registry::KeySource::Env => (
+            egui_phosphor::regular::CHECK_CIRCLE,
+            format!("Using the key from {}", provider.key_env),
+            pal.status_green,
+        ),
+        registry::KeySource::Keychain => (
+            egui_phosphor::regular::CHECK_CIRCLE,
+            "Using the key stored in the OS keychain".to_string(),
+            pal.status_green,
+        ),
+        registry::KeySource::Missing => (
+            egui_phosphor::regular::WARNING,
+            format!("No key — set {} or store one below", provider.key_env),
+            pal.status_amber,
+        ),
+        registry::KeySource::None => (
+            egui_phosphor::regular::INFO,
+            String::new(),
+            pal.text_tertiary,
+        ),
+    };
+    ui.label(
+        RichText::new(format!("{icon}  {text}"))
+            .small()
+            .color(color),
+    );
+
+    // Store a key in the OS keychain (an alternative to the env var, which still
+    // wins when set). Held in egui temp memory, committed on a button click.
+    let key_id = ui.id().with("assistant.api_key");
+    let mut key = ui
+        .data(|data| data.get_temp::<String>(key_id))
+        .unwrap_or_default();
+    ui.horizontal(|ui| {
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut key)
+                .desired_width(220.0)
+                .password(true)
+                .hint_text("Paste a key to store in the keychain"),
+        );
+        if response.changed() {
+            ui.data_mut(|data| data.insert_temp(key_id, key.clone()));
+        }
+        if ui.button("Save to keychain").clicked() && !key.trim().is_empty() {
+            actions.push(AppAction::SetAssistantApiKey(key.clone()));
+            ui.data_mut(|data| data.remove_temp::<String>(key_id));
+        }
+        if ui.button("Clear").clicked() {
+            actions.push(AppAction::ClearAssistantApiKey);
+            ui.data_mut(|data| data.remove_temp::<String>(key_id));
+        }
+    });
+    ui.label(
+        RichText::new(
+            "Stored in your OS keychain, never in settings.json. The environment \
+             variable takes precedence when set.",
+        )
+        .small()
+        .color(pal.text_tertiary),
+    );
+}
+
+/// A labeled single-line text field that edits a buffer in egui temp memory and
+/// returns the new value only when the user commits (Enter or focus loss), so a
+/// setting persists once per edit rather than on every keystroke. The buffer
+/// reseeds from `current` whenever it is not being edited.
+fn committed_text_field(
+    ui: &mut egui::Ui,
+    id_salt: &str,
+    label: &str,
+    current: &str,
+    hint: &str,
+) -> Option<String> {
+    let buffer_id = ui.id().with(id_salt);
+    let mut buffer = ui
+        .data(|data| data.get_temp::<String>(buffer_id))
+        .unwrap_or_else(|| current.to_string());
+
+    let mut committed = None;
+    ui.horizontal(|ui| {
+        ui.label(label);
+        let response = ui.add(
+            egui::TextEdit::singleline(&mut buffer)
+                .desired_width(260.0)
+                .hint_text(hint),
+        );
+        if response.changed() {
+            ui.data_mut(|data| data.insert_temp(buffer_id, buffer.clone()));
+        }
+        let enter = response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+        if enter || (response.lost_focus() && buffer != current) {
+            committed = Some(buffer.trim().to_string());
+            // Clear the scratch buffer so the field reseeds from the committed
+            // config value next frame.
+            ui.data_mut(|data| data.remove_temp::<String>(buffer_id));
+        }
+    });
+    committed
+}
+
 // --- Advanced ▸ Configuration --------------------------------------------- //
 
 /// Show the settings.json path with a button that reveals it in the OS file
@@ -661,6 +924,34 @@ pub fn registry() -> Vec<SettingDescriptor> {
             "key",
         ],
         control: Control::Custom(super::render_remote_hosts_settings),
+        enabled: None,
+        indent: false,
+        is_default: None,
+        reset: None,
+    });
+
+    // Assistant: the in-app LLM agent. Custom editor (provider/model/effort/key),
+    // data-driven from the agent registry. Strong keywords for search.
+    items.push(SettingDescriptor {
+        id: "assistant.config",
+        category: SettingCategory::Assistant,
+        group: "Assistant",
+        title: "AI assistant",
+        description: "",
+        keywords: &[
+            "assistant",
+            "ai",
+            "llm",
+            "agent",
+            "claude",
+            "anthropic",
+            "model",
+            "chat",
+            "provider",
+            "api key",
+            "effort",
+        ],
+        control: Control::Custom(render_assistant_settings),
         enabled: None,
         indent: false,
         is_default: None,

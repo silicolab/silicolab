@@ -163,6 +163,30 @@ pub enum AppAction {
     /// target picker's "Add host…" button).
     OpenRemoteHostsSettings,
     RunConsoleCommand(String),
+    /// Send a message to the in-app assistant, kicking off an agent turn.
+    SendAgentMessage(String),
+    /// Cancel the in-flight assistant turn and any pending tool batch.
+    CancelAgent,
+    /// Approve the gated (destructive/expensive) tool call with this id.
+    ApproveToolCall(String),
+    /// Reject the gated tool call with this id (the model gets an error result).
+    RejectToolCall(String),
+    /// Switch the active assistant provider + model and persist.
+    SwitchProviderModel {
+        provider: String,
+        model: String,
+    },
+    /// Enable or disable the assistant and persist.
+    SetAssistantEnabled(bool),
+    /// Set the assistant's reasoning effort and persist.
+    SetAssistantEffort(crate::io::llm::types::Effort),
+    /// Set (blank clears) the base-URL override for an OpenAI-compatible
+    /// assistant provider and persist.
+    SetAssistantBaseUrl(String),
+    /// Store the entered API key for the active provider in the OS keychain.
+    SetAssistantApiKey(String),
+    /// Remove the active provider's stored key from the OS keychain.
+    ClearAssistantApiKey,
     /// Set the light/dark appearance preference and persist it.
     SetThemeMode(crate::backend::config::ThemeMode),
     /// Set the accent + neutral color scheme and persist it.
