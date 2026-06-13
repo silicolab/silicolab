@@ -449,6 +449,169 @@ fn md_simulate(state: &mut AppState, args: &[String]) -> Result<String> {
     finish_cli_task(state, task_run_id, result)
 }
 
+// ---- agent async heavy tool -------------------------------------------------
+
+/// Build a GROMACS pipeline request for the agent's async `run_md` tool from a
+/// `md <run|simulate>` line (subcommand + flags). Mirrors the synchronous
+/// [`md_run`] / [`md_simulate`] setup but targets a plain run directory and
+/// returns the request so it can be spawned off the UI thread (no Task plumbing).
+/// The active entry must already carry an MD system (run `md build` first).
+pub fn build_agent_md_request(
+    state: &AppState,
+    args: &[String],
+) -> Result<crate::frontend::jobs::GromacsPipelineRequest> {
+    let Some(sub) = args.first().map(String::as_str) else {
+        bail!("usage: md <run|simulate> [options]");
+    };
+    match sub {
+        "run" => build_agent_md_run(state, &args[1..]),
+        "simulate" => build_agent_md_simulate(state, &args[1..]),
+        other => {
+            bail!("`md {other}` is not a runnable simulation (use `md run` or `md simulate`)")
+        }
+    }
+}
+
+/// A fresh run directory for an agent-initiated MD run (outside the Task system).
+fn agent_md_run_dir(state: &AppState) -> Result<PathBuf> {
+    let runs_dir = state.runs_dir();
+    let name = crate::backend::runs::default_run_name(&runs_dir, "run-md");
+    ensure_run_dir(&runs_dir, &name)
+}
+
+fn build_agent_md_run(
+    state: &AppState,
+    args: &[String],
+) -> Result<crate::frontend::jobs::GromacsPipelineRequest> {
+    let flags = Flags::parse(args)?;
+    let structure = require_boxed_structure(state)?;
+    let context = load_or_derive_context(state);
+    let eff = context.with_overrides(parse_overrides(&flags));
+
+    let preset = match flags.str("preset") {
+        Some(token) => PresetId::from_token(token)
+            .ok_or_else(|| anyhow!("unknown preset `{token}` (run `md presets` to list them)"))?,
+        None => recommend(&eff).preset,
+    };
+
+    let mut params = PresetParams::default();
+    if let Some(temperature) = flags.f32("temperature")? {
+        params.temperature_k = temperature;
+    }
+    if let Some(timestep) = flags.f32("timestep")? {
+        params.timestep_ps = timestep;
+    }
+
+    let mut stages = preset.build(&eff, &params);
+    if let Some(length) = flags.str("length") {
+        let ps = parse_time_ps(length)?;
+        for stage in &mut stages {
+            if matches!(stage.kind, StageKind::Produce | StageKind::Extend) {
+                stage.length = StageLength::Picoseconds(ps);
+            }
+        }
+    }
+    if flags.flag("no-trajectory") {
+        for stage in &mut stages {
+            stage.trajectory_target_frames = None;
+        }
+    }
+
+    let edits = build_stage_edits(&flags)?;
+    let family = context.force_field_family;
+    let stages: Vec<MdStage> = stages
+        .into_iter()
+        .map(|stage| assemble(stage, family, &edits))
+        .collect();
+
+    let issues = validate(&stages, &eff);
+    if has_errors(&issues) {
+        let errors: Vec<String> = issues
+            .iter()
+            .filter(|issue| {
+                issue.severity == crate::workflows::molecular_dynamics::run::IssueSeverity::Error
+            })
+            .map(|issue| issue.message.clone())
+            .collect();
+        bail!("cannot run `{}`: {}", preset.token(), errors.join("; "));
+    }
+
+    let mut specs = stage_specs_from_md_stages(&stages, family, None);
+    let entry_id = state.entries.active_entry_id();
+    let framework_meta = entry_id
+        .and_then(|id| crate::frontend::md_support::load_framework_metadata_for_entry(state, id));
+    if let Some(meta) = &framework_meta {
+        for spec in &mut specs {
+            meta.apply_to(&mut spec.settings);
+        }
+    }
+    let topology = resolve_run_topology(state, entry_id)?;
+    let launch = resolve_launch(state)?;
+    let working_dir = agent_md_run_dir(state)?;
+
+    Ok(crate::frontend::jobs::GromacsPipelineRequest {
+        structure,
+        topology,
+        stages: specs,
+        working_dir,
+        compute: launch.into(),
+        max_duration_per_stage: STAGE_TIMEOUT,
+        freeze: framework_meta
+            .as_ref()
+            .and_then(|meta| meta.freeze_selection()),
+    })
+}
+
+fn build_agent_md_simulate(
+    state: &AppState,
+    args: &[String],
+) -> Result<crate::frontend::jobs::GromacsPipelineRequest> {
+    let flags = Flags::parse(args)?;
+    let production_ps = match flags.str("time") {
+        Some(t) => parse_time_ps(t)?,
+        None => 1000.0,
+    };
+    let temperature_k = flags.f32("temperature")?.unwrap_or(300.0);
+    let relax = !flags.flag("no-relax");
+    let save_trajectory = !flags.flag("no-trajectory");
+    let options = MdProtocolOptions {
+        production_ps,
+        timestep_ps: 0.002,
+        temperature_k,
+        relax_before_production: relax,
+        save_trajectory,
+    };
+
+    let structure = require_boxed_structure(state)?;
+    let topology = load_active_or_derive_md_topology(state)
+        .map_err(|_| anyhow!("no MD system found; run `md build` first to prepare the system"))?;
+    let framework_meta = state
+        .entries
+        .active_entry_id()
+        .and_then(|id| crate::frontend::md_support::load_framework_metadata_for_entry(state, id));
+
+    let mut stages = protocol_stage_specs(&options);
+    if let Some(meta) = &framework_meta {
+        for spec in &mut stages {
+            meta.apply_to(&mut spec.settings);
+        }
+    }
+    let launch = resolve_launch(state)?;
+    let working_dir = agent_md_run_dir(state)?;
+
+    Ok(crate::frontend::jobs::GromacsPipelineRequest {
+        structure,
+        topology: TopologySource::Inline(render_top(&topology)),
+        stages,
+        working_dir,
+        compute: launch.into(),
+        max_duration_per_stage: STAGE_TIMEOUT,
+        freeze: framework_meta
+            .as_ref()
+            .and_then(|meta| meta.freeze_selection()),
+    })
+}
+
 // ---- md presets / md run ----------------------------------------------------
 
 /// `md presets`: list the preset library, marking the one recommended for the
@@ -890,6 +1053,112 @@ mod tests {
         assert!(parse_set_into(&mut params, "bogus=1").is_err());
         // A malformed entry is rejected.
         assert!(parse_set_into(&mut params, "coulomb_cutoff").is_err());
+    }
+
+    /// End-to-end check of the agent's async MD path against a real GROMACS:
+    /// build a structure, build the same `GromacsPipelineRequest` the agent
+    /// spawns, run it through `spawn_gromacs_pipeline_job`, and poll it exactly as
+    /// `poll_heavy_engine` does. Asserts the path reaches GROMACS (request built,
+    /// job spawned, stages streamed back, a terminal message delivered) — that is
+    /// the agent-integration contract; whether the *system* converges is an MD
+    /// concern. Ignored by default (needs GROMACS); run with
+    /// `cargo test -- --ignored agent_md_simulate`. The bare argon lattice here
+    /// is a minimal smoke system, not an equilibrated one.
+    #[test]
+    #[ignore = "requires GROMACS in WSL (set the launch below to your install)"]
+    fn agent_md_simulate_runs_against_gromacs() {
+        use crate::domain::{Atom, Structure, UnitCell};
+        use crate::engines::registry::EngineLaunch;
+        use crate::frontend::jobs::{EngineWorkerMessage, spawn_gromacs_pipeline_job};
+        use crate::frontend::state::AppState;
+        use crate::io::structure_io::default_structure_save_path;
+        use nalgebra::{Point3, Vector3};
+        use std::time::{Duration, Instant};
+
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        state.config.engine_overrides.insert(
+            crate::engines::registry::EngineId::GROMACS
+                .as_str()
+                .to_string(),
+            EngineLaunch {
+                command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
+                program: "/usr/local/gromacs/bin/gmx".to_string(),
+            },
+        );
+
+        // A 3×3×3 argon lattice in a cubic box.
+        let spacing = 3.8_f32;
+        let length = spacing * 3.0;
+        let mut atoms = Vec::new();
+        for x in 0..3 {
+            for y in 0..3 {
+                for z in 0..3 {
+                    atoms.push(Atom {
+                        element: "Ar".to_string(),
+                        position: Point3::new(
+                            x as f32 * spacing + 0.5,
+                            y as f32 * spacing + 0.5,
+                            z as f32 * spacing + 0.5,
+                        ),
+                        charge: 0.0,
+                    });
+                }
+            }
+        }
+        let cell = UnitCell::from_vectors([
+            Vector3::new(length, 0.0, 0.0),
+            Vector3::new(0.0, length, 0.0),
+            Vector3::new(0.0, 0.0, length),
+        ]);
+        let structure = Structure::with_cell("argon", atoms, cell);
+        let save_path = default_structure_save_path(&structure, None);
+        state.entries.add_entry(structure, None, save_path);
+
+        let request = build_agent_md_request(
+            &state,
+            &[
+                "simulate".to_string(),
+                "--time".to_string(),
+                "1".to_string(),
+                "--no-trajectory".to_string(),
+            ],
+        )
+        .expect("agent md request should build");
+
+        let job = spawn_gromacs_pipeline_job(request);
+        let deadline = Instant::now() + Duration::from_secs(600);
+        let mut saw_stage = false;
+        let mut terminal = false;
+        while Instant::now() < deadline {
+            match job.receiver.try_recv() {
+                Ok(EngineWorkerMessage::Finished(success)) => {
+                    println!("agent MD finished: {}", success.summary);
+                    terminal = true;
+                    break;
+                }
+                Ok(EngineWorkerMessage::Failed(error)) => {
+                    // An MD/grompp failure on this minimal smoke system is fine;
+                    // it still proves the agent reached and ran GROMACS.
+                    println!("agent MD reached GROMACS, run failed: {error}");
+                    terminal = true;
+                    break;
+                }
+                Ok(EngineWorkerMessage::Stage(stage)) => {
+                    println!("stage: {stage}");
+                    saw_stage = true;
+                }
+                Ok(EngineWorkerMessage::Log(_)) => {}
+                Err(std::sync::mpsc::TryRecvError::Empty) => {
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+        // The agent-integration contract: the off-thread GROMACS pipeline started
+        // (stages streamed) and delivered a terminal result back through the
+        // channel the agent loop drains.
+        assert!(saw_stage, "expected GROMACS stages to stream back");
+        assert!(terminal, "expected a terminal Finished/Failed message");
     }
 
     #[test]

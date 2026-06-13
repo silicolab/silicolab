@@ -165,6 +165,77 @@ pub fn spawn_remote_probe(
     RunningRemoteProbe { host_id, receiver }
 }
 
+/// An in-flight assistant model turn: one `provider.complete()` POST running on
+/// a worker thread (network takes seconds-to-minutes, so it must be off the UI
+/// thread). The driver drains the result in `poll_jobs` and runs any tool calls
+/// back on the UI thread. `cancel` is shared with the retry loop so Esc aborts
+/// between attempts.
+pub struct RunningAgentTurn {
+    pub cancel: Arc<AtomicBool>,
+    pub receiver: Receiver<AgentTurnEvent>,
+}
+
+/// What the agent-turn worker streams back: incremental text while generating,
+/// then a terminal `Done` with the full turn (or a classified error).
+pub enum AgentTurnEvent {
+    TextDelta(String),
+    Done(Result<crate::io::llm::types::AssistantTurn, crate::io::llm::types::LlmError>),
+}
+
+/// A heavy compute job (MD or QM) the agent kicked off and is awaiting. Owned in
+/// a slot separate from the Tasks-system `engine`/`qm` jobs so the agent captures
+/// the raw result without interfering with task completion.
+pub enum AgentHeavyJob {
+    Qm(RunningQmJob),
+    Engine(RunningEngineJob),
+}
+
+impl AgentHeavyJob {
+    /// Signal the worker to stop at its next cancellation checkpoint.
+    pub fn cancel(&self) {
+        match self {
+            AgentHeavyJob::Qm(job) => job.cancel.store(true, Ordering::Relaxed),
+            AgentHeavyJob::Engine(job) => job.cancel.store(true, Ordering::Relaxed),
+        }
+    }
+}
+
+/// Spawn one model turn on a worker thread and return the polling handle. The
+/// blocking transport + bounded retry live entirely in `io/llm`; the worker
+/// forwards streamed text deltas and then the terminal
+/// [`AssistantTurn`](crate::io::llm::types::AssistantTurn) (or a classified error).
+pub fn spawn_agent_turn(
+    provider: Box<dyn crate::io::llm::provider::LlmProvider>,
+    cfg: crate::io::llm::types::LlmConfig,
+    tools: Vec<crate::io::llm::types::ToolDef>,
+    history: Vec<crate::io::llm::types::ChatMessage>,
+) -> RunningAgentTurn {
+    use crate::io::llm::types::StreamEvent;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_for_worker = Arc::clone(&cancel);
+
+    std::thread::spawn(move || {
+        let delta_sender = sender.clone();
+        let mut on_event = move |event: StreamEvent| {
+            if let StreamEvent::TextDelta(text) = event {
+                let _ = delta_sender.send(AgentTurnEvent::TextDelta(text));
+            }
+        };
+        let result = crate::io::llm::retry::complete_with_retry(
+            provider.as_ref(),
+            &cfg,
+            &tools,
+            &history,
+            &cancel_for_worker,
+            &mut on_event,
+        );
+        let _ = sender.send(AgentTurnEvent::Done(result));
+    });
+
+    RunningAgentTurn { cancel, receiver }
+}
+
 /// The once-per-launch background query of GitHub Releases. No cancel flag:
 /// the single HTTP request either answers or times out on its own, and the
 /// result is ignored if the handle was dropped.
@@ -215,6 +286,12 @@ pub struct JobManager {
     pub self_update: Option<RunningSelfUpdate>,
     /// In-flight Remote Hosts settings probe (passwordless check / engine detect).
     pub remote_probe: Option<RunningRemoteProbe>,
+    /// In-flight assistant model turn (one `provider.complete()` POST). One
+    /// `RunningAgentTurn` == one model turn; the agent loop drives the next.
+    pub agent: Option<RunningAgentTurn>,
+    /// In-flight heavy compute job (md/qm) the agent is awaiting before it
+    /// continues its turn.
+    pub agent_heavy: Option<AgentHeavyJob>,
 }
 
 impl JobManager {

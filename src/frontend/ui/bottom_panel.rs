@@ -70,6 +70,7 @@ pub(super) fn render_bottom_panel(
     match state.ui.layout.active_panel_tab {
         PanelTab::Output => render_output_panel(state, ui),
         PanelTab::Console => render_console_panel(state, ui, actions),
+        PanelTab::Chat => render_chat_panel(state, ui, actions),
         PanelTab::TaskMonitor => render_task_monitor_panel(state, ui, actions),
     }
 }
@@ -215,6 +216,216 @@ fn weak_panel_hairline(ui: &mut egui::Ui, alpha: u8) {
         rect.center().y,
         Stroke::new(1.0, pal.neutral_overlay(alpha)),
     );
+}
+
+fn render_chat_panel(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec<AppAction>) {
+    use crate::frontend::agent::{AgentPhase, registry};
+
+    let pal = crate::frontend::theme::palette(ui);
+    ui.set_width(ui.available_width());
+
+    let busy = state.ui.agent.is_busy();
+    let phase = state.ui.agent.phase;
+    let assistant_enabled = state.config.assistant.enabled;
+    let provider = registry::active_provider(&state.config.assistant);
+    // Cached (the live check reads the OS keychain); refreshed off the hot path.
+    let key_present = state.ui.agent.key_available.unwrap_or(false);
+    let pending_call = state.ui.agent.pending_approval().cloned();
+
+    // Bottom-up so the input pins to the bottom and the transcript fills the
+    // space above it without overflowing the fixed-height panel (the panel
+    // height is fixed by `exact_size` in `render_workspace`).
+    ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
+        // --- Input row (bottommost) ---
+        ui.horizontal(|ui| {
+            let send_enabled = assistant_enabled && key_present && !busy && pending_call.is_none();
+            let hint = if !assistant_enabled {
+                "Assistant disabled"
+            } else if !key_present {
+                "Set the API key env var"
+            } else if busy {
+                "Working…"
+            } else {
+                "Ask the assistant to do something"
+            };
+            let response = ui.add_enabled(
+                send_enabled,
+                egui::TextEdit::singleline(&mut state.ui.agent.input)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(hint),
+            );
+            let submit =
+                response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+            if send_enabled && (submit || ui.button("Send").clicked()) {
+                let message = state.ui.agent.input.trim().to_string();
+                if !message.is_empty() {
+                    actions.push(AppAction::SendAgentMessage(message));
+                    state.ui.agent.input.clear();
+                }
+            }
+            if busy && ui.button("Stop").clicked() {
+                actions.push(AppAction::CancelAgent);
+            }
+        });
+
+        // --- Approval bar (above the input) ---
+        if let Some(call) = &pending_call {
+            weak_panel_hairline(ui, 14);
+            let command = call
+                .input
+                .get("command")
+                .and_then(|value| value.as_str())
+                .unwrap_or(&call.name);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Approve to run:").color(pal.status_amber));
+                ui.monospace(command);
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button("Reject").clicked() {
+                        actions.push(AppAction::RejectToolCall(call.id.clone()));
+                    }
+                    if ui
+                        .add(Button::new(
+                            RichText::new("Approve").color(pal.status_green),
+                        ))
+                        .clicked()
+                    {
+                        actions.push(AppAction::ApproveToolCall(call.id.clone()));
+                    }
+                });
+            });
+        }
+
+        weak_panel_hairline(ui, 14);
+
+        // --- Status line: provider/model + usage ---
+        ui.horizontal(|ui| {
+            ui.label(
+                RichText::new(format!(
+                    "{} · {}",
+                    provider.label, state.config.assistant.model
+                ))
+                .small()
+                .color(pal.text_tertiary),
+            );
+            if let Some(usage) = &state.ui.agent.last_usage {
+                let session = &state.ui.agent.session_usage;
+                ui.label(
+                    RichText::new(format!(
+                        "last {}↑/{}↓ (cache {}r) · session {}↑/{}↓",
+                        compact(usage.input_total()),
+                        compact(usage.output),
+                        compact(usage.cache_read),
+                        compact(session.input_total()),
+                        compact(session.output),
+                    ))
+                    .small()
+                    .color(pal.text_tertiary),
+                );
+            }
+            if matches!(phase, AgentPhase::AwaitingModel) {
+                ui.spinner();
+            }
+        });
+
+        weak_panel_hairline(ui, 14);
+
+        // --- Transcript (fills the remaining height) ---
+        ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .stick_to_bottom(true)
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                if state.ui.agent.transcript.is_empty() {
+                    ui.label(
+                        RichText::new(
+                            "Ask the assistant to fetch a structure, restyle the view, or set up \
+                             a calculation. It drives SilicoLab with the same console commands.",
+                        )
+                        .small()
+                        .color(pal.text_tertiary),
+                    );
+                }
+                if !key_present {
+                    ui.label(
+                        RichText::new(format!(
+                            "No API key found. Set {} and restart, or pick another provider in \
+                             Settings ▸ Assistant.",
+                            provider.key_env
+                        ))
+                        .small()
+                        .color(pal.status_amber),
+                    );
+                }
+                for entry in &state.ui.agent.transcript {
+                    render_transcript_entry(ui, &pal, entry);
+                }
+                // Live streaming preview of the in-flight assistant text.
+                if !state.ui.agent.streaming_text.is_empty() {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(RichText::new("Assistant").strong().color(pal.status_green));
+                        ui.label(
+                            RichText::new(format!("{}▌", state.ui.agent.streaming_text))
+                                .color(pal.text_primary),
+                        );
+                    });
+                }
+            });
+    });
+}
+
+fn render_transcript_entry(
+    ui: &mut egui::Ui,
+    pal: &crate::frontend::theme::Palette,
+    entry: &crate::frontend::agent::TranscriptEntry,
+) {
+    use crate::frontend::agent::TranscriptEntry;
+    match entry {
+        TranscriptEntry::User(text) => {
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("You").strong().color(pal.status_blue));
+                ui.label(RichText::new(text).color(pal.text_primary));
+            });
+        }
+        TranscriptEntry::Assistant(text) => {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new("Assistant").strong().color(pal.status_green));
+                ui.label(RichText::new(text).color(pal.text_primary));
+            });
+        }
+        TranscriptEntry::ToolCall { summary } => {
+            ui.monospace(
+                RichText::new(format!("{}  {summary}", egui_phosphor::regular::TERMINAL))
+                    .small()
+                    .color(pal.text_primary),
+            );
+        }
+        TranscriptEntry::ToolResult { summary, is_error } => {
+            let color = if *is_error {
+                pal.status_red
+            } else {
+                pal.text_tertiary
+            };
+            ui.monospace(RichText::new(summary).small().color(color));
+        }
+        TranscriptEntry::Notice(text) => {
+            ui.label(
+                RichText::new(text)
+                    .small()
+                    .italics()
+                    .color(pal.text_tertiary),
+            );
+        }
+    }
+}
+
+/// Compact token count, e.g. `1234` → `1.2k`.
+fn compact(value: u32) -> String {
+    if value < 1000 {
+        value.to_string()
+    } else {
+        format!("{:.1}k", value as f32 / 1000.0)
+    }
 }
 
 pub(super) fn render_status_bar(state: &mut AppState, ui: &mut egui::Ui) {
