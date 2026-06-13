@@ -17,6 +17,12 @@ pub enum AppAction {
     EditStructure,
     ApplyStructureEdits,
     CancelStructureEdits,
+    /// Open the 2D molecule sketcher.
+    SketchMolecule,
+    /// Build the current sketch into a new workspace entry.
+    CommitSketch,
+    /// Discard the sketch and close the sketcher.
+    CancelSketch,
     SelectAll,
     InvertSelection,
     ClearSelection,

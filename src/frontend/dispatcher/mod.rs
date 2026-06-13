@@ -59,6 +59,7 @@ mod project;
 mod selection;
 mod settings;
 mod simulation;
+mod sketch;
 mod tasks;
 
 pub(crate) use builders::*;
@@ -68,6 +69,7 @@ pub(crate) use project::*;
 pub(crate) use selection::*;
 pub(crate) use settings::*;
 pub(crate) use simulation::*;
+pub(crate) use sketch::*;
 pub(crate) use tasks::*;
 
 pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
@@ -104,6 +106,9 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::EditStructure => edit_structure(state),
         AppAction::ApplyStructureEdits => apply_structure_edits(state),
         AppAction::CancelStructureEdits => cancel_structure_edits(state),
+        AppAction::SketchMolecule => sketch_molecule(state),
+        AppAction::CommitSketch => commit_sketch(state),
+        AppAction::CancelSketch => cancel_sketch(state),
         AppAction::SelectAll => select_all(state),
         AppAction::InvertSelection => invert_selection(state),
         AppAction::ClearSelection => clear_selection(state),
