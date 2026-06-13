@@ -384,14 +384,6 @@ pub fn draw_viewport(ui: &mut egui::Ui, args: ViewportDrawArgs<'_>) -> ViewportI
         draw_hovered_atom_label(&painter, rect, structure, index, pal);
     }
 
-    painter.text(
-        rect.left_top() + Vec2::new(12.0, 12.0),
-        Align2::LEFT_TOP,
-        "Click select | Ctrl+Click add/remove | Left drag rotate | Right/Middle drag pan | Wheel zoom",
-        FontId::proportional(13.0),
-        pal.text_muted,
-    );
-
     interaction
 }
 
