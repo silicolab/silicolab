@@ -140,6 +140,22 @@ pub enum AppAction {
     ApplyEngineOverride(crate::engines::registry::EngineId),
     ClearEngineOverride(crate::engines::registry::EngineId),
     BrowseEngineProgram(crate::engines::registry::EngineId),
+    /// Add a new remote host from the "add host" draft.
+    AddRemoteHost,
+    /// Persist edits to the host with this id from its draft.
+    SaveRemoteHost(String),
+    /// Remove the host with this id.
+    RemoveRemoteHost(String),
+    /// Detect GROMACS on the host with this id (worker thread).
+    DetectRemoteGromacs(String),
+    /// Test passwordless login to the host with this id (worker thread).
+    CheckRemoteHost(String),
+    /// Generate the dedicated key (if needed) and show the one-line install
+    /// command for the host with this id.
+    SetupRemoteHostKey(String),
+    /// Open the Settings dialog at the Remote Hosts section (from the per-task
+    /// target picker's "Add host…" button).
+    OpenRemoteHostsSettings,
     RunConsoleCommand(String),
     /// Set the light/dark appearance preference and persist it.
     SetThemeMode(crate::backend::config::ThemeMode),

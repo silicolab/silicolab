@@ -20,6 +20,7 @@ use crate::engines::{
         runner::{GromacsProgress, subprocess_failure},
     },
     registry::EngineLaunch,
+    remote::Compute,
 };
 
 /// Shared context for an analysis invocation.
@@ -63,8 +64,11 @@ pub fn gmx_energy<F>(
 where
     F: FnMut(GromacsProgress),
 {
+    // Post-run energy extraction runs locally in v1: it operates on the run dir's
+    // already-staged-back `.edr` (see the run-stage stage-down). Wrapping the
+    // launch as a local `Compute` keeps `AnalysisContext` unchanged.
     let outcome = run_gmx(
-        &ctx.gmx_launch,
+        &Compute::local(ctx.gmx_launch.clone()),
         &ctx.working_dir,
         build_energy_args(&name(edr, "ener.edr"), output_name),
         Some(energy_term_selection(terms)),

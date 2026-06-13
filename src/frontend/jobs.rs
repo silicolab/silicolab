@@ -19,7 +19,7 @@ use crate::{
             TopologySource, build_material_system, build_system, prepare_system, run_pipeline,
         },
         qm::{QmOutcome, QmRequest},
-        registry::EngineLaunch,
+        remote::Compute,
     },
     frontend::md_support::{FrameworkRunMetadata, MD_FRAMEWORK_FILE, write_md_system_context},
     workflows::{
@@ -90,7 +90,8 @@ pub struct GromacsPipelineRequest {
     pub topology: TopologySource,
     pub stages: Vec<StageSpec>,
     pub working_dir: PathBuf,
-    pub gmx_launch: EngineLaunch,
+    /// How to launch `gmx` and where it runs (local or remote over SSH).
+    pub compute: Compute,
     pub max_duration_per_stage: Duration,
     /// Atoms to freeze (a rigid framework's sheet); `None` for an ordinary run.
     pub freeze: Option<crate::engines::gromacs::FreezeSelection>,
@@ -114,6 +115,54 @@ impl RunningEngineJob {
             self.log_tail.drain(0..drop);
         }
     }
+}
+
+/// What a Remote Hosts settings probe is checking on a host.
+#[derive(Debug, Clone, Copy)]
+pub enum RemoteProbeKind {
+    /// Whether passwordless key login already works.
+    Passwordless,
+    /// Detect a GROMACS executable + version on the host.
+    DetectGromacs,
+}
+
+/// Result of a remote-host probe (sent back from the worker thread).
+pub enum RemoteProbeOutcome {
+    Passwordless(bool),
+    /// `(program, version)` when GROMACS was found, else `None`.
+    Detected(Option<(String, String)>),
+}
+
+/// An in-flight Remote Hosts probe. Runs the blocking `ssh` off the UI thread so
+/// a slow or dead host never freezes rendering; the dispatcher drains it each
+/// frame (like [`RunningUpdateCheck`]).
+pub struct RunningRemoteProbe {
+    pub host_id: String,
+    pub receiver: Receiver<RemoteProbeOutcome>,
+}
+
+/// Spawn a remote-host probe on a worker thread. The host is cloned in; only its
+/// connection fields matter (the probe uses a throwaway run anchor).
+pub fn spawn_remote_probe(
+    host: crate::backend::config::RemoteHost,
+    kind: RemoteProbeKind,
+) -> RunningRemoteProbe {
+    use crate::engines::remote;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let host_id = host.id.clone();
+    std::thread::spawn(move || {
+        let target = remote::RemoteTarget::for_run(&host, "probe");
+        let outcome = match kind {
+            RemoteProbeKind::Passwordless => {
+                RemoteProbeOutcome::Passwordless(remote::check_passwordless(&target))
+            }
+            RemoteProbeKind::DetectGromacs => RemoteProbeOutcome::Detected(
+                remote::detect_remote_engine(&target, remote::GMX_REMOTE_CANDIDATES),
+            ),
+        };
+        let _ = sender.send(outcome);
+    });
+    RunningRemoteProbe { host_id, receiver }
 }
 
 /// The once-per-launch background query of GitHub Releases. No cancel flag:
@@ -164,6 +213,8 @@ pub struct JobManager {
     /// In-flight one-click self-update (download + replace the executable),
     /// started when the user clicks the update badge.
     pub self_update: Option<RunningSelfUpdate>,
+    /// In-flight Remote Hosts settings probe (passwordless check / engine detect).
+    pub remote_probe: Option<RunningRemoteProbe>,
 }
 
 impl JobManager {
@@ -326,6 +377,9 @@ pub fn spawn_gromacs_pipeline_job(request: GromacsPipelineRequest) -> RunningEng
 
     std::thread::spawn(move || {
         let report_sender = sender.clone();
+        if let Some(target) = request.compute.remote_target() {
+            crate::engines::remote::write_run_record(target, &request.working_dir);
+        }
         let system = prepare_system(crate::engines::gromacs::PrepareSystemRequest {
             structure: request.structure,
             topology: request.topology,
@@ -336,7 +390,7 @@ pub fn spawn_gromacs_pipeline_job(request: GromacsPipelineRequest) -> RunningEng
             run_pipeline(
                 system,
                 request.stages,
-                request.gmx_launch,
+                request.compute,
                 request.max_duration_per_stage,
                 cancel_for_worker,
                 move |progress| match progress {
@@ -393,6 +447,9 @@ pub fn spawn_gromacs_build_job(request: BuildRequest) -> RunningEngineJob {
 
     std::thread::spawn(move || {
         let report_sender = sender.clone();
+        if let Some(target) = request.compute.remote_target() {
+            crate::engines::remote::write_run_record(target, &request.working_dir);
+        }
         let outcome = build_system(request, cancel_for_worker, move |progress| match progress {
             GromacsProgress::Stage(stage) => {
                 let _ = report_sender.send(EngineWorkerMessage::Stage(stage));
@@ -471,6 +528,9 @@ pub fn spawn_material_build_job(request: MaterialBuildRequest) -> RunningEngineJ
 
     std::thread::spawn(move || {
         let report_sender = sender.clone();
+        if let Some(target) = request.compute.remote_target() {
+            crate::engines::remote::write_run_record(target, &request.working_dir);
+        }
         let outcome =
             build_material_system(request, cancel_for_worker, move |progress| match progress {
                 GromacsProgress::Stage(stage) => {

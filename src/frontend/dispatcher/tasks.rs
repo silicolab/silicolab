@@ -227,6 +227,7 @@ pub(crate) fn ensure_panel_form(state: &mut AppState, task_run_id: u64) {
                 .to_string();
                 state.ui.pending_md_system = Some(crate::frontend::state::MdSystemPrompt {
                     force_field,
+                    target: state.config.default_compute_target.clone(),
                     ..Default::default()
                 });
             }
@@ -257,6 +258,7 @@ pub(crate) fn ensure_panel_form(state: &mut AppState, task_run_id: u64) {
         TaskPanelKind::MdRunPrompt => {
             let default_name =
                 crate::backend::runs::default_run_name(&state.runs_dir(), task.controller_id);
+            let default_target = state.config.default_compute_target.clone();
             // Load the inherited build-time context (or derive a minimal one) and
             // run the recommendation once, before borrowing the prompt mutably.
             let needs_init = state
@@ -269,6 +271,9 @@ pub(crate) fn ensure_panel_form(state: &mut AppState, task_run_id: u64) {
             let prompt = state.ui.pending_md_run.get_or_insert_with(Default::default);
             if prompt.run_name.trim().is_empty() {
                 prompt.run_name = default_name;
+            }
+            if needs_init {
+                prompt.target = default_target;
             }
             if let Some(context) = context {
                 let recommendation = crate::workflows::molecular_dynamics::run::recommend(
