@@ -162,16 +162,8 @@ pub(crate) fn render_entry_list(
         items
     };
 
-    ScrollArea::vertical()
+    docked_sidebar_scroll_area()
         .max_height(ui.available_height().max(120.0))
-        // Wheel/trackpad plus content drag (touch-friendly), but the scroll bar
-        // stays a non-interactive position indicator: excluding SCROLL_BAR
-        // stops the bar from catching a drag that starts on the adjacent panel
-        // resize divider — the bug where dragging the divider scrolled instead
-        // of resizing.
-        .scroll_source(
-            egui::scroll_area::ScrollSource::MOUSE_WHEEL | egui::scroll_area::ScrollSource::DRAG,
-        )
         .show(ui, |ui| {
             for group in &groups {
                 let group_id = group.id.clone();

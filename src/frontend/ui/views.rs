@@ -29,105 +29,125 @@ pub(crate) fn render_tasks_view(
 ) {
     let search = state.tasks.task_list.search_query.to_lowercase();
     let pal = crate::frontend::theme::palette(ui);
-    ScrollArea::vertical()
-        // Wheel/trackpad plus content drag (touch-friendly), but the scroll bar
-        // stays a non-interactive position indicator: excluding SCROLL_BAR
-        // stops the bar from catching a drag that starts on the adjacent panel
-        // resize divider — the bug where dragging the divider scrolled instead
-        // of resizing.
-        .scroll_source(
-            egui::scroll_area::ScrollSource::MOUSE_WHEEL | egui::scroll_area::ScrollSource::DRAG,
-        )
-        .show(ui, |ui| {
-            for category in TASK_CATEGORIES {
-                let controllers = task_controllers()
-                    .iter()
-                    .copied()
-                    .filter(|controller| task_category(controller.theme) == *category)
-                    .filter(|controller| {
-                        search.is_empty()
-                            || controller.title.to_lowercase().contains(&search)
-                            || controller.short_title.to_lowercase().contains(&search)
-                            || controller.theme.to_lowercase().contains(&search)
-                            || controller.method.to_lowercase().contains(&search)
-                            || controller.application.to_lowercase().contains(&search)
-                    })
-                    .collect::<Vec<_>>();
-                if controllers.is_empty() {
-                    continue;
-                }
-
-                // A search keeps every matching group expanded so results stay visible.
-                let collapsed =
-                    search.is_empty() && state.tasks.task_list.collapsed_themes.contains(*category);
-                let marker = if collapsed {
-                    egui_phosphor::regular::CARET_RIGHT
-                } else {
-                    egui_phosphor::regular::CARET_DOWN
-                };
-
-                let header = ui.allocate_ui_with_layout(
-                    egui::vec2(ui.available_width(), 0.0),
-                    Layout::left_to_right(Align::Center),
-                    |ui| {
-                        ui.label(RichText::new(marker).size(11.0).color(pal.text_muted));
-                        ui.label(RichText::new(*category).strong());
-                        ui.response()
-                    },
-                );
-                let header_interact = ui.interact(
-                    header.response.rect,
-                    Id::new(format!("task_category_{category}")),
-                    Sense::click(),
-                );
-                if header_interact.clicked()
-                    && !state
-                        .tasks
-                        .task_list
-                        .collapsed_themes
-                        .insert((*category).to_string())
-                {
-                    state.tasks.task_list.collapsed_themes.remove(*category);
-                }
-
-                if !collapsed {
-                    ui.add_space(2.0);
-                    for controller in controllers {
-                        let card_radius = crate::frontend::theme::radius::CARD;
-                        let response = Frame::default()
-                            .fill(pal.item_fill)
-                            .stroke(Stroke::NONE)
-                            .corner_radius(egui::CornerRadius::same(card_radius))
-                            .inner_margin(Margin::symmetric(10, 7))
-                            .show(ui, |ui| {
-                                ui.set_width(ui.available_width());
-                                ui.label(RichText::new(controller.short_title));
-                            })
-                            .response
-                            .interact(Sense::click())
-                            .on_hover_text(controller.description);
-                        if response.hovered() {
-                            ui.painter().rect_filled(
-                                response.rect,
-                                f32::from(card_radius),
-                                pal.blue_overlay(18),
-                            );
-                            ui.painter().rect_stroke(
-                                response.rect,
-                                f32::from(card_radius),
-                                Stroke::new(1.0, pal.blue_overlay(72)),
-                                egui::StrokeKind::Inside,
-                            );
-                        }
-                        if response.clicked() {
-                            actions.push(AppAction::CreateTask(controller.id));
-                        }
-                        ui.add_space(4.0);
-                    }
-                }
-                ui.add_space(8.0);
+    docked_sidebar_scroll_area().show(ui, |ui| {
+        for category in TASK_CATEGORIES {
+            let controllers = task_controllers()
+                .iter()
+                .copied()
+                .filter(|controller| task_category(controller.theme) == *category)
+                .filter(|controller| {
+                    search.is_empty()
+                        || controller.title.to_lowercase().contains(&search)
+                        || controller.short_title.to_lowercase().contains(&search)
+                        || controller.theme.to_lowercase().contains(&search)
+                        || controller.method.to_lowercase().contains(&search)
+                        || controller.application.to_lowercase().contains(&search)
+                })
+                .collect::<Vec<_>>();
+            if controllers.is_empty() {
+                continue;
             }
-        });
+
+            // A search keeps every matching group expanded so results stay visible.
+            let collapsed =
+                search.is_empty() && state.tasks.task_list.collapsed_themes.contains(*category);
+            let marker = if collapsed {
+                egui_phosphor::regular::CARET_RIGHT
+            } else {
+                egui_phosphor::regular::CARET_DOWN
+            };
+
+            let header_interact = task_category_header(ui, category, marker, &pal);
+            if header_interact.clicked()
+                && !state
+                    .tasks
+                    .task_list
+                    .collapsed_themes
+                    .insert((*category).to_string())
+            {
+                state.tasks.task_list.collapsed_themes.remove(*category);
+            }
+
+            if !collapsed {
+                ui.add_space(2.0);
+                for controller in controllers {
+                    let response = task_row(ui, controller.short_title, controller.description);
+                    if response.clicked() {
+                        actions.push(AppAction::CreateTask(controller.id));
+                    }
+                    ui.add_space(2.0);
+                }
+            }
+            ui.add_space(8.0);
+        }
+    });
+}
+
+fn task_category_header(
+    ui: &mut egui::Ui,
+    category: &str,
+    marker: &str,
+    pal: &crate::frontend::theme::Palette,
+) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 26.0), Sense::click());
+    let radius = f32::from(crate::frontend::theme::radius::CONTROL);
+    let fill = if response.is_pointer_button_down_on() {
+        Some(pal.neutral_overlay(32))
+    } else if response.hovered() {
+        Some(pal.neutral_overlay(18))
+    } else {
+        None
+    };
+    if let Some(fill) = fill {
+        ui.painter().rect_filled(rect, radius, fill);
+    }
+
+    let y = rect.center().y;
+    ui.painter().text(
+        egui::pos2(rect.left() + 8.0, y),
+        egui::Align2::LEFT_CENTER,
+        marker,
+        egui::FontId::proportional(11.0),
+        pal.text_tertiary,
+    );
+    ui.painter().text(
+        egui::pos2(rect.left() + 25.0, y),
+        egui::Align2::LEFT_CENTER,
+        category.to_uppercase(),
+        egui::FontId::proportional(11.0),
+        pal.text_muted,
+    );
+
+    response
+}
+
+fn task_row(ui: &mut egui::Ui, title: &str, description: &str) -> egui::Response {
+    let pal = crate::frontend::theme::palette(ui);
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 31.0), Sense::click());
+    let response = response.on_hover_text(description);
+    let radius = f32::from(crate::frontend::theme::radius::CONTROL);
+    let fill = if response.is_pointer_button_down_on() {
+        Some(pal.neutral_overlay(34))
+    } else if response.hovered() {
+        Some(pal.neutral_overlay(20))
+    } else {
+        None
+    };
+    if let Some(fill) = fill {
+        ui.painter().rect_filled(rect, radius, fill);
+    }
+
+    ui.painter().text(
+        egui::pos2(rect.left() + 22.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        title,
+        egui::FontId::proportional(13.0),
+        pal.text_primary,
+    );
+
+    response
 }
 
 /// Owned snapshot of one engine capability, decoupled from the registry
