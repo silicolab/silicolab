@@ -1,6 +1,6 @@
 //! Apple-style frosted-glass (vibrancy) support.
 //!
-//! On macOS the real effect is an `NSVisualEffectView` placed *behind* the
+//! On macOS the real effect is a native AppKit glass view placed *behind* the
 //! window's content, installed once at startup with the `window-vibrancy` crate.
 //! The window itself is made transparent (see [`crate::frontend::app`]'s
 //! `window_viewport`), and the effect is *revealed* per frame by painting a
@@ -15,10 +15,10 @@
 
 /// Master switch for the real macOS vibrancy path.
 ///
-/// `window-vibrancy` inserts its `NSVisualEffectView` as a *subview* of the
-/// layer-backed view wgpu renders its `CAMetalLayer` into, so by default it
-/// composites *over* the egui content and the window reads as blank. [`install`]
-/// fixes this by re-parenting the effect view *behind* the Metal content (see
+/// `window-vibrancy` inserts its native glass view as a *subview* of the
+/// layer-backed view wgpu renders its `CAMetalLayer` into, so by default it may
+/// composite *over* the egui content and the window reads as blank. [`install`]
+/// fixes this by re-parenting the glass view *behind* the Metal content (see
 /// `reparent_effect_behind_content`), so the glass shows through the transparent
 /// areas of the Metal layer instead of covering it.
 const VIBRANCY_ENABLED: bool = true;
@@ -26,7 +26,7 @@ const VIBRANCY_ENABLED: bool = true;
 /// Whether this platform can show *some* translucent glass effect — gating the
 /// settings toggle and whether [`glass_active`] may return true.
 ///
-/// - **macOS**: a real `NSVisualEffectView` frost (vibrancy).
+/// - **macOS**: native AppKit Liquid Glass on macOS 26+, else vibrancy.
 /// - **Windows**: an Acrylic backdrop blur (Win10 1803+/Win11).
 /// - **Linux**: no portable compositor-blur API exists, so it falls back to a
 ///   plain translucent *tint* — the transparent window simply lets the desktop
@@ -66,10 +66,10 @@ pub fn reduce_transparency() -> bool {
     }
     const TTL: Duration = Duration::from_millis(500);
 
-    if let Some((read_at, value)) = CACHE.with(Cell::get) {
-        if read_at.elapsed() < TTL {
-            return value;
-        }
+    if let Some((read_at, value)) = CACHE.with(Cell::get)
+        && read_at.elapsed() < TTL
+    {
+        return value;
     }
     let value = query_reduce_transparency();
     CACHE.with(|cache| cache.set(Some((Instant::now(), value))));
@@ -101,7 +101,7 @@ pub fn reduce_transparency() -> bool {
 /// Keep the native appearance — and with it the vibrancy material — in step
 /// with the app's theme preference.
 ///
-/// AppKit resolves the `NSVisualEffectView` material from the window's
+/// AppKit resolves the native glass material from the window's
 /// *effective appearance*, which follows the system unless overridden. With the
 /// app forced Dark on a light-mode system the window frosts with the *light*
 /// material, and the dark translucent chrome over a bright blur reads washed
@@ -206,28 +206,35 @@ fn round_window_corners(handle: &impl raw_window_handle::HasWindowHandle) {
     }
 }
 
-/// macOS vibrancy: install an `NSVisualEffectView` behind the window content.
+/// macOS glass: install Liquid Glass on macOS 26+, else vibrancy.
 #[cfg(target_os = "macos")]
 fn install_macos(handle: impl raw_window_handle::HasWindowHandle) {
-    use window_vibrancy::{NSVisualEffectMaterial, NSVisualEffectState, apply_vibrancy};
+    use window_vibrancy::{
+        NSGlassEffectViewStyle, NSVisualEffectMaterial, NSVisualEffectState, apply_liquid_glass,
+        apply_vibrancy,
+    };
 
-    // `Sidebar` is the translucent material AppKit uses behind Finder/Mail source
-    // lists — noticeably more see-through than the flatter `UnderWindowBackground`,
-    // so the frosted blur actually reads through the chrome. `Active` keeps it
-    // vibrant even when the window is not focused, so the glass doesn't flatten on
-    // blur.
-    let _ = apply_vibrancy(
-        &handle,
-        NSVisualEffectMaterial::Sidebar,
-        Some(NSVisualEffectState::Active),
-        None,
-    );
+    let liquid_glass_installed =
+        apply_liquid_glass(&handle, NSGlassEffectViewStyle::Regular, None, None).is_ok();
 
-    // window-vibrancy adds the NSVisualEffectView as a *subview* of the Metal
-    // content view, so its layer is a sublayer that composites *above* the egui
-    // content — the window reads as blank frosted desktop. Move it up to the
-    // content view's parent, positioned *below* the content view, so the Metal
-    // content draws on top and the glass only shows through its transparent areas.
+    if !liquid_glass_installed {
+        // `Sidebar` is the translucent material AppKit uses behind Finder/Mail
+        // source lists — noticeably more see-through than the flatter
+        // `UnderWindowBackground`, so the frosted blur actually reads through the
+        // chrome. `Active` keeps it vibrant even when the window is not focused,
+        // so the glass doesn't flatten on blur.
+        let _ = apply_vibrancy(
+            &handle,
+            NSVisualEffectMaterial::Sidebar,
+            Some(NSVisualEffectState::Active),
+            None,
+        );
+    }
+
+    // window-vibrancy adds the native glass view as a *subview* of the Metal
+    // content view. Move it up to the content view's parent, positioned *below*
+    // the content view, so the Metal content draws on top and the glass only
+    // shows through its transparent areas.
     reparent_effect_behind_content(&handle);
 
     // egui-wgpu prefers a PreMultiplied composite-alpha mode on Metal, but
@@ -238,14 +245,13 @@ fn install_macos(handle: impl raw_window_handle::HasWindowHandle) {
     set_metal_layer_opaque(&handle, false);
 }
 
-/// Move window-vibrancy's `NSVisualEffectView` out of the Metal content view and
-/// into the content view's parent, positioned directly *below* it. As a subview
-/// the effect view's layer composites above the Metal content (blank window); as a
-/// sibling behind it, the Metal content draws on top and the glass shows through
-/// its transparent pixels. See [`install`].
+/// Move window-vibrancy's native glass view out of the Metal content view and
+/// into the content view's parent, positioned directly *below* it. As a sibling
+/// behind the content view, the Metal content draws on top and the glass shows
+/// through its transparent pixels. See [`install`].
 #[cfg(target_os = "macos")]
 fn reparent_effect_behind_content(handle: &impl raw_window_handle::HasWindowHandle) {
-    use objc2::runtime::AnyObject;
+    use objc2::runtime::{AnyClass, AnyObject};
     use objc2_foundation::NSRect;
     use raw_window_handle::RawWindowHandle;
 
@@ -257,8 +263,13 @@ fn reparent_effect_behind_content(handle: &impl raw_window_handle::HasWindowHand
     };
     let content = appkit.ns_view.as_ptr() as *mut AnyObject;
 
+    let glass_classes = [
+        AnyClass::get(c"NSGlassEffectView"),
+        AnyClass::get(c"NSVisualEffectView"),
+    ];
+
     // SAFETY: `content` is the live content NSView. We read its parent and
-    // subviews, find the NSVisualEffectView window-vibrancy just added, and
+    // subviews, find the native glass view window-vibrancy just added, and
     // re-insert it into the parent below the content view. All on the main thread.
     unsafe {
         let superview: *mut AnyObject = objc2::msg_send![content, superview];
@@ -270,11 +281,13 @@ fn reparent_effect_behind_content(handle: &impl raw_window_handle::HasWindowHand
             return;
         }
         let count: usize = objc2::msg_send![subviews, count];
-        let effect_class = objc2::class!(NSVisualEffectView);
         let mut effect: *mut AnyObject = core::ptr::null_mut();
         for i in 0..count {
             let view: *mut AnyObject = objc2::msg_send![subviews, objectAtIndex: i];
-            let is_effect: bool = objc2::msg_send![view, isKindOfClass: effect_class];
+            let is_effect = glass_classes.iter().flatten().any(|effect_class| {
+                let is_kind: bool = objc2::msg_send![view, isKindOfClass: *effect_class];
+                is_kind
+            });
             if is_effect {
                 effect = view;
                 break;

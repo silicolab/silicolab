@@ -1,4 +1,4 @@
-use eframe::egui::{self, RichText, ScrollArea};
+use eframe::egui::{self, RichText};
 
 use crate::frontend::{
     LightPreset, SurfaceStyle,
@@ -6,7 +6,9 @@ use crate::frontend::{
     state::{AppState, AtomStyle},
 };
 
-use super::{cartoon_section_controls, overlay_state_for_scope, settings_section};
+use super::{
+    cartoon_section_controls, docked_sidebar_scroll_area, overlay_state_for_scope, settings_section,
+};
 
 /// The Style primary view: per-structure appearance for the *selected* atoms.
 ///
@@ -24,13 +26,8 @@ pub(super) fn render_style_panel(
     let pal = crate::frontend::theme::palette(ui);
     let selection_len = state.ui.selection.len();
 
-    ScrollArea::vertical()
+    docked_sidebar_scroll_area()
         .auto_shrink([false, false])
-        // Wheel/trackpad plus content drag (touch-friendly); the scroll bar
-        // stays a non-interactive position indicator (SCROLL_BAR excluded).
-        .scroll_source(
-            egui::scroll_area::ScrollSource::MOUSE_WHEEL | egui::scroll_area::ScrollSource::DRAG,
-        )
         .show(ui, |ui| {
             scope_banner(ui, &pal, selection_len);
 
@@ -48,7 +45,7 @@ pub(super) fn render_style_panel(
 fn scope_banner(ui: &mut egui::Ui, pal: &crate::frontend::theme::Palette, selection_len: usize) {
     if selection_len == 0 {
         ui.label(
-            RichText::new("No atoms selected — styles apply to all atoms").color(pal.text_tertiary),
+            RichText::new("No atoms selected - styles apply to all atoms").color(pal.text_muted),
         );
     } else {
         ui.label(
@@ -87,11 +84,7 @@ fn visibility_section(
         });
 
         ui.add_space(4.0);
-        ui.label(
-            RichText::new("Hydrogen atoms")
-                .small()
-                .color(pal.text_tertiary),
-        );
+        ui.label(RichText::new("Hydrogen atoms").color(pal.text_muted));
         ui.horizontal_wrapped(|ui| {
             // Polar-only detection isn't implemented yet; reserve the control but
             // keep it disabled so the layout stays stable when it lands.
@@ -112,7 +105,7 @@ fn representation_section(
     ui: &mut egui::Ui,
     actions: &mut Vec<AppAction>,
     search: &str,
-    pal: &crate::frontend::theme::Palette,
+    _pal: &crate::frontend::theme::Palette,
 ) {
     settings_section(ui, "Atom & bond style", search, |ui| {
         ui.horizontal_wrapped(|ui| {
@@ -131,11 +124,6 @@ fn representation_section(
         if ui.button("Reset to default").clicked() {
             actions.push(AppAction::ResetSelectionStyle);
         }
-        ui.label(
-            RichText::new("Reset clears per-atom style, overlays, and visibility for the scope.")
-                .small()
-                .color(pal.text_tertiary),
-        );
     });
 }
 
@@ -145,7 +133,7 @@ fn coloring_section(
     state: &mut AppState,
     ui: &mut egui::Ui,
     search: &str,
-    pal: &crate::frontend::theme::Palette,
+    _pal: &crate::frontend::theme::Palette,
 ) {
     settings_section(ui, "Coloring", search, |ui| {
         ui.add_enabled_ui(false, |ui| {
@@ -159,11 +147,6 @@ fn coloring_section(
             // rendering (reserved until the coloring engine lands).
             ui.color_edit_button_srgba(&mut state.ui.style.pending_fill_color);
         });
-        ui.label(
-            RichText::new("Coloring is not yet applied to the view (reserved).")
-                .small()
-                .color(pal.text_tertiary),
-        );
     });
 }
 
@@ -173,19 +156,12 @@ fn labels_section(
     state: &mut AppState,
     ui: &mut egui::Ui,
     search: &str,
-    pal: &crate::frontend::theme::Palette,
+    _pal: &crate::frontend::theme::Palette,
 ) {
     settings_section(ui, "Labels", search, |ui| {
         ui.checkbox(
             &mut state.ui.viewport.show_atom_labels,
             "Show atom-type & serial labels",
-        );
-        ui.add_enabled(false, egui::Button::new("Add custom tag…"))
-            .on_disabled_hover_text("Custom tags are not yet implemented");
-        ui.label(
-            RichText::new("Only the automatic atom-type / serial labels exist today.")
-                .small()
-                .color(pal.text_tertiary),
         );
     });
 }
@@ -207,11 +183,7 @@ fn cartoon_section(
         }
 
         ui.add_space(4.0);
-        ui.label(
-            RichText::new("Ribbon geometry")
-                .small()
-                .color(pal.text_tertiary),
-        );
+        ui.label(RichText::new("Ribbon geometry").color(pal.text_muted));
         cartoon_section_controls(ui, "Helix", &mut state.ui.viewport.cartoon.helix);
         cartoon_section_controls(ui, "Sheet", &mut state.ui.viewport.cartoon.sheet);
         cartoon_section_controls(ui, "Coil", &mut state.ui.viewport.cartoon.coil);
@@ -222,20 +194,6 @@ fn cartoon_section(
             egui::Slider::new(&mut state.ui.viewport.cartoon.profile_segments, 6..=48)
                 .text("Profile"),
         );
-
-        ui.add_space(4.0);
-        ui.label(RichText::new("Reserved").small().color(pal.text_tertiary));
-        ui.add_enabled_ui(false, |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Color");
-                let mut reserved = egui::Color32::from_rgb(120, 150, 210);
-                ui.color_edit_button_srgba(&mut reserved);
-            });
-            let mut transparency = 0.0_f32;
-            ui.add(egui::Slider::new(&mut transparency, 0.0..=1.0).text("Transparency"));
-            let mut show_atoms = true;
-            ui.checkbox(&mut show_atoms, "Show associated atoms");
-        });
     });
 }
 
@@ -247,7 +205,7 @@ fn surface_section(
     ui: &mut egui::Ui,
     actions: &mut Vec<AppAction>,
     search: &str,
-    pal: &crate::frontend::theme::Palette,
+    _pal: &crate::frontend::theme::Palette,
 ) {
     let (_cartoon_on, surface_on) = overlay_state_for_scope(state);
     let surface_exists = !state.ui.viewport.surface_overlay.is_empty();
@@ -282,11 +240,6 @@ fn surface_section(
         ui.add(
             egui::Slider::new(&mut state.ui.viewport.surface.transparency, 0.0..=1.0)
                 .text("Transparency"),
-        );
-        ui.label(
-            RichText::new("Surface coloring is reserved.")
-                .small()
-                .color(pal.text_tertiary),
         );
     });
 }

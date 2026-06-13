@@ -222,6 +222,10 @@ pub struct ViewportDrawArgs<'a> {
     /// from `structure`. Set during trajectory playback so the view does not
     /// drift/zoom as atoms move between frames; `None` recomputes per frame.
     pub view_override: Option<(nalgebra::Point3<f32>, f32)>,
+    /// Corner radius for the viewport background fill. The workspace uses this
+    /// to keep its inset surface rounded while the renderer still owns the
+    /// scene background color.
+    pub background_corner_radius: u8,
 }
 
 /// Whether the GPU path can render this scene. It covers spheres, stick bonds,
@@ -249,6 +253,7 @@ pub fn draw_viewport(ui: &mut egui::Ui, args: ViewportDrawArgs<'_>) -> ViewportI
         empty_state_hint,
         gpu_ready,
         view_override,
+        background_corner_radius,
     } = args;
     let available = ui.available_size();
     // The default background follows the app theme (dark in dark mode); an
@@ -262,7 +267,7 @@ pub fn draw_viewport(ui: &mut egui::Ui, args: ViewportDrawArgs<'_>) -> ViewportI
     let (rect, response) = ui.allocate_exact_size(available, Sense::click_and_drag());
     let painter = ui.painter_at(rect);
 
-    painter.rect_filled(rect, 0.0, background);
+    painter.rect_filled(rect, f32::from(background_corner_radius), background);
 
     if structure.atoms.is_empty() {
         if let Some(hint) = empty_state_hint {

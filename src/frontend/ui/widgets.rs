@@ -1,5 +1,14 @@
 use super::*;
 
+/// Scroll area used by fixed docked sidebars next to custom resize dividers.
+pub(crate) fn docked_sidebar_scroll_area() -> ScrollArea {
+    // Keep the floating bar as a non-interactive position indicator. The
+    // divider owns drag input on the panel edge.
+    ScrollArea::vertical().scroll_source(
+        egui::scroll_area::ScrollSource::MOUSE_WHEEL | egui::scroll_area::ScrollSource::DRAG,
+    )
+}
+
 /// Render sidebar content pinned to the panel's exact width.
 ///
 /// `Panel::exact_size` clips the panel *fill* to the requested width, but a child
@@ -115,9 +124,9 @@ pub(crate) fn core_button_fill(
 ) -> egui::Color32 {
     let alpha = match (dark, selected, hovered) {
         (_, false, false) => 0,
-        (false, false, true) => 28,
+        (false, false, true) => 18,
         (false, true, false) => 42,
-        (false, true, true) => 58,
+        (false, true, true) => 50,
         (true, false, true) => 34,
         (true, true, false) => 52,
         (true, true, true) => 72,
@@ -200,4 +209,42 @@ pub(crate) fn status_pill(
         .rect_filled(rect, f32::from(crate::frontend::theme::radius::CHIP), fill);
     ui.painter()
         .galley(rect.center() - galley.size() / 2.0, galley, text_color);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{backend::config::ColorScheme, frontend::theme::Palette};
+
+    fn fill_alpha(scheme: ColorScheme, dark: bool, selected: bool, hovered: bool) -> u8 {
+        let pal = Palette::for_scheme(scheme, dark);
+        core_button_fill(&pal, dark, selected, hovered).to_array()[3]
+    }
+
+    #[test]
+    fn core_button_hover_is_lighter_in_light_mode_across_schemes() {
+        for scheme in ColorScheme::all() {
+            assert!(
+                fill_alpha(scheme, false, false, true) < fill_alpha(scheme, true, false, true),
+                "{scheme:?} unselected hover should be lighter in light mode"
+            );
+            assert!(
+                fill_alpha(scheme, false, true, true) < fill_alpha(scheme, true, true, true),
+                "{scheme:?} selected hover should be lighter in light mode"
+            );
+        }
+    }
+
+    #[test]
+    fn core_button_light_hover_keeps_selected_and_unselected_states_distinct() {
+        for scheme in ColorScheme::all() {
+            let unselected_hover = fill_alpha(scheme, false, false, true);
+            let selected_idle = fill_alpha(scheme, false, true, false);
+            let selected_hover = fill_alpha(scheme, false, true, true);
+
+            assert_eq!(fill_alpha(scheme, false, false, false), 0);
+            assert!(unselected_hover < selected_idle);
+            assert!(selected_idle < selected_hover);
+        }
+    }
 }
