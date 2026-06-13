@@ -82,6 +82,7 @@ fn execute_console_line_with_context(
 
     match command {
         "open" => open_command(state, context, &words[1..]),
+        "sketch" => sketch_command(state, &words[1..]),
         "fetch" => fetch_command(state, &words[1..]),
         "source" | "run" => source_command(state, context, &words[1..]),
         "view" => view_command(state, &words[1..]),
@@ -192,6 +193,24 @@ fn open_structure_path(state: &mut AppState, path: PathBuf) -> Result<()> {
     state.ui.viewport_cache.clear();
     state.load_viewport_for_active_entry();
     Ok(())
+}
+
+/// `sketch <SMILES>` — parse a SMILES string, generate a 3D structure, and add
+/// it as a new active entry. The scriptable counterpart of the GUI sketcher's
+/// Build action; available in both the console and headless `.sls` scripts.
+fn sketch_command(state: &mut AppState, args: &[String]) -> Result<String> {
+    let smiles = args
+        .first()
+        .ok_or_else(|| anyhow!("usage: sketch <SMILES>"))?;
+    let structure = crate::workflows::sketch_to_structure::smiles_to_structure(smiles, None)
+        .with_context(|| format!("could not sketch `{smiles}`"))?;
+    let atom_count = structure.atoms.len();
+    let save_path = crate::io::structure_io::default_structure_save_path(&structure, None);
+    let entry_id = state.entries.add_entry(structure, None, save_path);
+    state.show_entry(entry_id);
+    Ok(format!(
+        "sketched {smiles} as entry #{entry_id} ({atom_count} atoms)"
+    ))
 }
 
 fn source_command(
@@ -1054,6 +1073,7 @@ fn help_text() -> String {
     [
         "commands:",
         "open <path>",
+        "sketch <SMILES>   build a 3D structure from a SMILES string and add it as a new entry",
         "fetch <pdb-id> [--db <base-url>] [--dir <directory>]   download a structure by PDB id",
         "source <script.sls>",
         "save image <path.png>",
