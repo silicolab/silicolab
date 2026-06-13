@@ -26,6 +26,7 @@ use muda::accelerator::{Accelerator, Code, Modifiers};
 use muda::{
     AboutMetadata, CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu,
 };
+use objc2_foundation::{NSProcessInfo, NSString};
 
 use crate::backend::config::{ColorScheme, ThemeMode};
 use crate::domain::AtomCategory;
@@ -109,6 +110,8 @@ impl MacMenu {
     /// Call at most once per process: muda's event handler is a `OnceCell`, and
     /// a second `init_for_nsapp` would replace the bar.
     pub fn install(ctx: &egui::Context) -> Self {
+        set_process_name();
+
         let (tx, rx): (Sender<MenuId>, Receiver<MenuId>) = std::sync::mpsc::channel();
         let ctx = ctx.clone();
         MenuEvent::set_event_handler(Some(move |event: MenuEvent| {
@@ -356,7 +359,7 @@ impl MacMenu {
                 panel: false,
                 atom_labels: false,
                 theme: ThemeMode::System,
-                scheme: ColorScheme::Warm,
+                scheme: ColorScheme::default(),
                 recent: Vec::new(),
             },
         }
@@ -523,4 +526,9 @@ impl MacMenu {
         self.recent_submenu.set_enabled(!fingerprint.is_empty());
         self.cache.recent = fingerprint;
     }
+}
+
+fn set_process_name() {
+    let name = NSString::from_str("SilicoLab");
+    NSProcessInfo::processInfo().setProcessName(&name);
 }
