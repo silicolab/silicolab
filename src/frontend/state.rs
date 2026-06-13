@@ -334,6 +334,10 @@ impl OptimizationPrompt {
 #[derive(Debug, Clone)]
 pub struct QmPrompt {
     pub method: crate::engines::qm::QmMethod,
+    /// Free-text functional name backing the "custom functional" field. When the
+    /// method dropdown selects "Custom functional…", the panel reads this into
+    /// [`crate::engines::qm::QmMethod::Dft`].
+    pub custom_functional: String,
     pub basis: String,
     pub charge: i32,
     pub multiplicity: u32,
@@ -343,20 +347,23 @@ pub struct QmPrompt {
     /// doesn't clobber the user's choice, while switching to a different QM task
     /// re-defaults the panel.
     pub default_kind: crate::engines::qm::QmKind,
-    pub compute_properties: bool,
+    /// All advanced chemx options (dispersion, solvation, SCF backend, …).
+    pub options: crate::engines::qm::QmOptions,
 }
 
 impl QmPrompt {
     pub fn new(kind: crate::engines::qm::QmKind) -> Self {
         Self {
-            // Default to a solid general-purpose hybrid-DFT model.
-            method: crate::engines::qm::QmMethod::Dft("b3lyp".to_string()),
+            // Default to r2scan-3c: a robust, batteries-included production
+            // composite (functional + basis + dispersion + corrections).
+            method: crate::engines::qm::QmMethod::Composite("r2scan-3c".to_string()),
+            custom_functional: String::new(),
             basis: "def2-svp".to_string(),
             charge: 0,
             multiplicity: 1,
             kind,
             default_kind: kind,
-            compute_properties: false,
+            options: crate::engines::qm::QmOptions::default(),
         }
     }
 
@@ -369,7 +376,7 @@ impl QmPrompt {
             charge: self.charge,
             multiplicity: self.multiplicity,
             kind: self.kind,
-            compute_properties: self.compute_properties,
+            options: self.options.clone(),
         }
     }
 }
