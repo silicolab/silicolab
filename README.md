@@ -7,6 +7,9 @@ Computational environment for chemistry, biology & materials research.
 ## Features
 
 - Interactive 3D visualization and editing of molecular and crystal structures
+- 2D molecule sketcher — draw a molecule (atoms, bonds, ring/fragment templates,
+  charges) on a canvas and build it into a real 3D structure; also import/export
+  SMILES, with a scriptable `sketch <SMILES>` command in the console and CLI
 - Force-field geometry optimization
 - Quantum chemistry calculations
 - Guided molecular dynamics setup and execution (powered by GROMACS)
