@@ -148,21 +148,6 @@ pub(crate) fn core_button_text_color(
     }
 }
 
-/// Color for a view-switcher segment's icon. Keep it neutral so the selected
-/// card follows the active theme instead of reading as a fixed blue accent.
-pub(crate) fn segment_icon_color(
-    view: PrimaryView,
-    pal: &crate::frontend::theme::Palette,
-    selected: bool,
-) -> egui::Color32 {
-    let _ = view;
-    if selected {
-        pal.text_strong
-    } else {
-        pal.text_muted
-    }
-}
-
 /// Whether the cartoon / surface overlays are enabled across the active scope —
 /// the selection, or all atoms when nothing is selected. Drives the overlay
 /// checkboxes: returns `true` only when *every* atom in the scope has the
@@ -259,8 +244,9 @@ pub(crate) fn toggle_switch(
 }
 
 /// Per-channel linear blend between two colors (egui's `lerp` is scalar-only),
-/// used to crossfade the switch track between its off and on fills.
-fn lerp_color(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
+/// used to crossfade the switch track between its off and on fills and the
+/// view-switcher segment icons between their muted and active tints.
+pub(crate) fn lerp_color(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
     let t = t.clamp(0.0, 1.0);
     let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     egui::Color32::from_rgba_unmultiplied(
