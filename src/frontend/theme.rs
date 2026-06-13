@@ -417,7 +417,6 @@ pub mod radius {
 
 /// Linear blend between two colors (`t` = 0 -> `a`, `t` = 1 -> `b`), done in
 /// egui's linear `Rgba` space so the midpoint reads naturally.
-#[cfg(test)]
 pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     let a = egui::Rgba::from(a);
     let b = egui::Rgba::from(b);
@@ -539,7 +538,16 @@ fn build_visuals(scheme: ColorScheme, dark: bool) -> Visuals {
     visuals.widgets.noninteractive.bg_fill = pal.central;
     visuals.widgets.noninteractive.fg_stroke.color = pal.text_primary;
     visuals.widgets.inactive.weak_bg_fill = pal.item_fill;
-    visuals.widgets.inactive.bg_fill = pal.item_fill;
+    // `bg_fill` is used by filled controls such as slider rails, checkboxes,
+    // and radio buttons. In dark mode those rails can disappear against a
+    // translucent sidebar, so lift only this filled-control layer; keep
+    // `weak_bg_fill` at the quieter item color so regular buttons do not all
+    // become visually louder.
+    visuals.widgets.inactive.bg_fill = if dark {
+        mix(pal.item_fill, pal.text_primary, 0.08)
+    } else {
+        pal.item_fill
+    };
     visuals.widgets.inactive.fg_stroke.color = pal.text_primary;
     visuals.widgets.open.weak_bg_fill = pal.item_fill_active;
     visuals.widgets.open.bg_fill = pal.item_fill_active;
@@ -570,17 +578,26 @@ fn build_visuals(scheme: ColorScheme, dark: bool) -> Visuals {
     visuals.menu_corner_radius = CornerRadius::same(radius::CARD);
 
     // Inputs keep a faint resting hairline, but hover and press become a soft
-    // *filled* block with no outline, rather than the hard wireframe egui draws
-    // by default.
+    // *filled* block with no visible outline, rather than the hard wireframe
+    // egui draws by default. Keep the stroke width at 1px in every interactive
+    // state: egui subtracts `bg_stroke.width` from button/selectable inner
+    // margins, so switching to `Stroke::NONE` makes ComboBox menu rows and
+    // selectable labels shift by a pixel while hovering.
     visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, pal.hairline);
+    let invisible_stable_stroke = Stroke::new(1.0, Color32::TRANSPARENT);
 
     visuals.widgets.hovered.weak_bg_fill = pal.item_fill_hover;
     visuals.widgets.hovered.bg_fill = pal.item_fill_hover;
-    visuals.widgets.hovered.bg_stroke = Stroke::NONE;
+    visuals.widgets.hovered.bg_stroke = invisible_stable_stroke;
 
     visuals.widgets.active.weak_bg_fill = pal.item_fill_active;
     visuals.widgets.active.bg_fill = pal.item_fill_active;
-    visuals.widgets.active.bg_stroke = Stroke::NONE;
+    visuals.widgets.active.bg_stroke = invisible_stable_stroke;
+    visuals.widgets.open.bg_stroke = invisible_stable_stroke;
+
+    // Dark translucent panels need a stronger read on range controls. The rail
+    // remains neutral; the filled portion gives the user a clear value cue.
+    visuals.slider_trailing_fill = dark;
 
     // Keep label/icon color stable across hover and press; only the fill changes.
     // The divider hover line also reads from this stroke, but preserving text
@@ -659,5 +676,48 @@ mod tests {
         assert!((1..255).contains(&r));
         assert!((1..255).contains(&g));
         assert!((1..255).contains(&bl));
+    }
+
+    #[test]
+    fn interactive_widget_stroke_widths_keep_selectable_rows_stable() {
+        for scheme in ColorScheme::all() {
+            for dark in [false, true] {
+                let visuals = build_visuals(scheme, dark);
+                let width = visuals.widgets.inactive.bg_stroke.width;
+                assert_eq!(visuals.widgets.hovered.bg_stroke.width, width);
+                assert_eq!(visuals.widgets.active.bg_stroke.width, width);
+                assert_eq!(visuals.widgets.open.bg_stroke.width, width);
+            }
+        }
+    }
+
+    #[test]
+    fn dark_slider_visuals_read_above_button_fill() {
+        for scheme in ColorScheme::all() {
+            let pal = Palette::for_scheme(scheme, true);
+            let visuals = build_visuals(scheme, true);
+            assert_eq!(visuals.widgets.inactive.weak_bg_fill, pal.item_fill);
+            assert_ne!(visuals.widgets.inactive.bg_fill, pal.item_fill);
+            assert!(
+                relative_luminance(visuals.widgets.inactive.bg_fill)
+                    > relative_luminance(pal.item_fill)
+            );
+            assert!(visuals.slider_trailing_fill);
+        }
+    }
+
+    #[test]
+    fn light_sliders_keep_quiet_neutral_rail() {
+        for scheme in ColorScheme::all() {
+            let pal = Palette::for_scheme(scheme, false);
+            let visuals = build_visuals(scheme, false);
+            assert_eq!(visuals.widgets.inactive.bg_fill, pal.item_fill);
+            assert!(!visuals.slider_trailing_fill);
+        }
+    }
+
+    fn relative_luminance(color: Color32) -> f32 {
+        let [r, g, b, _] = color.to_array();
+        0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b)
     }
 }
