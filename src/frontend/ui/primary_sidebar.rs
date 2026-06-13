@@ -122,69 +122,96 @@ pub(crate) fn render_primary_sidebar(
         // Concentric corners: the track's radius is the segment card's radius
         // plus the 3px inner margin, so both curves share a center.
         const SEGMENT_INSET: u8 = 3;
-        Frame::default()
-            .fill(pal.neutral_overlay(if dark { 26 } else { 14 }))
-            .corner_radius(egui::CornerRadius::same(
-                crate::frontend::theme::radius::CONTROL + SEGMENT_INSET,
-            ))
-            .inner_margin(Margin::same(SEGMENT_INSET as i8))
-            .show(ui, |ui| {
-                let seg_w = (ui.available_width() / PrimaryView::all().len() as f32).floor();
-                ui.spacing_mut().item_spacing.x = 0.0;
-                ui.horizontal(|ui| {
-                    for view in PrimaryView::all() {
-                        let selected = state.ui.layout.active_primary_view == *view;
-                        let (rect, response) =
-                            ui.allocate_exact_size(egui::vec2(seg_w, 28.0), Sense::click());
-                        let mut job = egui::text::LayoutJob::default();
-                        job.append(
-                            view.icon(),
-                            0.0,
-                            egui::TextFormat {
-                                font_id: egui::FontId::proportional(14.0),
-                                color: segment_icon_color(*view, &pal, selected),
-                                valign: Align::Center,
-                                ..Default::default()
-                            },
-                        );
-                        if selected {
-                            job.append(
-                                view.short_label(),
-                                6.0,
-                                egui::TextFormat {
-                                    font_id: egui::FontId::proportional(12.5),
-                                    color: pal.text_strong,
-                                    valign: Align::Center,
-                                    ..Default::default()
-                                },
-                            );
-                        }
-                        let painter = ui.painter();
-                        let galley = painter.layout_job(job);
-                        let segment_radius =
-                            egui::CornerRadius::same(crate::frontend::theme::radius::CONTROL);
-                        if selected {
-                            painter.rect(
-                                rect,
-                                segment_radius,
-                                card_fill,
-                                Stroke::new(1.0, pal.hairline),
-                                egui::StrokeKind::Inside,
-                            );
-                        } else if response.hovered() {
-                            painter.rect_filled(rect, segment_radius, pal.neutral_overlay(14));
-                        }
-                        let pos = rect.center() - galley.size() / 2.0;
-                        painter.galley(pos, galley, pal.text_primary);
-                        if !selected {
-                            response.clone().on_hover_text(view.label());
-                        }
-                        if response.clicked() {
-                            state.ui.layout.active_primary_view = *view;
-                        }
-                    }
-                });
-            });
+        const SEGMENT_TRACK_HEIGHT: f32 = 34.0;
+        // The primary sidebar frame uses asymmetric content margins (10px left,
+        // 2px right) so wide content aligns with the resize divider. Keep this
+        // chrome left-aligned in the content box and trim 8px from the right,
+        // yielding equal 10px outer margins relative to the sidebar.
+        const SEGMENT_TRACK_MARGIN_COMPENSATION: f32 = 8.0;
+        let available_width = ui.available_width();
+        let track_width = (available_width - SEGMENT_TRACK_MARGIN_COMPENSATION).max(0.0);
+        let (slot_rect, _) = ui.allocate_exact_size(
+            egui::vec2(available_width, SEGMENT_TRACK_HEIGHT),
+            Sense::hover(),
+        );
+        let track_rect =
+            Rect::from_min_size(slot_rect.min, egui::vec2(track_width, SEGMENT_TRACK_HEIGHT));
+        let track_radius =
+            egui::CornerRadius::same(crate::frontend::theme::radius::CONTROL + SEGMENT_INSET);
+        let segment_radius = egui::CornerRadius::same(crate::frontend::theme::radius::CONTROL);
+        let painter = ui.painter();
+        painter.rect_filled(
+            track_rect,
+            track_radius,
+            pal.neutral_overlay(if dark { 26 } else { 14 }),
+        );
+
+        let inner_rect = track_rect.shrink(f32::from(SEGMENT_INSET));
+        let views = PrimaryView::all();
+        let segment_count = views.len() as f32;
+        for (index, view) in views.iter().enumerate() {
+            let left = egui::lerp(
+                inner_rect.left()..=inner_rect.right(),
+                index as f32 / segment_count,
+            );
+            let right = egui::lerp(
+                inner_rect.left()..=inner_rect.right(),
+                (index + 1) as f32 / segment_count,
+            );
+            let rect = Rect::from_min_max(
+                egui::pos2(left, inner_rect.top()),
+                egui::pos2(right, inner_rect.bottom()),
+            );
+            let response = ui.interact(
+                rect,
+                Id::new(("primary_view_segment", view.label())),
+                Sense::click(),
+            );
+            let selected = state.ui.layout.active_primary_view == *view;
+            let mut job = egui::text::LayoutJob::default();
+            job.append(
+                view.icon(),
+                0.0,
+                egui::TextFormat {
+                    font_id: egui::FontId::proportional(14.0),
+                    color: segment_icon_color(*view, &pal, selected),
+                    valign: Align::Center,
+                    ..Default::default()
+                },
+            );
+            if selected {
+                job.append(
+                    view.short_label(),
+                    6.0,
+                    egui::TextFormat {
+                        font_id: egui::FontId::proportional(12.5),
+                        color: pal.text_strong,
+                        valign: Align::Center,
+                        ..Default::default()
+                    },
+                );
+            }
+            let galley = painter.layout_job(job);
+            if selected {
+                painter.rect(
+                    rect,
+                    segment_radius,
+                    card_fill,
+                    Stroke::new(1.0, pal.hairline),
+                    egui::StrokeKind::Inside,
+                );
+            } else if response.hovered() {
+                painter.rect_filled(rect, segment_radius, pal.neutral_overlay(14));
+            }
+            let pos = rect.center() - galley.size() / 2.0;
+            painter.galley(pos, galley, pal.text_primary);
+            if !selected {
+                response.clone().on_hover_text(view.label());
+            }
+            if response.clicked() {
+                state.ui.layout.active_primary_view = *view;
+            }
+        }
     }
     ui.add_space(8.0);
 

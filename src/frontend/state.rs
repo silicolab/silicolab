@@ -1020,23 +1020,10 @@ pub struct SettingsState {
 /// State backing the Style primary view — the per-structure view and
 /// representation properties relocated out of Settings. These belong to the
 /// structure currently being viewed, not to global app preferences.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct StyleState {
     /// Free-text filter for the Style panel sections.
     pub search_query: String,
-    /// Scratch single-fill color for the (not-yet-wired) Coloring section. Held
-    /// here so the reserved color button has somewhere to write; it does not yet
-    /// affect rendering. See the Coloring section of the Style panel.
-    pub pending_fill_color: eframe::egui::Color32,
-}
-
-impl Default for StyleState {
-    fn default() -> Self {
-        Self {
-            search_query: String::new(),
-            pending_fill_color: eframe::egui::Color32::from_rgb(120, 150, 210),
-        }
-    }
 }
 
 pub struct UiState {
