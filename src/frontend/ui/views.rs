@@ -563,24 +563,6 @@ pub(crate) fn render_remote_hosts_settings(
     }
 }
 
-/// A collapsing settings section that is filtered by the search query and
-/// forced open whenever a search is active so matches stay visible.
-pub(crate) fn settings_section(
-    ui: &mut egui::Ui,
-    title: &str,
-    search: &str,
-    add_contents: impl FnOnce(&mut egui::Ui),
-) {
-    if !search.is_empty() && !title.to_lowercase().contains(search) {
-        return;
-    }
-    let mut header = egui::CollapsingHeader::new(RichText::new(title).strong()).default_open(true);
-    if !search.is_empty() {
-        header = header.open(Some(true));
-    }
-    header.show(ui, add_contents);
-}
-
 pub(crate) fn cartoon_section_controls(
     ui: &mut egui::Ui,
     label: &str,

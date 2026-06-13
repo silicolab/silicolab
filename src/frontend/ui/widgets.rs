@@ -211,6 +211,66 @@ pub(crate) fn status_pill(
         .galley(rect.center() - galley.size() / 2.0, galley, text_color);
 }
 
+/// A sliding toggle switch bound to a `bool`, sized to the current row's
+/// text height. egui has no built-in switch, so we allocate a pill, paint it
+/// ourselves, and pair it with a trailing label — a drop-in for the
+/// `ui.checkbox(&mut bool, title)` it replaces in the settings registry. Returns
+/// the switch's `Response` so callers test `.changed()` exactly as before.
+///
+/// A switch is the right control for a *setting*: a single, persistent on/off
+/// that takes effect immediately. Mutually-exclusive choices keep using radios,
+/// and in-form options that apply on a later Run keep using checkboxes — this
+/// widget deliberately does not replace those.
+pub(crate) fn toggle_switch(
+    ui: &mut egui::Ui,
+    on: &mut bool,
+    label: &str,
+    pal: &crate::frontend::theme::Palette,
+) -> egui::Response {
+    let height = ui.spacing().interact_size.y.max(16.0);
+    let width = height * 1.75;
+    let (rect, mut response) =
+        ui.allocate_exact_size(egui::vec2(width, height), egui::Sense::click());
+    if response.clicked() {
+        *on = !*on;
+        response.mark_changed();
+    }
+
+    if ui.is_rect_visible(rect) {
+        // `animate_bool_with_time` self-requests repaints while in flight, so the
+        // knob glides between ends rather than snapping.
+        let how_on = ui.ctx().animate_bool_with_time(response.id, *on, 0.12);
+        let radius = 0.5 * rect.height();
+        let track = lerp_color(pal.item_fill_active, pal.selection_fill, how_on);
+        ui.painter().rect_filled(rect, radius, track);
+        let knob_r = radius - 2.0;
+        let cx = egui::lerp((rect.left() + radius)..=(rect.right() - radius), how_on);
+        ui.painter().circle_filled(
+            egui::pos2(cx, rect.center().y),
+            knob_r,
+            egui::Color32::WHITE,
+        );
+    }
+
+    // Trailing label, mirroring the checkbox's "control then title" layout so the
+    // settings row (and its right-pinned reset button) keep their alignment.
+    ui.label(label);
+    response
+}
+
+/// Per-channel linear blend between two colors (egui's `lerp` is scalar-only),
+/// used to crossfade the switch track between its off and on fills.
+fn lerp_color(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Color32 {
+    let t = t.clamp(0.0, 1.0);
+    let mix = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    egui::Color32::from_rgba_unmultiplied(
+        mix(a.r(), b.r()),
+        mix(a.g(), b.g()),
+        mix(a.b(), b.b()),
+        mix(a.a(), b.a()),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

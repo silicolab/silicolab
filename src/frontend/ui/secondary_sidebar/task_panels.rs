@@ -286,10 +286,25 @@ pub(crate) fn render_qm_task_panel(
             QmKind::Frequencies,
             "Vibrational frequencies",
         );
-        ui.checkbox(
-            &mut prompt.options.compute_properties,
-            "Compute dipole, charges & bond orders",
-        );
+
+        // The three calculation kinds above are mutually exclusive (radios). The
+        // property toggle below is an independent on/off, but we draw it with the
+        // same filled-circle indicator so the panel speaks one visual language
+        // ("selected = dot"). It is set apart under its own "Options:" header so
+        // the shared dot style is not misread as "mutually exclusive with the
+        // calculation above". `ui.radio` is purely visual here — the click
+        // handler flips the bool; it does not join the calculation-kind group.
+        ui.separator();
+        ui.label("Options:");
+        if ui
+            .radio(
+                prompt.options.compute_properties,
+                "Compute dipole, charges & bond orders",
+            )
+            .clicked()
+        {
+            prompt.options.compute_properties = !prompt.options.compute_properties;
+        }
 
         render_qm_advanced(ui, prompt, method_is_composite);
 

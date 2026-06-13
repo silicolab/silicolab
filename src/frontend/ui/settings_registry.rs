@@ -755,7 +755,7 @@ pub fn registry() -> Vec<SettingDescriptor> {
             category: SettingCategory::General,
             group: "Appearance",
             title: "Transparency",
-            description: "Apple-style frosted-glass material on the window chrome.",
+            description: "Frosted-glass material on the window chrome.",
             keywords: &["glass", "vibrancy", "frosted", "transparency", "blur"],
             control: Control::Toggle {
                 read: glass_read,
@@ -1189,7 +1189,11 @@ fn render_descriptor_body(
             // to the row's right edge without disturbing the control.
             ui.horizontal(|ui| {
                 let mut value = read(state);
-                if ui.checkbox(&mut value, descriptor.title).changed() {
+                // A setting is a persistent, immediately-applied on/off, so it
+                // gets a sliding toggle switch rather than a checkbox. Centralizing
+                // the toggle render here means every `Control::Toggle` in the
+                // registry picks up the switch from this one site.
+                if super::widgets::toggle_switch(ui, &mut value, descriptor.title, pal).changed() {
                     actions.push(on_change(value));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
