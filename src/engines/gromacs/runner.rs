@@ -32,9 +32,12 @@ use crate::{
             topology::TopologySource,
         },
         process::{self, ProcessConfig, ProcessEventKind},
-        registry::EngineLaunch,
+        remote::{self, Compute, Transport},
     },
 };
+
+#[cfg(test)]
+use crate::engines::registry::EngineLaunch;
 
 /// A streamed progress message emitted while a GROMACS workflow is running.
 #[derive(Debug, Clone)]
@@ -99,8 +102,9 @@ pub struct StageRequest {
     /// Continuation checkpoint (`grompp -t`). NPT/production resume from the
     /// prior stage's `.cpt` so velocities and box state carry over.
     pub checkpoint_input: Option<PathBuf>,
-    /// How to launch `gmx` (native, or via a prefix such as WSL).
-    pub gmx_launch: EngineLaunch,
+    /// How to launch `gmx` (native, WSL prefix, …) and where it runs (local or a
+    /// remote host over SSH).
+    pub compute: Compute,
     /// Wall-clock budget shared by `grompp` and `mdrun` together.
     pub max_duration: Duration,
 }
@@ -355,7 +359,7 @@ where
         "running gmx grompp ({stage})"
     )));
     let grompp = run_subprocess(
-        request.gmx_launch.to_process_config(
+        request.compute.launch.to_process_config(
             working_dir.clone(),
             build_grompp_args(
                 &mdp_name,
@@ -368,6 +372,7 @@ where
             ),
             Some(remaining),
         ),
+        &request.compute.transport,
         Arc::clone(&cancel),
         &mut report,
     )?;
@@ -385,7 +390,7 @@ where
         "running gmx mdrun ({stage})"
     )));
     let mdrun = run_subprocess(
-        request.gmx_launch.to_process_config(
+        request.compute.launch.to_process_config(
             working_dir.clone(),
             [
                 "mdrun".to_string(),
@@ -398,12 +403,30 @@ where
             ],
             Some(remaining),
         ),
+        &request.compute.transport,
         Arc::clone(&cancel),
         &mut report,
     )?;
 
     if !mdrun.result.success() {
         return Err(subprocess_failure("mdrun", &mdrun));
+    }
+
+    // For a remote run, pull back exactly the files this stage reads locally
+    // (and the artifacts a later stage or the UI consumes). Intermediate files
+    // such as the `.tpr` stay on the remote host. Local runs are a no-op.
+    if let Transport::Remote(target) = &request.compute.transport {
+        let log_name = format!("{stage}.log");
+        let edr_name = format!("{stage}.edr");
+        let cpt_name = format!("{stage}.cpt");
+        let xtc_name = format!("{stage}.xtc");
+        remote::sync_down(
+            target,
+            &working_dir,
+            &[&out_name],
+            &[&log_name, &edr_name, &cpt_name, &xtc_name],
+        )
+        .with_context(|| format!("staging back results for stage '{stage}'"))?;
     }
 
     let output_gro = working_dir.join(&out_name);
@@ -443,7 +466,7 @@ where
 pub fn run_pipeline<F>(
     system: PreparedSystem,
     stages: Vec<StageSpec>,
-    gmx_launch: EngineLaunch,
+    compute: Compute,
     max_duration_per_stage: Duration,
     cancel: Arc<AtomicBool>,
     mut report: F,
@@ -473,7 +496,7 @@ where
                 settings: spec.settings,
                 coordinate_input,
                 checkpoint_input,
-                gmx_launch: gmx_launch.clone(),
+                compute: compute.clone(),
                 max_duration: max_duration_per_stage,
             },
             Arc::clone(&cancel),
@@ -649,20 +672,65 @@ fn extract_fatal_error(log: &str) -> Option<String> {
 
 pub(crate) fn run_subprocess<F>(
     config: ProcessConfig,
+    transport: &Transport,
     cancel: Arc<AtomicBool>,
     report: &mut F,
 ) -> Result<SubprocessOutcome>
 where
     F: FnMut(GromacsProgress),
 {
-    // Capture where to log and what command this is before `config` is moved
-    // into the spawn.
+    // Capture where to log and what command this is before `config` is moved.
     let log_path = config.working_dir.join(GROMACS_LOG_FILE);
     let command_line = format!(
         "{} {}",
         config.executable.to_string_lossy(),
         config.args.join(" ")
     );
+
+    let (result, combined_log) = match transport {
+        Transport::Local => run_subprocess_local(config, cancel)?,
+        Transport::Remote(target) => {
+            // The remote branch streams console lines live (the local branch can't,
+            // so it tails the last few lines after completion — see below).
+            remote::run_remote(&config, target, cancel, &mut |line| {
+                report(GromacsProgress::Log(line))
+            })?
+        }
+    };
+
+    // Persist the full output to the run directory so a failed run is always
+    // debuggable, even though only the tail is streamed to the UI.
+    append_gromacs_log(&log_path, &command_line, result.exit_code, &combined_log);
+
+    // The local path doesn't stream during the run; surface its tail now. The
+    // remote path already streamed each line as it arrived.
+    if matches!(transport, Transport::Local) {
+        for line in combined_log
+            .lines()
+            .rev()
+            .take(5)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+        {
+            report(GromacsProgress::Log(line.to_string()));
+        }
+    }
+
+    Ok(SubprocessOutcome {
+        result,
+        combined_log,
+        log_path,
+    })
+}
+
+/// The local-execution path: spawn the child, drain its streamed stdout/stderr
+/// into a combined log, and return the aggregated result. Byte-for-byte the
+/// historical behavior.
+fn run_subprocess_local(
+    config: ProcessConfig,
+    cancel: Arc<AtomicBool>,
+) -> Result<(process::ProcessResult, String)> {
     let mut handle = process::spawn_with_cancel(config, cancel)?;
     let receiver = handle
         .take_receiver()
@@ -680,29 +748,8 @@ where
     });
 
     let result = handle.join()?;
-
     let combined_log = log_join.join().map_err(|_| anyhow!("log drain panicked"))?;
-
-    // Persist the full output to the run directory so a failed run is always
-    // debuggable, even though only the tail is streamed to the UI.
-    append_gromacs_log(&log_path, &command_line, result.exit_code, &combined_log);
-
-    for line in combined_log
-        .lines()
-        .rev()
-        .take(5)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-    {
-        report(GromacsProgress::Log(line.to_string()));
-    }
-
-    Ok(SubprocessOutcome {
-        result,
-        combined_log,
-        log_path,
-    })
+    Ok((result, combined_log))
 }
 
 pub(crate) fn subprocess_failure(tool: &str, outcome: &SubprocessOutcome) -> anyhow::Error {
@@ -1019,7 +1066,6 @@ AR  8
         })
         .expect("system preparation should succeed");
 
-        let gmx_launch = wsl_gmx_launch();
         let result = run_stage(
             StageRequest {
                 coordinate_input: system.conf_file.clone(),
@@ -1027,7 +1073,7 @@ AR  8
                 system,
                 stage_name: "em".to_string(),
                 settings: MdpSettings::energy_minimization(),
-                gmx_launch,
+                compute: wsl_gmx_launch().into(),
                 max_duration: Duration::from_secs(120),
             },
             Arc::new(AtomicBool::new(false)),
@@ -1083,7 +1129,7 @@ AR  8
         let results = run_pipeline(
             system,
             full_protocol(&options),
-            wsl_gmx_launch(),
+            wsl_gmx_launch().into(),
             Duration::from_secs(600),
             Arc::new(AtomicBool::new(false)),
             |_| {},
@@ -1183,7 +1229,7 @@ AR  8
         let results = run_pipeline(
             system,
             full_protocol(&options),
-            wsl_gmx_launch(),
+            wsl_gmx_launch().into(),
             Duration::from_secs(600),
             Arc::new(AtomicBool::new(false)),
             |_| {},

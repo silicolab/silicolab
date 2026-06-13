@@ -60,6 +60,39 @@ GPU acceleration is **strongly recommended** — running MD on CPU alone is tech
 - **Linux:** `sudo apt install gromacs` for a quick start; compile from source with CUDA/ROCm for GPU acceleration.
 - **macOS:** `brew install gromacs`. Note that GPU acceleration is not supported on Apple hardware, so MD performance will be limited.
 
+### Remote execution over SSH (optional)
+
+Heavy MD can be offloaded to a remote machine (an HPC login node, a GPU box) while
+the GUI stays on your laptop. SilicoLab drives the OS OpenSSH client (`ssh`/`scp`)
+as subprocesses — no extra dependency to install (the OpenSSH client ships with
+macOS/Linux and is an on-by-default optional feature on Windows 11; enable it under
+*Settings → Apps → Optional features → OpenSSH Client* if it is missing).
+
+**Set up a host** in *Settings → Engines → Remote Hosts*:
+
+1. **Add host** — give it a label, hostname/IP, username, and (optionally) a port
+   and a remote work directory (defaults to `~/.silicolab`). Under *Setup commands*
+   put whatever a fresh, non-interactive SSH shell needs to make `gmx` runnable —
+   e.g. `module load gromacs` or `source /opt/gromacs/bin/GMXRC` — one per line.
+2. **Set up passwordless login** — SilicoLab generates a dedicated key
+   (`~/.silicolab/keys/id_silicolab_ed25519`, never your own keys) and shows a
+   one-line command to run once on the host (paste it into a terminal, or type
+   `! <command>` in the SilicoLab prompt). Click **Verify** to confirm. Passwordless
+   (key-based) login is required so unattended jobs never block on a password.
+3. **Detect GROMACS** — probes the host for `gmx` and records its version.
+
+**Run remotely:** in the Run MD or Build MD System panel, set **Compute** to your
+host. SilicoLab stages the inputs up, launches each `gmx` step detached so a dropped
+connection can't kill it, streams the live log back, and stages results down — the
+result (structure, energies, trajectory) appears exactly as for a local run. Press
+**Esc** to cancel (it kills the remote job too).
+
+v1 limitations: a remote run occupies the single engine-job slot while active;
+closing the app leaves an in-flight remote job running (a `remote_run.json` record
+is written into the local run directory) but does not auto-reattach to it; remote
+scratch directories under `<work_root>/runs/<run-id>` are not garbage-collected
+automatically.
+
 ## License
 
 Licensed under either of [Apache-2.0](LICENSE-APACHE) or [MIT](LICENSE-MIT) at

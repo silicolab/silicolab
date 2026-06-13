@@ -464,6 +464,9 @@ pub struct MdSystemPrompt {
     pub salt_concentration_molar: f32,
     pub positive_ion: String,
     pub negative_ion: String,
+    /// Where the build executes: locally or on a configured remote host. Seeded
+    /// from `config.default_compute_target` when the panel opens.
+    pub target: crate::backend::config::ComputeTarget,
 }
 
 impl Default for MdSystemPrompt {
@@ -492,6 +495,7 @@ impl Default for MdSystemPrompt {
             salt_concentration_molar: 0.15,
             positive_ion: solv.positive_ion,
             negative_ion: solv.negative_ion,
+            target: crate::backend::config::ComputeTarget::Local,
         }
     }
 }
@@ -662,6 +666,9 @@ pub struct MdRunPrompt {
     pub show_advanced: bool,
     /// Which stage's detail view is currently expanded (one at a time).
     pub expanded_stage: Option<usize>,
+    /// Where the run executes: locally or on a configured remote host. Seeded from
+    /// `config.default_compute_target` when the panel opens.
+    pub target: crate::backend::config::ComputeTarget,
 }
 
 impl Default for MdRunPrompt {
@@ -678,6 +685,7 @@ impl Default for MdRunPrompt {
             topology_override_path: None,
             show_advanced: false,
             expanded_stage: None,
+            target: crate::backend::config::ComputeTarget::Local,
         }
     }
 }
@@ -926,6 +934,57 @@ impl EngineDraft {
     }
 }
 
+/// Editable draft for one remote host in the Settings panel. All fields are held
+/// as text for direct editing and parsed/validated on save (`port`, `prelude`,
+/// and `gmx_program` in particular). Mirrors [`EngineDraft`].
+#[derive(Debug, Clone, Default)]
+pub struct RemoteHostDraft {
+    pub label: String,
+    pub hostname: String,
+    pub username: String,
+    pub port: String,
+    pub work_root: String,
+    /// One shell setup line per text row (`module load gromacs`, `source GMXRC`).
+    pub prelude: String,
+    /// Remote path to `gmx` (or a bare name resolved via the prelude/PATH).
+    pub gmx_program: String,
+}
+
+impl RemoteHostDraft {
+    pub fn from_host(host: &crate::backend::config::RemoteHost) -> Self {
+        let gmx_program = host
+            .engines
+            .get(crate::engines::registry::EngineId::GROMACS.as_str())
+            .map(|launch| launch.program.clone())
+            .unwrap_or_default();
+        Self {
+            label: host.label.clone(),
+            hostname: host.hostname.clone(),
+            username: host.username.clone(),
+            port: host.port.to_string(),
+            work_root: host.work_root.clone(),
+            prelude: host.prelude.join("\n"),
+            gmx_program,
+        }
+    }
+}
+
+/// Connection status of a remote host, shown as an indicator in the panel.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum RemoteHostStatus {
+    /// Not yet probed.
+    #[default]
+    Unknown,
+    /// A probe (passwordless check / detect) is in flight.
+    Checking,
+    /// Passwordless login works.
+    Ready,
+    /// Reachable, but passwordless login is not set up yet.
+    NeedsSetup,
+    /// The probe failed (unreachable / auth error). Carries a short reason.
+    Unreachable(String),
+}
+
 /// State backing the Settings primary view. The engine registry is probed
 /// lazily (probing spawns `--version` subprocesses) and cached here.
 #[derive(Debug, Clone, Default)]
@@ -941,6 +1000,14 @@ pub struct SettingsState {
     /// Category selected in the Settings modal's left rail. Drives which
     /// category's groups the right pane shows while the search box is empty.
     pub selected_category: crate::frontend::ui::settings_registry::SettingCategory,
+    /// Per-host editable drafts (keyed by host id) for the Remote Hosts panel.
+    pub remote_host_drafts: BTreeMap<String, RemoteHostDraft>,
+    /// The "add a host" form draft.
+    pub new_remote_host: RemoteHostDraft,
+    /// Per-host connection status (keyed by host id).
+    pub remote_status: BTreeMap<String, RemoteHostStatus>,
+    /// When a host's passwordless setup is being shown: `(host_id, install_cmd)`.
+    pub remote_bootstrap: Option<(String, String)>,
 }
 
 /// State backing the Style primary view — the per-structure view and
