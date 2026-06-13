@@ -60,6 +60,7 @@ pub(crate) fn reset_transient_state(state: &mut AppState) {
     state.ui.pending_supercell = None;
     state.ui.pending_md_system = None;
     state.ui.pending_md_run = None;
+    state.ui.pending_disorder = None;
     state.ui.editor = None;
     state.ui.reticular_builder = None;
     state.ui.block_editor = None;
