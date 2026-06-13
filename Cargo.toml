@@ -11,7 +11,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 anyhow = "1.0"
 bytemuck = { version = "1", features = ["derive"] }
-chemx = "0.2.0"
+chemx = "0.3.0"
 eframe = { version = "0.34", features = ["persistence"] }
 egui-phosphor = "0.12.0"
 flate2 = "1"

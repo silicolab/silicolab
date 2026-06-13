@@ -72,7 +72,10 @@ mod tests {
                 charge: 0,
                 multiplicity: 1,
                 kind: QmKind::SinglePoint,
-                compute_properties: true,
+                options: crate::engines::qm::QmOptions {
+                    compute_properties: true,
+                    ..Default::default()
+                },
             },
             Default::default(),
             |progress| stages.push(progress.stage),

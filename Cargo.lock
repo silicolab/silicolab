@@ -723,17 +723,19 @@ dependencies = [
 
 [[package]]
 name = "chemx"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "445be17419f9a9f977d37ae1ad009cd804cee9cce11590a37f41bc3f41702293"
+checksum = "c0fbbe6a72d9c490994efe7b558bddaae5fc05442ab714eb10cc5cd01ae41e52"
 dependencies = [
  "chemx-basis",
  "chemx-cc",
  "chemx-core",
  "chemx-dft",
  "chemx-disp",
+ "chemx-ext",
  "chemx-grad",
  "chemx-integrals",
+ "chemx-linalg",
  "chemx-opt",
  "chemx-props",
  "chemx-scf",
@@ -742,9 +744,9 @@ dependencies = [
 
 [[package]]
 name = "chemx-basis"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "56add4b93f857178852997e56dbec9d9b9b21a6797069f9e77510020cb986bcc"
+checksum = "881c5821083fedc172677272e43ae8f301939b5c33605880eb73cdcf214760b7"
 dependencies = [
  "chemx-core",
  "integral",
@@ -755,9 +757,9 @@ dependencies = [
 
 [[package]]
 name = "chemx-cc"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66b01f2f72201d13a7eb4defe059391702add4d77cef6456cd3a79a46802717d"
+checksum = "e39e064ec62f01e3005dd53afe37aa532269519682441927ca9dd01f12167b42"
 dependencies = [
  "chemx-core",
  "chemx-integrals",
@@ -765,25 +767,27 @@ dependencies = [
  "chemx-scf",
  "chemx-tensor",
  "rayon",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "chemx-core"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bcf9a8481b069c48ae16b4f40f013502aeb2ee354d840826c7118d4948f06fae"
+checksum = "fc5faac78d6ded3bd4afcd8ae2a82b895ae129593ed70efe9216d90defc4153f"
 dependencies = [
  "thiserror 2.0.18",
 ]
 
 [[package]]
 name = "chemx-dft"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f61e834757c32ad2777f2184824c9b8a16427477f2dba90fb7a94c505c6123e8"
+checksum = "0bb8edcc906ea05f7565bc14d1e9f3fd41ccc6a61b13a8c7ff1d1a0238c20eed"
 dependencies = [
  "chemx-basis",
  "chemx-core",
+ "chemx-integrals",
  "chemx-linalg",
  "chemx-scf",
  "rayon",
@@ -793,19 +797,30 @@ dependencies = [
 
 [[package]]
 name = "chemx-disp"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "696838a3133e0078c491f3ca23bf29c17e436a5496dd9080cfced67d0e54d373"
+checksum = "2c81a61cb9a9ce20b42a2bfe7bbded642197db9509f669abee52d93d9230603e"
 dependencies = [
  "chemx-core",
  "libm",
 ]
 
 [[package]]
-name = "chemx-grad"
-version = "0.2.0"
+name = "chemx-ext"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1670c7d2790a7edd020aa5c7cf41196544f7e6aa7bce8fa84687786b3f9ca063"
+checksum = "57528cefd42ed9c6d2ef888b77bc4976ba708d80457b11c4ff917a2129ee01eb"
+dependencies = [
+ "chemx-core",
+ "serde_json",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "chemx-grad"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79344da49ec774463ee9ea13fcc1bac16638be126d88ef0e7379535ddc385191"
 dependencies = [
  "chemx-core",
  "chemx-integrals",
@@ -815,9 +830,9 @@ dependencies = [
 
 [[package]]
 name = "chemx-integrals"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "19e2e8ff31da5cdfcaaa1ece950628b65d07ae6ece4867f48d695da16789dfb1"
+checksum = "54fe0789dfb0323de1cbb27898eff691101aa9a073a65e9c51bc8758845ad7df"
 dependencies = [
  "chemx-core",
  "chemx-linalg",
@@ -828,18 +843,18 @@ dependencies = [
 
 [[package]]
 name = "chemx-linalg"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "83ded2603a007e91c08102408cc6a588f6b2a4513a1f30bedade346cfedf1a09"
+checksum = "6e5db65e780f38e9baa1a88aea69b72837d7a9c13fa485d407215ac4ba7cb888"
 dependencies = [
  "faer",
 ]
 
 [[package]]
 name = "chemx-opt"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa2844c960ec9846f82bdc80be605ad8064c81c7a613da76c89b01ad6b29ed8a"
+checksum = "9f4cb761b88eb3dc74b6ae003a37f0aedcc82be428ac8555102e6254bab3c5d1"
 dependencies = [
  "chemx-core",
  "chemx-linalg",
@@ -848,21 +863,23 @@ dependencies = [
 
 [[package]]
 name = "chemx-props"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ba85b22f2953572a4a18373e10e9b4029d33fdb6c52bafac3f83c72861757b6"
+checksum = "5f11238ca7fb7f835023302be7f2182a5858819cd799dcc6f441f06047a578bb"
 dependencies = [
  "chemx-core",
  "chemx-integrals",
  "chemx-linalg",
+ "rayon",
 ]
 
 [[package]]
 name = "chemx-scf"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "070a822a14199ec909a69fdd032ab9ac36e79fce0578d064fa632ea491bc60bd"
+checksum = "a5174840c65e0f3310d0161387c923f1b38ed4804a64420bfbf026715f9ed5d2"
 dependencies = [
+ "chemx-core",
  "chemx-integrals",
  "chemx-linalg",
  "thiserror 2.0.18",
@@ -870,9 +887,9 @@ dependencies = [
 
 [[package]]
 name = "chemx-solv"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af05a4e69f5da63cca83eebc3fcf25a7718cece0e010ad7cd1cb5b74816426fe"
+checksum = "3c61185a43edddb826baf6b0c2a14505ba868ff3b4c866ce993e604c8f017c19"
 dependencies = [
  "chemx-core",
  "chemx-dft",
@@ -885,11 +902,12 @@ dependencies = [
 
 [[package]]
 name = "chemx-tensor"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a55c855a28c0560f8d09f488e2bf5938f03564d8825c0f6be2e2e2e6a8c58764"
+checksum = "81abba3ca0eb42cbb2e7189b265989c3199e78266fdfe962eaf5c59375b61bd7"
 dependencies = [
  "chemx-linalg",
+ "rayon",
 ]
 
 [[package]]
@@ -2893,9 +2911,9 @@ dependencies = [
 
 [[package]]
 name = "integral"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2dc4c3b907fda77f82e5056f8ccfa50a324e1526aace5746d5641079e9df8512"
+checksum = "a911d64f136afda6578032f2d96dfd4820cc8476fb2b3b9db67d66bd53330111"
 dependencies = [
  "integral-core",
  "integral-math",
@@ -2903,18 +2921,18 @@ dependencies = [
 
 [[package]]
 name = "integral-core"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4252a118b7d7e7ecb7966f32c2465fe8ea08d039c0684cdb127ccd9614fcc15a"
+checksum = "9bd7e5a040fd77453a21dd659d40203d73678777f0ce1b9036a43338881210fc"
 dependencies = [
  "integral-math",
 ]
 
 [[package]]
 name = "integral-math"
-version = "0.1.5"
+version = "0.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3b3331d400184e7ad88bb0db0defc35eee474d12ceaf5a1104359543728bf225"
+checksum = "49cf5654b795a787cedbfd97e42c68d61f064cdafbc53f841124d3cb6a68370c"
 
 [[package]]
 name = "interpol"
@@ -7235,10 +7253,11 @@ checksum = "bec9e4a500ca8864c5b47b8b482a73d62e4237670e5b5f1d6b9e3cae50f28f2b"
 
 [[package]]
 name = "xcx"
-version = "0.2.0"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04d780c3a62a4d197cfd7c060bd12444df3dcbe8136d37c49868c5a1553106c1"
+checksum = "adee813e5b64ee1efbd6e87d4eedb4ae8132e8e9c2e0ec6617cfb0f552dc7974"
 dependencies = [
+ "libm",
  "nalgebra 0.34.2",
  "num-dual",
 ]

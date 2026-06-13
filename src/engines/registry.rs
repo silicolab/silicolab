@@ -138,7 +138,7 @@ struct EngineSpec {
 /// Version of the bundled `chemx` quantum-chemistry library. chemx exposes no
 /// version constant, so keep this in sync with the `chemx` dependency in
 /// `Cargo.toml`.
-const CHEMX_VERSION: &str = "0.1.0";
+const CHEMX_VERSION: &str = "0.3.0";
 
 const ENGINE_SPECS: &[EngineSpec] = &[EngineSpec {
     id: EngineId::GROMACS,
