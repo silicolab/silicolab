@@ -215,6 +215,24 @@ pub(crate) fn ensure_panel_form(state: &mut AppState, task_run_id: u64) {
                 .pending_protein_prep
                 .get_or_insert_with(Default::default);
         }
+        TaskPanelKind::DisorderedSystemPrompt => {
+            let active_entry = state.entries.active_entry_id();
+            let prompt = state
+                .ui
+                .pending_disorder
+                .get_or_insert_with(Default::default);
+            // Seed the first molecule from the active entry on first open.
+            if prompt.components.is_empty()
+                && let Some(entry_id) = active_entry
+            {
+                prompt
+                    .components
+                    .push(crate::frontend::state::DisorderComponentDraft {
+                        entry_id,
+                        ..Default::default()
+                    });
+            }
+        }
         TaskPanelKind::MdSystemPrompt => {
             let default_name =
                 crate::backend::runs::default_run_name(&state.runs_dir(), task.controller_id);

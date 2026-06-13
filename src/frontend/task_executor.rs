@@ -91,6 +91,10 @@ const TASK_EXECUTORS: &[TaskExecutor] = &[
         run: run_build_md_system,
     },
     TaskExecutor {
+        kind: TaskKind::BuildDisorderedSystem,
+        run: run_disorder_panel,
+    },
+    TaskExecutor {
         kind: TaskKind::AddHydrogens,
         run: run_add_hydrogens,
     },
@@ -149,6 +153,10 @@ fn run_prepare_protein(state: &mut AppState, task_run_id: u64) {
 }
 
 fn run_build_md_system(state: &mut AppState, task_run_id: u64) {
+    open_panel_task(state, task_run_id);
+}
+
+fn run_disorder_panel(state: &mut AppState, task_run_id: u64) {
     open_panel_task(state, task_run_id);
 }
 
