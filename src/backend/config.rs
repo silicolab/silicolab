@@ -75,6 +75,69 @@ impl ColorScheme {
     }
 }
 
+/// Where an engine task runs: locally (the historical default) or on a configured
+/// remote host, referenced by its [`RemoteHost::id`]. Persisted as the app-wide
+/// default and selected per task at launch.
+///
+/// The id is a loose reference: a [`Remote`](ComputeTarget::Remote) whose host was
+/// deleted/renamed resolves leniently back to `Local` (see the dispatcher's target
+/// resolver), mirroring how `engine_overrides` falls back to a PATH probe on a miss
+/// — a dangling target never panics or silently routes to a non-existent host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ComputeTarget {
+    /// Run on this machine, exactly as SilicoLab always has.
+    #[default]
+    Local,
+    /// Run on the remote host with this [`RemoteHost::id`].
+    Remote(String),
+}
+
+/// A remote host SilicoLab can submit external-engine jobs to over SSH. Stored in
+/// [`AppConfig::remote_hosts`] keyed by [`RemoteHost::id`]. Connection is key-based
+/// only — no passwords are ever serialized here.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RemoteHost {
+    /// Stable, opaque identifier ([`ComputeTarget::Remote`] references this). Never
+    /// shown to the user; survives label/hostname edits.
+    pub id: String,
+    /// Human-facing name shown in the target picker and settings.
+    pub label: String,
+    /// Hostname or IP the OS `ssh` client connects to.
+    pub hostname: String,
+    pub username: String,
+    #[serde(default = "default_ssh_port")]
+    pub port: u16,
+    /// Remote root under which per-run scratch dirs (`<work_root>/runs/<uuid>`) are
+    /// created. Defaults to `~/.silicolab`; `$HOME` is expanded by the remote shell.
+    #[serde(default = "default_work_root")]
+    pub work_root: String,
+    /// Shell lines run on the remote *before* the engine, joined with `&&`. A
+    /// non-interactive SSH shell does not source the login environment, so this is
+    /// where `module load gromacs` / `source /opt/gromacs/bin/GMXRC` /
+    /// `conda activate …` belong. Empty for a host where `gmx` is already on the
+    /// non-interactive PATH.
+    #[serde(default)]
+    pub prelude: Vec<String>,
+    /// Per-engine launch on this host, keyed by [`crate::engines::registry::EngineId`]
+    /// string. `program` is the remote path to the engine; `command_prefix` is
+    /// normally empty (the remote shell, not a local launcher, runs it).
+    #[serde(default)]
+    pub engines: HashMap<String, EngineLaunch>,
+    /// Cached `<engine> --version` strings, keyed by engine id. Filled by the
+    /// settings "Detect" action so the panel shows versions without re-probing over
+    /// SSH on every open.
+    #[serde(default)]
+    pub engine_versions: HashMap<String, String>,
+}
+
+fn default_ssh_port() -> u16 {
+    22
+}
+
+fn default_work_root() -> String {
+    "~/.silicolab".to_string()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub default_project_dir: PathBuf,
@@ -86,6 +149,15 @@ pub struct AppConfig {
     /// non-PATH native install.
     #[serde(default)]
     pub engine_overrides: HashMap<String, EngineLaunch>,
+    /// Remote hosts the user can submit engine jobs to over SSH, keyed by
+    /// [`RemoteHost::id`]. Backward compatible (empty default; old `settings.json`
+    /// still parses). Preserved across "Reset all settings" like `engine_overrides`.
+    #[serde(default)]
+    pub remote_hosts: HashMap<String, RemoteHost>,
+    /// App-wide default compute target for new tasks. Per-task selection overrides
+    /// it at launch. Defaults to [`ComputeTarget::Local`].
+    #[serde(default)]
+    pub default_compute_target: ComputeTarget,
     /// Light/dark preference. Defaults to following the system.
     #[serde(default)]
     pub theme: ThemeMode,
@@ -160,6 +232,11 @@ impl AppConfig {
     pub fn reset_preferences(&self) -> AppConfig {
         AppConfig {
             engine_overrides: self.engine_overrides.clone(),
+            // Configured remote hosts are environment, not a preference: losing them
+            // reads as "my HPC hosts mysteriously vanished" (same rationale as
+            // engine_overrides). The app-wide default *target*, however, is a
+            // preference and resets to Local.
+            remote_hosts: self.remote_hosts.clone(),
             last_project_path: self.last_project_path.clone(),
             ..AppConfig::default()
         }
@@ -173,6 +250,8 @@ impl Default for AppConfig {
             last_project_path: None,
             closed_to_scratch: false,
             engine_overrides: HashMap::default(),
+            remote_hosts: HashMap::default(),
+            default_compute_target: ComputeTarget::default(),
             theme: ThemeMode::default(),
             color_scheme: ColorScheme::default(),
             glass: default_glass(),
@@ -286,9 +365,13 @@ pub fn current_timestamp() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
     use std::path::PathBuf;
 
-    use super::{AppConfig, ColorScheme, RecentProject, load_config_from, remember_recent_project};
+    use super::{
+        AppConfig, ColorScheme, ComputeTarget, RecentProject, RemoteHost, load_config_from,
+        remember_recent_project,
+    };
     use crate::engines::registry::EngineLaunch;
 
     #[test]
@@ -298,6 +381,7 @@ mod tests {
             glass: true,
             closed_to_scratch: true,
             last_project_path: Some(PathBuf::from("/work/lysozyme")),
+            default_compute_target: ComputeTarget::Remote("hpc".to_string()),
             ..AppConfig::default()
         };
         config.engine_overrides.insert(
@@ -305,6 +389,20 @@ mod tests {
             EngineLaunch {
                 command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
                 program: "/usr/local/gromacs/bin/gmx".to_string(),
+            },
+        );
+        config.remote_hosts.insert(
+            "hpc".to_string(),
+            RemoteHost {
+                id: "hpc".to_string(),
+                label: "Cluster".to_string(),
+                hostname: "login.example.edu".to_string(),
+                username: "alice".to_string(),
+                port: 22,
+                work_root: "~/.silicolab".to_string(),
+                prelude: vec!["module load gromacs".to_string()],
+                engines: HashMap::new(),
+                engine_versions: HashMap::new(),
             },
         );
 
@@ -321,9 +419,24 @@ mod tests {
             reset.default_project_dir,
             AppConfig::default().default_project_dir
         );
+        // ...the app-wide default target is a preference, so it resets to Local.
+        assert_eq!(reset.default_compute_target, ComputeTarget::Local);
         // ...while environment / session state is carried over.
         assert_eq!(reset.engine_overrides, config.engine_overrides);
+        assert_eq!(reset.remote_hosts.len(), 1);
+        assert!(reset.remote_hosts.contains_key("hpc"));
         assert_eq!(reset.last_project_path, config.last_project_path);
+    }
+
+    #[test]
+    fn compute_target_defaults_to_local_and_round_trips() {
+        // #[serde(default)] -> Local lets an old settings.json without the field
+        // parse, and a remote target survives a round-trip.
+        assert_eq!(ComputeTarget::default(), ComputeTarget::Local);
+        let target = ComputeTarget::Remote("hpc".to_string());
+        let json = serde_json::to_string(&target).expect("serialize");
+        let back: ComputeTarget = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, target);
     }
 
     #[test]

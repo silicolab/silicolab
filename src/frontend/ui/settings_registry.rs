@@ -639,6 +639,34 @@ pub fn registry() -> Vec<SettingDescriptor> {
         reset: None,
     });
 
+    // Remote Hosts: SSH execution targets. Its own group under Engines so the
+    // local-engine editor above stays uncluttered.
+    items.push(SettingDescriptor {
+        id: "engines.remote_hosts",
+        category: SettingCategory::Engines,
+        group: "Remote Hosts",
+        title: "Remote hosts (SSH)",
+        description: "",
+        keywords: &[
+            "remote",
+            "ssh",
+            "host",
+            "hpc",
+            "cluster",
+            "scp",
+            "submit",
+            "compute",
+            "gromacs",
+            "passwordless",
+            "key",
+        ],
+        control: Control::Custom(super::render_remote_hosts_settings),
+        enabled: None,
+        indent: false,
+        is_default: None,
+        reset: None,
+    });
+
     // Tasks: no real global task preferences exist yet — surface a note instead
     // of inventing a setting (see `render_tasks_placeholder`).
     items.push(SettingDescriptor {

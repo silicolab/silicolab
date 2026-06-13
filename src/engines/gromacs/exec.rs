@@ -11,11 +11,11 @@ use anyhow::Result;
 
 use crate::engines::{
     gromacs::runner::{GromacsProgress, SubprocessOutcome, run_subprocess},
-    registry::EngineLaunch,
+    remote::Compute,
 };
 
 pub(crate) fn run_gmx<F>(
-    launch: &EngineLaunch,
+    compute: &Compute,
     working_dir: &Path,
     args: Vec<String>,
     stdin: Option<Vec<u8>>,
@@ -26,9 +26,12 @@ pub(crate) fn run_gmx<F>(
 where
     F: FnMut(GromacsProgress),
 {
-    let mut config = launch.to_process_config(working_dir.to_path_buf(), args, Some(timeout));
+    let mut config =
+        compute
+            .launch
+            .to_process_config(working_dir.to_path_buf(), args, Some(timeout));
     if let Some(stdin) = stdin {
         config = config.stdin_bytes(stdin);
     }
-    run_subprocess(config, cancel, report)
+    run_subprocess(config, &compute.transport, cancel, report)
 }

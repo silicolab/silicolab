@@ -61,8 +61,8 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
             }
             meta.freeze_selection()
         });
-    let gmx_launch = match resolve_md_engine_launch(state, prompt.engine) {
-        Ok(launch) => launch,
+    let compute = match resolve_md_compute(state, prompt.engine, &prompt.target) {
+        Ok(compute) => compute,
         Err(error) => {
             state.set_message(error.to_string());
             return;
@@ -89,7 +89,7 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
         topology,
         stages,
         working_dir,
-        gmx_launch,
+        compute,
         max_duration_per_stage: Duration::from_secs(60 * 60),
         freeze: framework_freeze,
     });
@@ -170,6 +170,61 @@ pub(crate) fn resolve_md_engine_launch(
             // and so it shows up in Settings -> Engines.
             persist_detected_engine_launch(state, EngineId::GROMACS, launch.clone());
             Ok(launch)
+        }
+    }
+}
+
+/// Resolve a [`ComputeTarget`] into a [`Compute`] (launch + transport) for a
+/// GROMACS job. This is the single place a target becomes runnable.
+///
+/// - `Local` → today's launch resolution (override / PATH / WSL auto-detect),
+///   wrapped as a local transport.
+/// - `Remote(host)` → the host's per-engine launch (remote `gmx` path) bound to a
+///   [`RemoteTarget`] anchored at the active task's durable run UUID. A configured
+///   host that lacks GROMACS yields a guidance error that blocks the run; a
+///   dangling host id (deleted/renamed) resolves leniently back to `Local`.
+///
+/// Only **local** checks run here (this is the UI thread): the OS `ssh` presence
+/// check is a cheap PATH lookup. All network work — reachability, the passwordless
+/// check, the remote `--version` probe — happens later on the worker thread, so a
+/// slow or dead host never freezes the UI.
+pub(crate) fn resolve_md_compute(
+    state: &mut AppState,
+    engine: crate::frontend::state::MdEngineChoice,
+    target: &crate::backend::config::ComputeTarget,
+) -> anyhow::Result<crate::engines::remote::Compute> {
+    use crate::backend::config::ComputeTarget;
+    use crate::engines::remote::{Compute, RemoteTarget};
+
+    match target {
+        ComputeTarget::Local => Ok(Compute::local(resolve_md_engine_launch(state, engine)?)),
+        ComputeTarget::Remote(host_id) => {
+            let Some(host) = state.config.remote_hosts.get(host_id).cloned() else {
+                // Lenient fallback: a deleted/renamed host routes to Local rather
+                // than dangling (mirrors the registry's PATH fallback on a miss).
+                return Ok(Compute::local(resolve_md_engine_launch(state, engine)?));
+            };
+            crate::engines::remote::ensure_ssh_available()?;
+            let launch = host
+                .engines
+                .get(EngineId::GROMACS.as_str())
+                .filter(|launch| !launch.is_empty())
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow!(
+                        "Configure GROMACS for host {} in Settings → Remote Hosts before running there.",
+                        host.label
+                    )
+                })?;
+            let run_uuid = state
+                .active_task_run
+                .and_then(|id| state.tasks.task_run(id))
+                .map(|task| task.run_uuid.clone())
+                .ok_or_else(|| anyhow!("no active task run to anchor the remote run directory"))?;
+            Ok(Compute::remote(
+                launch,
+                RemoteTarget::for_run(&host, &run_uuid),
+            ))
         }
     }
 }
@@ -340,6 +395,190 @@ pub(crate) fn persist_engine_config(state: &mut AppState, message: &str) {
     }
 }
 
+// --- Remote Hosts (Settings → Engines → Remote Hosts) ----------------------
+
+/// Build a validated [`RemoteHost`] from a settings draft. `prior_versions`
+/// carries forward any cached `--version` strings on an edit.
+fn host_from_draft(
+    id: String,
+    draft: &crate::frontend::state::RemoteHostDraft,
+    prior_versions: std::collections::HashMap<String, String>,
+) -> anyhow::Result<crate::backend::config::RemoteHost> {
+    let hostname = draft.hostname.trim();
+    let username = draft.username.trim();
+    if hostname.is_empty() {
+        anyhow::bail!("Hostname is required");
+    }
+    if username.is_empty() {
+        anyhow::bail!("Username is required");
+    }
+    let port: u16 = if draft.port.trim().is_empty() {
+        22
+    } else {
+        draft
+            .port
+            .trim()
+            .parse()
+            .map_err(|_| anyhow!("Port must be a number between 1 and 65535"))?
+    };
+    let work_root = if draft.work_root.trim().is_empty() {
+        "~/.silicolab".to_string()
+    } else {
+        draft.work_root.trim().to_string()
+    };
+    crate::engines::remote::validate_work_root(&work_root)?;
+    let prelude: Vec<String> = draft
+        .prelude
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(str::to_string)
+        .collect();
+    let mut engines = std::collections::HashMap::new();
+    let gmx = draft.gmx_program.trim();
+    if !gmx.is_empty() {
+        engines.insert(
+            EngineId::GROMACS.as_str().to_string(),
+            crate::engines::registry::EngineLaunch::native(gmx),
+        );
+    }
+    let label = {
+        let label = draft.label.trim();
+        if label.is_empty() {
+            hostname.to_string()
+        } else {
+            label.to_string()
+        }
+    };
+    Ok(crate::backend::config::RemoteHost {
+        id,
+        label,
+        hostname: hostname.to_string(),
+        username: username.to_string(),
+        port,
+        work_root,
+        prelude,
+        engines,
+        engine_versions: prior_versions,
+    })
+}
+
+pub(crate) fn add_remote_host(state: &mut AppState) {
+    let draft = state.ui.settings.new_remote_host.clone();
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    match host_from_draft(id.clone(), &draft, std::collections::HashMap::new()) {
+        Ok(host) => {
+            let label = host.label.clone();
+            state.config.remote_hosts.insert(id, host);
+            state.ui.settings.new_remote_host = Default::default();
+            persist_engine_config(state, &format!("Added remote host {label}"));
+        }
+        Err(error) => state.set_message(error.to_string()),
+    }
+}
+
+pub(crate) fn save_remote_host(state: &mut AppState, id: String) {
+    let Some(draft) = state.ui.settings.remote_host_drafts.get(&id).cloned() else {
+        return;
+    };
+    let prior_versions = state
+        .config
+        .remote_hosts
+        .get(&id)
+        .map(|host| host.engine_versions.clone())
+        .unwrap_or_default();
+    match host_from_draft(id.clone(), &draft, prior_versions) {
+        Ok(host) => {
+            let label = host.label.clone();
+            state.config.remote_hosts.insert(id, host);
+            persist_engine_config(state, &format!("Saved remote host {label}"));
+        }
+        Err(error) => state.set_message(error.to_string()),
+    }
+}
+
+pub(crate) fn remove_remote_host(state: &mut AppState, id: String) {
+    state.config.remote_hosts.remove(&id);
+    state.ui.settings.remote_host_drafts.remove(&id);
+    state.ui.settings.remote_status.remove(&id);
+    if matches!(&state.ui.settings.remote_bootstrap, Some((bid, _)) if *bid == id) {
+        state.ui.settings.remote_bootstrap = None;
+    }
+    persist_engine_config(state, "Removed remote host");
+}
+
+/// Shared guard: ssh must exist and only one probe runs at a time. Returns the
+/// host clone on success.
+fn begin_remote_probe(
+    state: &mut AppState,
+    id: &str,
+) -> Option<crate::backend::config::RemoteHost> {
+    if state.jobs.remote_probe.is_some() {
+        state.set_message("A remote-host check is already running".to_string());
+        return None;
+    }
+    if let Err(error) = crate::engines::remote::ensure_ssh_available() {
+        state.set_message(error.to_string());
+        return None;
+    }
+    state.config.remote_hosts.get(id).cloned()
+}
+
+pub(crate) fn detect_remote_gromacs(state: &mut AppState, id: String) {
+    let Some(host) = begin_remote_probe(state, &id) else {
+        return;
+    };
+    state.jobs.remote_probe = Some(crate::frontend::jobs::spawn_remote_probe(
+        host,
+        crate::frontend::jobs::RemoteProbeKind::DetectGromacs,
+    ));
+    state.set_message("Detecting GROMACS on the remote host…".to_string());
+}
+
+pub(crate) fn check_remote_host(state: &mut AppState, id: String) {
+    // The BatchMode test uses the dedicated key, so make sure it exists first.
+    if let Err(error) = crate::engines::remote::bootstrap::ensure_key() {
+        state.set_message(format!("Could not prepare the SSH key: {error}"));
+        return;
+    }
+    let Some(host) = begin_remote_probe(state, &id) else {
+        return;
+    };
+    state
+        .ui
+        .settings
+        .remote_status
+        .insert(id, crate::frontend::state::RemoteHostStatus::Checking);
+    state.jobs.remote_probe = Some(crate::frontend::jobs::spawn_remote_probe(
+        host,
+        crate::frontend::jobs::RemoteProbeKind::Passwordless,
+    ));
+    state.set_message("Testing connection to the remote host…".to_string());
+}
+
+pub(crate) fn setup_remote_host_key(state: &mut AppState, id: String) {
+    if let Err(error) = crate::engines::remote::ensure_ssh_available() {
+        state.set_message(error.to_string());
+        return;
+    }
+    if let Err(error) = crate::engines::remote::bootstrap::ensure_key() {
+        state.set_message(format!("Could not prepare the SSH key: {error}"));
+        return;
+    }
+    let pubkey = match crate::engines::remote::bootstrap::public_key() {
+        Ok(key) => key,
+        Err(error) => {
+            state.set_message(format!("Could not read the public key: {error}"));
+            return;
+        }
+    };
+    let command = crate::engines::remote::bootstrap::install_command(&pubkey);
+    state.ui.settings.remote_bootstrap = Some((id, command));
+    state.set_message(
+        "Run the shown command once on the remote host, then click Verify.".to_string(),
+    );
+}
+
 pub(crate) fn add_hydrogens(state: &mut AppState) {
     let before = state.capture_edit_snapshot();
     state.cancel_transient_jobs();
@@ -472,14 +711,6 @@ pub(crate) fn start_material_md_build(
         state.set_message("another external engine job is already running".to_string());
         return false;
     }
-    let gmx_launch =
-        match resolve_md_engine_launch(state, crate::frontend::state::MdEngineChoice::Gromacs) {
-            Ok(launch) => launch,
-            Err(error) => {
-                state.set_message(error.to_string());
-                return false;
-            }
-        };
     let run_dir = match ensure_active_task_run_dir(
         state,
         TaskKind::BuildMdSystem,
@@ -489,6 +720,19 @@ pub(crate) fn start_material_md_build(
         Err(error) => {
             state.set_message(format!("failed to create run directory: {error}"));
             complete_active_task(state, TaskKind::BuildMdSystem, TaskStatus::Failed);
+            return false;
+        }
+    };
+    // Resolve the compute target after the run dir exists so the remote dir can be
+    // anchored at the active task's run UUID.
+    let compute = match resolve_md_compute(
+        state,
+        crate::frontend::state::MdEngineChoice::Gromacs,
+        &prompt.target,
+    ) {
+        Ok(compute) => compute,
+        Err(error) => {
+            state.set_message(error.to_string());
             return false;
         }
     };
@@ -513,7 +757,7 @@ pub(crate) fn start_material_md_build(
         structure: state.structure().clone(),
         mode: prompt.framework_mode,
         working_dir: run_dir,
-        gmx_launch,
+        compute,
         solvation: prompt.solvation_options(),
         cell_override,
         custom_force_field: prompt.custom_force_field_text.clone(),
@@ -538,16 +782,6 @@ pub(crate) fn start_gromacs_md_build(
         state.set_message("another external engine job is already running".to_string());
         return false;
     }
-    // GROMACS is required for this build; we never silently fall back to a
-    // topology-less geometry build.
-    let gmx_launch =
-        match resolve_md_engine_launch(state, crate::frontend::state::MdEngineChoice::Gromacs) {
-            Ok(launch) => launch,
-            Err(error) => {
-                state.set_message(error.to_string());
-                return false;
-            }
-        };
     let run_dir = match ensure_active_task_run_dir(
         state,
         TaskKind::BuildMdSystem,
@@ -557,6 +791,20 @@ pub(crate) fn start_gromacs_md_build(
         Err(error) => {
             state.set_message(format!("failed to create run directory: {error}"));
             complete_active_task(state, TaskKind::BuildMdSystem, TaskStatus::Failed);
+            return false;
+        }
+    };
+    // GROMACS is required for this build; we never silently fall back to a
+    // topology-less geometry build. Resolve after the run dir exists so a remote
+    // run dir can be anchored at the active task's run UUID.
+    let compute = match resolve_md_compute(
+        state,
+        crate::frontend::state::MdEngineChoice::Gromacs,
+        &prompt.target,
+    ) {
+        Ok(compute) => compute,
+        Err(error) => {
+            state.set_message(error.to_string());
             return false;
         }
     };
@@ -585,7 +833,7 @@ pub(crate) fn start_gromacs_md_build(
     let job = spawn_gromacs_build_job(BuildRequest {
         structure: state.structure().clone(),
         working_dir: run_dir,
-        gmx_launch,
+        compute,
         force_field: prompt.force_field.clone(),
         water: prompt.water,
         box_config: prompt.config(),

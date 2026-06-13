@@ -5,6 +5,8 @@ pub(crate) fn render_md_run_task_panel(
     ui: &mut egui::Ui,
     actions: &mut Vec<AppAction>,
 ) {
+    // Computed before the prompt borrow so the picker can list configured hosts.
+    let hosts = remote_host_options(state);
     if let Some(prompt) = &mut state.ui.pending_md_run {
         use crate::frontend::state::MdEngineChoice;
 
@@ -368,6 +370,9 @@ pub(crate) fn render_md_run_task_panel(
         }
 
         ui.separator();
+        // The execution target sits right above the Run button — the two are
+        // closely related, so the choice is prompted right where the run starts.
+        compute_target_picker(ui, &mut prompt.target, &hosts, actions);
         ui.horizontal(|ui| {
             if ui
                 .button(format!("{}  Run", egui_phosphor::regular::PLAY))

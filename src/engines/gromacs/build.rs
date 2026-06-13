@@ -29,7 +29,7 @@ use crate::{
             exec::run_gmx,
             runner::{GromacsProgress, subprocess_failure},
         },
-        registry::EngineLaunch,
+        remote::{self, Compute, Transport},
     },
     io::formats::{gro::parse_gro, pdb::to_pdb},
     workflows::molecular_dynamics::{BoxShape, BoxSizing, MdSystemConfig, WaterModel},
@@ -73,7 +73,8 @@ impl IonOptions {
 pub struct BuildRequest {
     pub structure: Structure,
     pub working_dir: PathBuf,
-    pub gmx_launch: EngineLaunch,
+    /// How to launch `gmx` and where it runs (local or remote over SSH).
+    pub compute: Compute,
     /// `pdb2gmx -ff` token (e.g. `amber99sb-ildn`).
     pub force_field: String,
     pub water: WaterModel,
@@ -109,7 +110,7 @@ where
     let run =
         |args: Vec<String>, stdin: Option<Vec<u8>>, tool: &str, report: &mut F| -> Result<()> {
             let outcome = run_gmx(
-                &req.gmx_launch,
+                &req.compute,
                 &wd,
                 args,
                 stdin,
@@ -252,6 +253,20 @@ where
         }
     }
 
+    // For a remote build, stage back the final coordinates and the topology a
+    // later run reuses (topol.top is rewritten by solvate/genion; posre.itp, when
+    // pdb2gmx wrote it, gives the run its restraint group). Intermediate files
+    // (processed/boxed/solvated GROs, ions.tpr) stay on the remote host.
+    if let Transport::Remote(target) = &req.compute.transport {
+        remote::sync_down(
+            target,
+            &wd,
+            &[current.as_str(), "topol.top"],
+            &["posre.itp"],
+        )
+        .context("staging back the built system")?;
+    }
+
     // 6. Load the final coordinates back as the entry structure.
     let final_path = wd.join(&current);
     let gro = std::fs::read_to_string(&final_path)
@@ -312,6 +327,7 @@ fn solvent_box(water: WaterModel) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engines::registry::EngineLaunch;
     use crate::workflows::molecular_dynamics::{BoxShape, MdSystemConfig};
 
     #[test]
@@ -361,7 +377,7 @@ mod tests {
             BuildRequest {
                 structure,
                 working_dir: working_dir.clone(),
-                gmx_launch: launch,
+                compute: launch.into(),
                 force_field: "amber99sb-ildn".to_string(),
                 water: WaterModel::Tip3p,
                 box_config: MdSystemConfig::with_uniform_padding(12.0, BoxShape::Cubic),
@@ -429,7 +445,7 @@ mod tests {
             BuildRequest {
                 structure,
                 working_dir: build_dir,
-                gmx_launch: launch.clone(),
+                compute: launch.clone().into(),
                 force_field: "amber99sb-ildn".to_string(),
                 water: WaterModel::Tip3p,
                 box_config: MdSystemConfig::with_uniform_padding(10.0, BoxShape::Cubic),
@@ -459,7 +475,7 @@ mod tests {
                 system,
                 stage_name: "em".to_string(),
                 settings: MdpSettings::energy_minimization(),
-                gmx_launch: launch,
+                compute: launch.into(),
                 max_duration: Duration::from_secs(300),
             },
             Arc::new(AtomicBool::new(false)),

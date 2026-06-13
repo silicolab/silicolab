@@ -33,7 +33,7 @@ use crate::engines::gromacs::{
     runner::{GromacsProgress, subprocess_failure},
     topgen::render_top,
 };
-use crate::engines::registry::EngineLaunch;
+use crate::engines::remote::{self, Compute, Transport};
 use crate::io::formats::gro::parse_gro;
 use crate::workflows::molecular_dynamics::{
     FrameworkMode, MdTopology, SolvationOptions, WaterModel, ensure_periodic_cutoff_fits,
@@ -83,7 +83,8 @@ pub struct MaterialBuildRequest {
     pub structure: Structure,
     pub mode: FrameworkMode,
     pub working_dir: PathBuf,
-    pub gmx_launch: EngineLaunch,
+    /// How to launch `gmx` and where it runs (local or remote over SSH).
+    pub compute: Compute,
     /// Solvation request; `None` builds a bare (vacuum) periodic system.
     pub solvation: Option<SolvationOptions>,
     /// A user-supplied GROMACS `.itp` force-field fragment merged into the
@@ -217,7 +218,7 @@ where
     let run =
         |args: Vec<String>, stdin: Option<Vec<u8>>, tool: &str, report: &mut F| -> Result<()> {
             let outcome = run_gmx(
-                &req.gmx_launch,
+                &req.compute,
                 &wd,
                 args,
                 stdin,
@@ -307,6 +308,13 @@ where
             }
             run(genion, Some(b"SOL\n".to_vec()), "genion", &mut report)?;
             final_coords = "ionized.gro".to_string();
+        }
+
+        // For a remote build, stage back the solvated/ionized coordinates and the
+        // topology the run reuses (solvate/genion rewrite topol.top's [molecules]).
+        if let Transport::Remote(target) = &req.compute.transport {
+            remote::sync_down(target, &wd, &[final_coords.as_str(), "topol.top"], &[])
+                .context("staging back the solvated framework system")?;
         }
 
         let gro = std::fs::read_to_string(wd.join(&final_coords))
@@ -447,7 +455,7 @@ mod tests {
                 system,
                 stage_name: "em".to_string(),
                 settings,
-                gmx_launch: wsl_gmx_launch(),
+                compute: wsl_gmx_launch().into(),
                 max_duration: Duration::from_secs(180),
             },
             Arc::new(AtomicBool::new(false)),
@@ -496,7 +504,7 @@ mod tests {
                 system,
                 stage_name: "em".to_string(),
                 settings,
-                gmx_launch: wsl_gmx_launch(),
+                compute: wsl_gmx_launch().into(),
                 max_duration: Duration::from_secs(180),
             },
             Arc::new(AtomicBool::new(false)),
@@ -548,7 +556,7 @@ mod tests {
                 structure: sheet,
                 mode: FrameworkMode::Rigid,
                 working_dir: build_dir,
-                gmx_launch: wsl_gmx_launch(),
+                compute: wsl_gmx_launch().into(),
                 solvation: Some(solvation),
                 cell_override: box_cell,
                 custom_force_field: None,
@@ -590,7 +598,7 @@ mod tests {
                 system,
                 stage_name: "em".to_string(),
                 settings,
-                gmx_launch: wsl_gmx_launch(),
+                compute: wsl_gmx_launch().into(),
                 max_duration: Duration::from_secs(300),
             },
             Arc::new(AtomicBool::new(false)),
@@ -638,7 +646,7 @@ Pt      78      195.084  0.0     A      0.27540   0.33000
                 structure: sheet,
                 mode: FrameworkMode::Rigid,
                 working_dir: build_dir,
-                gmx_launch: wsl_gmx_launch(),
+                compute: wsl_gmx_launch().into(),
                 solvation: None,
                 cell_override: box_cell,
                 custom_force_field: Some(custom_ff.to_string()),
@@ -673,7 +681,7 @@ Pt      78      195.084  0.0     A      0.27540   0.33000
                 system,
                 stage_name: "em".to_string(),
                 settings,
-                gmx_launch: wsl_gmx_launch(),
+                compute: wsl_gmx_launch().into(),
                 max_duration: Duration::from_secs(180),
             },
             Arc::new(AtomicBool::new(false)),

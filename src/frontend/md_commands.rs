@@ -409,7 +409,7 @@ fn md_simulate(state: &mut AppState, args: &[String]) -> Result<String> {
         let results = run_pipeline(
             system,
             stages,
-            launch.clone(),
+            launch.clone().into(),
             STAGE_TIMEOUT,
             Arc::clone(&cancel),
             |_| {},
@@ -577,7 +577,7 @@ fn md_run(state: &mut AppState, args: &[String]) -> Result<String> {
         let results = run_pipeline(
             system,
             specs,
-            launch.clone(),
+            launch.clone().into(),
             STAGE_TIMEOUT,
             Arc::clone(&cancel),
             |_| {},

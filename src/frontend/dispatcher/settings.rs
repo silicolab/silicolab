@@ -256,6 +256,16 @@ pub(crate) fn import_settings(state: &mut AppState, ctx: &egui::Context) {
     }
 }
 
+/// Open the Settings dialog at the Engines category, which contains the Remote
+/// Hosts editor. Invoked from the per-task target picker's "Add host…" button so
+/// users can configure a host without hunting for the section.
+pub(crate) fn open_remote_hosts_settings(state: &mut AppState) {
+    state.ui.layout.settings_open = true;
+    state.ui.settings.search_query.clear();
+    state.ui.settings.selected_category =
+        crate::frontend::ui::settings_registry::SettingCategory::Engines;
+}
+
 pub(crate) fn resize_sidebar(state: &mut AppState, side: Side, delta: f32, ctx: &egui::Context) {
     let max_w = sidebar_max_width(ctx.viewport_rect().width());
     let (width, min) = match side {
