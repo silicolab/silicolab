@@ -1043,7 +1043,6 @@ pub struct UiState {
     pub layout: LayoutState,
     pub entry_list: EntryListState,
     pub settings: SettingsState,
-    pub settings_backdrop: SettingsBackdropState,
     pub style: StyleState,
     pub camera: ViewCamera,
     pub viewport_cache: ViewportCache,
@@ -1125,30 +1124,12 @@ pub struct TextViewer {
     pub text: String,
 }
 
-#[derive(Default)]
-pub struct SettingsBackdropState {
-    pub capture_pending: bool,
-    pub texture: Option<eframe::egui::TextureHandle>,
-    /// Appearance (dark mode, color scheme) the capture was taken under; the
-    /// backdrop is re-captured when it no longer matches.
-    pub captured_appearance: Option<(bool, crate::backend::config::ColorScheme)>,
-}
-
-impl SettingsBackdropState {
-    pub fn reset(&mut self) {
-        self.capture_pending = false;
-        self.texture = None;
-        self.captured_appearance = None;
-    }
-}
-
 impl Default for UiState {
     fn default() -> Self {
         Self {
             layout: LayoutState::default(),
             entry_list: EntryListState::default(),
             settings: SettingsState::default(),
-            settings_backdrop: SettingsBackdropState::default(),
             style: StyleState::default(),
             camera: ViewCamera::default(),
             viewport_cache: ViewportCache::default(),

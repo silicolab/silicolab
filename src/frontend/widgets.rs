@@ -13,6 +13,10 @@ use crate::{
 };
 const COMPONENT_PREVIEW_MIN_WIDTH: f32 = 180.0;
 const COMPONENT_PREVIEW_CANVAS_HEIGHT: f32 = 160.0;
+const COMPONENT_PREVIEW_ATOM_RADIUS: f32 = 6.0;
+const COMPONENT_PREVIEW_ATOM_STROKE_WIDTH: f32 = 1.0;
+const COMPONENT_PREVIEW_PORT_RADIUS: f32 = 8.0;
+const COMPONENT_PREVIEW_PORT_STROKE_WIDTH: f32 = 2.0;
 
 pub fn cell_value(ui: &mut egui::Ui, label: &str, value: &mut f32) -> bool {
     ui.label(label);
@@ -180,8 +184,15 @@ pub fn component_preview(
             );
             let style = element_style(&atom.element);
 
-            painter.circle_filled(pos, 6.0, color32(style.color));
-            painter.circle_stroke(pos, 6.0, Stroke::new(1.0, Color32::from_rgb(40, 44, 48)));
+            painter.circle_filled(pos, COMPONENT_PREVIEW_ATOM_RADIUS, color32(style.color));
+            painter.circle_stroke(
+                pos,
+                COMPONENT_PREVIEW_ATOM_RADIUS,
+                Stroke::new(
+                    COMPONENT_PREVIEW_ATOM_STROKE_WIDTH,
+                    Color32::from_rgb(40, 44, 48),
+                ),
+            );
             if atom.element == "H" {
                 hydrogen_count += 1;
                 painter.text(
@@ -201,7 +212,11 @@ pub fn component_preview(
             );
             let port_color = Color32::from_rgb(210, 40, 40);
 
-            painter.circle_stroke(pos, 8.0, Stroke::new(2.0, port_color));
+            painter.circle_stroke(
+                pos,
+                COMPONENT_PREVIEW_PORT_RADIUS,
+                Stroke::new(COMPONENT_PREVIEW_PORT_STROKE_WIDTH, port_color),
+            );
             painter.line_segment(
                 [pos + Vec2::new(-4.0, 0.0), pos + Vec2::new(4.0, 0.0)],
                 Stroke::new(1.4, port_color),
@@ -216,7 +231,14 @@ pub fn component_preview(
                     center.x + atom.position.x * scale,
                     center.y - atom.position.y * scale,
                 );
-                painter.line_segment([atom_pos, pos], Stroke::new(1.0, port_color));
+                if let Some((start, end)) = trimmed_segment(
+                    atom_pos,
+                    pos,
+                    COMPONENT_PREVIEW_ATOM_RADIUS + COMPONENT_PREVIEW_ATOM_STROKE_WIDTH * 0.5,
+                    COMPONENT_PREVIEW_PORT_RADIUS + COMPONENT_PREVIEW_PORT_STROKE_WIDTH * 0.5,
+                ) {
+                    painter.line_segment([start, end], Stroke::new(1.0, port_color));
+                }
             }
         }
     });
@@ -674,6 +696,17 @@ fn perpendicular_offset(start: Pos2, end: Pos2, offset: f32) -> Vec2 {
     } else {
         Vec2::new(-delta.y, delta.x).normalized() * offset
     }
+}
+
+fn trimmed_segment(start: Pos2, end: Pos2, start_trim: f32, end_trim: f32) -> Option<(Pos2, Pos2)> {
+    let delta = end - start;
+    let length = delta.length();
+    if length <= start_trim + end_trim || length <= f32::EPSILON {
+        return None;
+    }
+
+    let direction = delta / length;
+    Some((start + direction * start_trim, end - direction * end_trim))
 }
 
 fn inward_perpendicular_offset(

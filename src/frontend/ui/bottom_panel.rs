@@ -60,7 +60,7 @@ pub(super) fn render_bottom_panel(
             });
         },
     );
-    ui.separator();
+    weak_panel_hairline(ui, 22);
 
     // Render the active tab directly in the panel body; each tab fills the
     // remaining height with a scroll area (`auto_shrink([false, false])`). The
@@ -119,42 +119,102 @@ fn render_output_panel(state: &mut AppState, ui: &mut egui::Ui) {
 }
 
 fn render_console_panel(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec<AppAction>) {
+    const PROMPT_ROW_HEIGHT: f32 = 34.0;
+    const INPUT_OUTER_HEIGHT: f32 = 28.0;
+    const INPUT_X_MARGIN: f32 = 8.0;
+    const DIVIDER_HEIGHT: f32 = 1.0;
+    const BOTTOM_PADDING: f32 = 4.0;
+
     ui.set_width(ui.available_width());
-    // Lay out bottom-up: pin the prompt to the bottom, then let the log fill the
-    // space above it. The scroll area is sized from the *remaining* height, so
-    // its content can never overflow the panel — a previous version reserved a
-    // hardcoded 34px for the prompt row, and the few-pixel mismatch made the
-    // console overflow each frame, which egui's Panel persists as the next
-    // frame's size, growing the panel until it filled the window.
-    ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-        ui.horizontal(|ui| {
+    // Keep chronological output in top-down visual order while reserving fixed
+    // space for the prompt row so the panel cannot grow frame-over-frame.
+    let log_height =
+        (ui.available_height() - PROMPT_ROW_HEIGHT - DIVIDER_HEIGHT - BOTTOM_PADDING).max(0.0);
+    let log_text = state.output_log.join("\n");
+
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), log_height),
+        Layout::top_down(Align::Min),
+        |ui| {
+            ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .stick_to_bottom(true)
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.add(
+                        egui::Label::new(RichText::new(log_text).monospace())
+                            .selectable(true)
+                            .wrap_mode(egui::TextWrapMode::Extend),
+                    );
+                });
+        },
+    );
+    weak_panel_hairline(ui, 14);
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_width(), PROMPT_ROW_HEIGHT),
+        Layout::left_to_right(Align::Center),
+        |ui| {
+            let pal = crate::frontend::theme::palette(ui);
+            let input_radius =
+                crate::frontend::theme::radius::concentric(crate::frontend::theme::radius::CARD, 2);
+            ui.spacing_mut().item_spacing.x = 8.0;
+
             ui.monospace("sls>");
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut state.ui.console.input)
-                    .desired_width(f32::INFINITY)
-                    .hint_text("view background white"),
-            );
-            let run =
-                response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            if run || ui.button("Run").clicked() {
+
+            let button_width = 46.0;
+            let text_edit_width = (ui.available_width()
+                - button_width
+                - ui.spacing().item_spacing.x
+                - INPUT_X_MARGIN * 2.0)
+                .max(96.0);
+
+            let response = Frame::default()
+                .fill(pal.input_fill)
+                .stroke(Stroke::new(1.0, pal.hairline))
+                .corner_radius(egui::CornerRadius::same(input_radius))
+                .inner_margin(Margin::symmetric(INPUT_X_MARGIN as i8, 3))
+                .show(ui, |ui| {
+                    ui.add_sized(
+                        [text_edit_width, INPUT_OUTER_HEIGHT - 8.0],
+                        egui::TextEdit::singleline(&mut state.ui.console.input)
+                            .desired_width(f32::INFINITY)
+                            .frame(Frame::NONE)
+                            .margin(Margin::ZERO)
+                            .hint_text("view background white"),
+                    )
+                })
+                .inner;
+
+            let mut run = false;
+            if ui.button("Run").clicked() {
+                run = true;
+            }
+
+            if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                run = true;
+            }
+
+            if run {
                 let command = state.ui.console.input.trim().to_string();
                 if !command.is_empty() {
                     actions.push(AppAction::RunConsoleCommand(command));
                     state.ui.console.input.clear();
                 }
             }
-        });
-        ui.separator();
-        ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .stick_to_bottom(true)
-            .show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                for line in &state.output_log {
-                    ui.monospace(line);
-                }
-            });
-    });
+        },
+    );
+    ui.add_space(BOTTOM_PADDING);
+}
+
+fn weak_panel_hairline(ui: &mut egui::Ui, alpha: u8) {
+    let pal = crate::frontend::theme::palette(ui);
+    let width = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 1.0), egui::Sense::hover());
+    ui.painter().hline(
+        rect.left()..=rect.right(),
+        rect.center().y,
+        Stroke::new(1.0, pal.neutral_overlay(alpha)),
+    );
 }
 
 pub(super) fn render_status_bar(state: &mut AppState, ui: &mut egui::Ui) {

@@ -1,4 +1,6 @@
-use eframe::egui::{self, Button, Frame, Margin, RichText, ScrollArea, Sense, Stroke, Ui};
+use eframe::egui::{
+    self, Align, Button, Frame, Layout, Margin, RichText, ScrollArea, Sense, Stroke, Ui,
+};
 
 use crate::frontend::{
     ViewportDrawArgs,
@@ -41,112 +43,139 @@ pub(super) fn render_workspace(
     egui::CentralPanel::default()
         .frame(Frame::default().fill(crate::frontend::theme::palette(ui).central))
         .show_inside(ui, |ui| {
-            // MD-output entries dock a trajectory playback bar at the bottom of
-            // the viewport; the viewport fills the space above it.
-            let is_md_entry = state
-                .entries
-                .active_entry()
-                .map(|entry| entry.origin.is_md_run())
-                .unwrap_or(false);
-            if is_md_entry {
-                let pal = crate::frontend::theme::palette(ui);
-                egui::Panel::bottom("trajectory_controls")
-                    .resizable(false)
-                    .frame(
-                        Frame::default()
-                            .fill(pal.bottom_panel)
-                            .inner_margin(Margin::symmetric(10, 6)),
-                    )
-                    .show_inside(ui, |ui| render_trajectory_controls(state, ui, actions));
-            }
-            if let Some(entry) = state.entries.active_entry() {
-                let entry_id = entry.id;
-                let ui_state = &mut state.ui;
-                // During playback the viewport renders the trajectory's current
-                // frame (the entry's topology with swapped coordinates) under a
-                // dedicated structure id so the entry's own geometry cache is
-                // untouched, with a fixed view so the camera doesn't drift.
-                let playback = ui_state
-                    .trajectory
-                    .as_ref()
-                    .filter(|playback| playback.entry_id == entry_id);
-                let (structure, structure_id, structure_revision, view_override) =
-                    if let Some(playback) = playback {
-                        (
-                            &playback.scratch,
-                            PLAYBACK_STRUCTURE_ID,
-                            playback.current_frame as u64,
-                            Some((playback.view_center, playback.view_radius)),
+            show_workspace_island(ui, |ui| {
+                // MD-output entries dock a trajectory playback bar at the bottom of
+                // the viewport; the viewport fills the space above it.
+                let is_md_entry = state
+                    .entries
+                    .active_entry()
+                    .map(|entry| entry.origin.is_md_run())
+                    .unwrap_or(false);
+                if is_md_entry {
+                    let pal = crate::frontend::theme::palette(ui);
+                    egui::Panel::bottom("trajectory_controls")
+                        .resizable(false)
+                        .frame(
+                            Frame::default()
+                                .fill(pal.bottom_panel)
+                                .inner_margin(Margin::symmetric(10, 6)),
                         )
-                    } else {
-                        (&entry.structure, entry_id, entry.revision, None)
-                    };
-                let viewport_interaction = draw_viewport(
-                    ui,
-                    ViewportDrawArgs {
-                        structure,
-                        structure_id,
-                        structure_revision,
-                        camera: &mut ui_state.camera,
-                        selection: &ui_state.selection,
-                        visual_state: &ui_state.viewport,
-                        previous_hovered_atom: ui_state.hovered_atom,
-                        cache: &mut ui_state.viewport_cache,
-                        gpu_ready: ui_state.gpu_ready,
-                        empty_state_hint: None,
-                        view_override,
-                    },
-                );
-                if viewport_interaction.hover_changed {
-                    ui_state.hovered_atom = viewport_interaction.hovered_atom;
+                        .show_inside(ui, |ui| render_trajectory_controls(state, ui, actions));
                 }
-                if viewport_interaction.camera_changed || viewport_interaction.active_drag {
-                    ui.ctx().request_repaint_after(STRUCTURE_INTERACTION_FRAME);
-                } else if viewport_interaction.hover_changed {
-                    ui.ctx().request_repaint_after(HOVER_FRAME);
-                }
-
-                let mut assigned_atom = None;
-                if let Some(index) = viewport_interaction.clicked_atom {
-                    let toggle = ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
-                    actions.push(AppAction::SelectAtom {
-                        atom_index: index,
-                        toggle,
-                    });
-                    if let Some(editor) = &mut ui_state.block_editor
-                        && editor.apply_picked_atom(index)
-                    {
-                        assigned_atom = Some(index);
+                if let Some(entry) = state.entries.active_entry() {
+                    let entry_id = entry.id;
+                    let ui_state = &mut state.ui;
+                    // During playback the viewport renders the trajectory's current
+                    // frame (the entry's topology with swapped coordinates) under a
+                    // dedicated structure id so the entry's own geometry cache is
+                    // untouched, with a fixed view so the camera doesn't drift.
+                    let playback = ui_state
+                        .trajectory
+                        .as_ref()
+                        .filter(|playback| playback.entry_id == entry_id);
+                    let (structure, structure_id, structure_revision, view_override) =
+                        if let Some(playback) = playback {
+                            (
+                                &playback.scratch,
+                                PLAYBACK_STRUCTURE_ID,
+                                playback.current_frame as u64,
+                                Some((playback.view_center, playback.view_radius)),
+                            )
+                        } else {
+                            (&entry.structure, entry_id, entry.revision, None)
+                        };
+                    let viewport_interaction = draw_viewport(
+                        ui,
+                        ViewportDrawArgs {
+                            structure,
+                            structure_id,
+                            structure_revision,
+                            camera: &mut ui_state.camera,
+                            selection: &ui_state.selection,
+                            visual_state: &ui_state.viewport,
+                            previous_hovered_atom: ui_state.hovered_atom,
+                            cache: &mut ui_state.viewport_cache,
+                            gpu_ready: ui_state.gpu_ready,
+                            empty_state_hint: None,
+                            view_override,
+                            background_corner_radius: crate::frontend::theme::radius::LARGE,
+                        },
+                    );
+                    if viewport_interaction.hover_changed {
+                        ui_state.hovered_atom = viewport_interaction.hovered_atom;
                     }
+                    if viewport_interaction.camera_changed || viewport_interaction.active_drag {
+                        ui.ctx().request_repaint_after(STRUCTURE_INTERACTION_FRAME);
+                    } else if viewport_interaction.hover_changed {
+                        ui.ctx().request_repaint_after(HOVER_FRAME);
+                    }
+
+                    let mut assigned_atom = None;
+                    if let Some(index) = viewport_interaction.clicked_atom {
+                        let toggle =
+                            ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
+                        actions.push(AppAction::SelectAtom {
+                            atom_index: index,
+                            toggle,
+                        });
+                        if let Some(editor) = &mut ui_state.block_editor
+                            && editor.apply_picked_atom(index)
+                        {
+                            assigned_atom = Some(index);
+                        }
+                    }
+                    if let Some(index) = assigned_atom {
+                        state.set_message(format!("Assigned atom {}", index + 1));
+                    }
+                } else if !state.workspace.is_project() && state.entries.tabs.is_empty() {
+                    render_scratch_workspace(state, ui, actions);
+                } else {
+                    let empty_structure = crate::domain::Structure::empty();
+                    let ui_state = &mut state.ui;
+                    let _ = draw_viewport(
+                        ui,
+                        ViewportDrawArgs {
+                            structure: &empty_structure,
+                            structure_id: 0,
+                            structure_revision: 0,
+                            camera: &mut ui_state.camera,
+                            selection: &ui_state.selection,
+                            visual_state: &ui_state.viewport,
+                            previous_hovered_atom: ui_state.hovered_atom,
+                            cache: &mut ui_state.viewport_cache,
+                            gpu_ready: ui_state.gpu_ready,
+                            empty_state_hint: state.entries.tabs.is_empty().then_some(
+                                "Open a structure from File > Open, or drag and drop one here.",
+                            ),
+                            view_override: None,
+                            background_corner_radius: crate::frontend::theme::radius::LARGE,
+                        },
+                    );
                 }
-                if let Some(index) = assigned_atom {
-                    state.set_message(format!("Assigned atom {}", index + 1));
-                }
-            } else if !state.workspace.is_project() && state.entries.tabs.is_empty() {
-                render_scratch_workspace(state, ui, actions);
-            } else {
-                let empty_structure = crate::domain::Structure::empty();
-                let ui_state = &mut state.ui;
-                let _ = draw_viewport(
-                    ui,
-                    ViewportDrawArgs {
-                        structure: &empty_structure,
-                        structure_id: 0,
-                        structure_revision: 0,
-                        camera: &mut ui_state.camera,
-                        selection: &ui_state.selection,
-                        visual_state: &ui_state.viewport,
-                        previous_hovered_atom: ui_state.hovered_atom,
-                        cache: &mut ui_state.viewport_cache,
-                        gpu_ready: ui_state.gpu_ready,
-                        empty_state_hint: state.entries.tabs.is_empty().then_some(
-                            "Open a structure from File > Open, or drag and drop one here.",
-                        ),
-                        view_override: None,
-                    },
-                );
-            }
+            });
         });
+}
+
+fn show_workspace_island(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {
+    const WORKSPACE_INSET: f32 = 10.0;
+
+    let outer = ui.available_rect_before_wrap();
+    let inset = WORKSPACE_INSET
+        .min(outer.width() * 0.5)
+        .min(outer.height() * 0.5);
+    let rect = outer.shrink(inset);
+    let radius = egui::CornerRadius::same(crate::frontend::theme::radius::LARGE);
+    let pal = crate::frontend::theme::palette(ui);
+
+    ui.painter().rect_filled(rect, radius, pal.viewport_bg);
+    let mut child = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect)
+            .layout(Layout::top_down(Align::Min)),
+    );
+    child.set_clip_rect(rect.intersect(ui.clip_rect()));
+    add(&mut child);
+    ui.advance_cursor_after_rect(outer);
 }
 
 /// Playback bar for an MD-output entry: a load button before the trajectory is
