@@ -15,7 +15,7 @@
 
 use eframe::egui::{self, RichText};
 
-use super::settings_registry::{Control, SettingCategory, SettingDescriptor};
+use super::settings_registry::{Control, SettingCategory, SettingDescriptor, caption_text};
 use crate::{
     backend::representation::{
         BaseStyle, RepresentationEdit, RepresentationGroup, SurfaceStylePref,
@@ -202,7 +202,7 @@ fn placeholder_block(ui: &mut egui::Ui, items: &[(&str, &str)]) {
     for (label, reason) in items {
         ui.add_space(2.0);
         ui.label(RichText::new(*label).color(pal.text_muted));
-        ui.label(RichText::new(*reason).small().color(pal.text_tertiary));
+        ui.label(caption_text(*reason, pal.text_muted));
     }
 }
 
@@ -259,20 +259,17 @@ fn render_base_intro(_state: &mut AppState, ui: &mut egui::Ui, _actions: &mut Ve
         "Ball & Stick — cylinders plus small atom spheres.",
         "Sphere — full van der Waals spheres, no bonds.",
     ] {
-        ui.label(RichText::new(line).small().color(pal.text_tertiary));
+        ui.label(caption_text(line, pal.text_muted));
     }
 }
 
 fn render_schemes_note(_state: &mut AppState, ui: &mut egui::Ui, _actions: &mut Vec<AppAction>) {
     let pal = crate::frontend::theme::palette(ui);
-    ui.label(
-        RichText::new(
-            "Molecular color schemes and custom colors are deferred — there is no \
-             color-scheme backend yet, so no live control is offered here.",
-        )
-        .small()
-        .color(pal.text_tertiary),
-    );
+    ui.label(caption_text(
+        "Molecular color schemes and custom colors are deferred — there is no \
+         color-scheme backend yet, so no live control is offered here.",
+        pal.text_muted,
+    ));
 }
 
 /// A group-scoped "Restore Defaults" button. The group can't be captured by a

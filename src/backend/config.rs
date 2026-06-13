@@ -40,12 +40,12 @@ impl ThemeMode {
 /// each user pick the palette they prefer rather than a single house style.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ColorScheme {
-    /// Warm ivory / charcoal neutrals, blue accent (the current house look).
-    #[default]
+    /// Warm ivory / charcoal neutrals, blue accent.
     Warm,
     /// Cool blue-gray neutrals, blue accent (SilicoLab's pre-overhaul palette).
     Cool,
-    /// Neutral graphite grays, blue accent.
+    /// Neutral graphite grays, blue accent (the default house look).
+    #[default]
     Graphite,
     /// Neutral graphite grays, green accent.
     Green,
@@ -199,8 +199,7 @@ pub struct AppConfig {
     #[serde(default)]
     pub theme: ThemeMode,
     /// Accent + neutral color scheme, applied on top of light/dark. Defaults to
-    /// `Warm`, so existing setups keep the current look until the user changes
-    /// it. See [`crate::frontend::theme::Palette::for_scheme`].
+    /// `Graphite`. See [`crate::frontend::theme::Palette::for_scheme`].
     #[serde(default)]
     pub color_scheme: ColorScheme,
     /// Apple-style frosted-glass (vibrancy) material on the window chrome.
@@ -411,8 +410,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        AppConfig, ColorScheme, ComputeTarget, RecentProject, RemoteHost, load_config_from,
-        remember_recent_project,
+        AppConfig, ColorScheme, ComputeTarget, RecentProject, RemoteHost, ThemeMode,
+        load_config_from, remember_recent_project,
     };
     use crate::engines::registry::EngineLaunch;
 
@@ -479,6 +478,14 @@ mod tests {
         let json = serde_json::to_string(&target).expect("serialize");
         let back: ComputeTarget = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(back, target);
+    }
+
+    #[test]
+    fn appearance_defaults_are_system_graphite() {
+        let config = AppConfig::default();
+
+        assert_eq!(config.theme, ThemeMode::System);
+        assert_eq!(config.color_scheme, ColorScheme::Graphite);
     }
 
     #[test]
