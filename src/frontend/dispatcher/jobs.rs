@@ -81,6 +81,11 @@ pub(crate) fn poll_self_update(state: &mut AppState, ctx: &egui::Context) {
 }
 
 pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
+    // Resolve the assistant key availability once (it reads the OS keychain), so
+    // the Chat tab's per-frame render reads a cached flag instead.
+    if state.ui.agent.key_available.is_none() {
+        crate::frontend::agent::refresh_key_status(state);
+    }
     poll_engine_job(state, ctx);
     poll_optimization_job(state, ctx);
     poll_qm_job(state, ctx);
@@ -88,6 +93,8 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     poll_update_check(state, ctx);
     poll_self_update(state, ctx);
     poll_remote_probe(state, ctx);
+    crate::frontend::agent::poll_agent_turn(state, ctx);
+    crate::frontend::agent::poll_agent_heavy(state, ctx);
 }
 
 /// Drain a finished Remote Hosts probe (passwordless check / GROMACS detect) and
