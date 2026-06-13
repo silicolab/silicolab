@@ -1,3 +1,4 @@
+use super::settings_registry::caption_text;
 use super::*;
 
 /// Maps a controller's fine-grained `theme` into the broader, user-facing
@@ -219,11 +220,7 @@ pub(crate) fn render_engine_settings(
         None => "Versions not checked yet — click Re-detect".to_string(),
     };
     let pal = crate::frontend::theme::palette(ui);
-    ui.label(
-        RichText::new(versions_caption)
-            .small()
-            .color(pal.text_tertiary),
-    );
+    ui.label(caption_text(versions_caption, pal.text_muted));
 
     let rows: Vec<EngineRowView> = registry
         .capabilities()
@@ -251,30 +248,21 @@ pub(crate) fn render_engine_settings(
             if row.built_in {
                 status_pill(ui, "Built-in", pal.blue_overlay(40), pal.accent);
             } else if row.available {
-                ui.label(
-                    RichText::new(format!(
-                        "{}  Detected",
-                        egui_phosphor::regular::CHECK_CIRCLE
-                    ))
-                    .small()
-                    .color(pal.status_green),
-                );
+                ui.label(caption_text(
+                    format!("{}  Detected", egui_phosphor::regular::CHECK_CIRCLE),
+                    pal.status_green,
+                ));
             } else {
-                ui.label(
-                    RichText::new(format!("{}  Not found", egui_phosphor::regular::X_CIRCLE))
-                        .small()
-                        .color(pal.text_muted),
-                );
+                ui.label(caption_text(
+                    format!("{}  Not found", egui_phosphor::regular::X_CIRCLE),
+                    pal.text_muted,
+                ));
             }
         });
         if let Some(version) = &row.version {
-            ui.label(RichText::new(format!("version {version}")).small());
+            ui.label(caption_text(format!("version {version}"), pal.text_muted));
         }
-        ui.label(
-            RichText::new(row.description)
-                .small()
-                .color(pal.text_tertiary),
-        );
+        ui.label(caption_text(row.description, pal.text_muted));
 
         if row.built_in {
             ui.add_space(6.0);
@@ -307,11 +295,10 @@ pub(crate) fn render_engine_settings(
                 egui::TextEdit::singleline(&mut draft.command_prefix).desired_width(f32::INFINITY),
             );
         });
-        ui.label(
-            RichText::new("e.g. `wsl.exe -e` to run inside WSL; leave blank for a native install")
-                .small()
-                .color(pal.text_tertiary),
-        );
+        ui.label(caption_text(
+            "e.g. `wsl.exe -e` to run inside WSL; leave blank for a native install",
+            pal.text_muted,
+        ));
         ui.horizontal(|ui| {
             ui.label("Program:");
             // Reserve the Browse button on the right and let the text field fill
@@ -354,37 +341,31 @@ fn remote_status_indicator(
     use crate::frontend::state::RemoteHostStatus;
     match status {
         RemoteHostStatus::Unknown => {
-            ui.label(RichText::new("Not checked").small().color(pal.text_muted));
+            ui.label(caption_text("Not checked", pal.text_muted));
         }
         RemoteHostStatus::Checking => {
-            ui.label(RichText::new("Checking…").small().color(pal.text_tertiary));
+            ui.label(caption_text("Checking…", pal.text_muted));
         }
         RemoteHostStatus::Ready => {
-            ui.label(
-                RichText::new(format!(
-                    "{}  Connected",
-                    egui_phosphor::regular::CHECK_CIRCLE
-                ))
-                .small()
-                .color(pal.status_green),
-            );
+            ui.label(caption_text(
+                format!("{}  Connected", egui_phosphor::regular::CHECK_CIRCLE),
+                pal.status_green,
+            ));
         }
         RemoteHostStatus::NeedsSetup => {
-            ui.label(
-                RichText::new(format!(
+            ui.label(caption_text(
+                format!(
                     "{}  Needs passwordless setup",
                     egui_phosphor::regular::WARNING
-                ))
-                .small()
-                .color(pal.text_muted),
-            );
+                ),
+                pal.text_muted,
+            ));
         }
         RemoteHostStatus::Unreachable(reason) => {
-            ui.label(
-                RichText::new(format!("{}  Unreachable", egui_phosphor::regular::X_CIRCLE))
-                    .small()
-                    .color(pal.text_muted),
-            )
+            ui.label(caption_text(
+                format!("{}  Unreachable", egui_phosphor::regular::X_CIRCLE),
+                pal.text_muted,
+            ))
             .on_hover_text(reason);
         }
     }
@@ -403,15 +384,12 @@ pub(crate) fn render_remote_hosts_settings(
     use crate::frontend::state::RemoteHostDraft;
 
     let pal = crate::frontend::theme::palette(ui);
-    ui.label(
-        RichText::new(
-            "Run external engines (GROMACS) on a remote host over SSH. Login is key-based — no \
+    ui.label(caption_text(
+        "Run external engines (GROMACS) on a remote host over SSH. Login is key-based — no \
              passwords are stored. Pick a host per task with the Compute selector in the Run/Build \
              panels.",
-        )
-        .small()
-        .color(pal.text_tertiary),
-    );
+        pal.text_muted,
+    ));
 
     // Owned, sorted (id, label) list so the loop doesn't borrow config while the
     // per-host draft is edited mutably.
@@ -424,11 +402,10 @@ pub(crate) fn render_remote_hosts_settings(
     hosts.sort_by_key(|host| host.1.to_lowercase());
 
     if hosts.is_empty() {
-        ui.label(
-            RichText::new("No remote hosts configured yet.")
-                .small()
-                .color(pal.text_muted),
-        );
+        ui.label(caption_text(
+            "No remote hosts configured yet.",
+            pal.text_muted,
+        ));
     }
 
     for (id, label) in &hosts {
@@ -474,11 +451,10 @@ pub(crate) fn render_remote_hosts_settings(
             remote_host_field(ui, "User:", &mut draft.username);
             remote_host_field(ui, "Port:", &mut draft.port);
             remote_host_field(ui, "Work dir:", &mut draft.work_root);
-            ui.label(
-                RichText::new("Setup commands (one per line, e.g. module load gromacs):")
-                    .small()
-                    .color(pal.text_tertiary),
-            );
+            ui.label(caption_text(
+                "Setup commands (one per line, e.g. module load gromacs):",
+                pal.text_muted,
+            ));
             ui.add(
                 egui::TextEdit::multiline(&mut draft.prelude)
                     .desired_rows(2)
@@ -487,11 +463,10 @@ pub(crate) fn render_remote_hosts_settings(
             remote_host_field(ui, "GROMACS path:", &mut draft.gmx_program);
         }
         if let Some(version) = &version {
-            ui.label(
-                RichText::new(format!("Detected GROMACS {version}"))
-                    .small()
-                    .color(pal.status_green),
-            );
+            ui.label(caption_text(
+                format!("Detected GROMACS {version}"),
+                pal.status_green,
+            ));
         }
 
         ui.horizontal(|ui| {
@@ -513,14 +488,11 @@ pub(crate) fn render_remote_hosts_settings(
         });
 
         if let Some(mut command) = bootstrap_cmd {
-            ui.label(
-                RichText::new(
-                    "Run this once on the remote host (paste into a terminal, or type \
+            ui.label(caption_text(
+                "Run this once on the remote host (paste into a terminal, or type \
                      `! <command>` in this prompt), then Verify:",
-                )
-                .small()
-                .color(pal.text_tertiary),
-            );
+                pal.text_muted,
+            ));
             ui.add(
                 egui::TextEdit::multiline(&mut command)
                     .desired_rows(2)
@@ -543,11 +515,10 @@ pub(crate) fn render_remote_hosts_settings(
     remote_host_field(ui, "User:", &mut draft.username);
     remote_host_field(ui, "Port:", &mut draft.port);
     remote_host_field(ui, "Work dir:", &mut draft.work_root);
-    ui.label(
-        RichText::new("Setup commands (one per line):")
-            .small()
-            .color(pal.text_tertiary),
-    );
+    ui.label(caption_text(
+        "Setup commands (one per line):",
+        pal.text_muted,
+    ));
     ui.add(
         egui::TextEdit::multiline(&mut draft.prelude)
             .desired_rows(2)

@@ -26,6 +26,12 @@ use crate::{
     frontend::{actions::AppAction, state::AppState},
 };
 
+pub(crate) const CAPTION_SIZE: f32 = 12.5;
+
+pub(crate) fn caption_text(text: impl Into<String>, color: egui::Color32) -> RichText {
+    RichText::new(text).size(CAPTION_SIZE).color(color)
+}
+
 /// Top-level grouping for the Settings panel. `General`, `Representation`,
 /// `Engines`, and `Tasks` are populated; `Advanced` carries the meta-settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -337,11 +343,10 @@ fn render_default_project_dir(
             actions.push(AppAction::PickDefaultProjectDir);
         }
     });
-    ui.label(
-        RichText::new(state.config.default_project_dir.display().to_string())
-            .small()
-            .color(pal.text_tertiary),
-    );
+    ui.label(caption_text(
+        state.config.default_project_dir.display().to_string(),
+        pal.text_muted,
+    ));
 }
 
 // --- Tasks group ---------------------------------------------------------- //
@@ -356,14 +361,11 @@ fn render_tasks_placeholder(
     _actions: &mut Vec<AppAction>,
 ) {
     let pal = crate::frontend::theme::palette(ui);
-    ui.label(
-        RichText::new(
-            "No configurable task preferences yet — background jobs run concurrently \
-             and each engine step uses a fixed timeout.",
-        )
-        .small()
-        .color(pal.text_tertiary),
-    );
+    ui.label(caption_text(
+        "No configurable task preferences yet — background jobs run concurrently \
+         and each engine step uses a fixed timeout.",
+        pal.text_muted,
+    ));
 }
 
 // --- Assistant ------------------------------------------------------------ //
@@ -647,11 +649,7 @@ fn render_settings_location(
             actions.push(AppAction::RevealSettingsFile);
         }
     });
-    ui.label(
-        RichText::new(path.display().to_string())
-            .small()
-            .color(pal.text_tertiary),
-    );
+    ui.label(caption_text(path.display().to_string(), pal.text_muted));
 }
 
 /// Reset-everything, gated behind an explicit inline confirmation so a single
@@ -1277,10 +1275,6 @@ fn render_descriptor_body(
     }
 
     if !descriptor.description.is_empty() {
-        ui.label(
-            RichText::new(descriptor.description)
-                .small()
-                .color(pal.text_tertiary),
-        );
+        ui.label(caption_text(descriptor.description, pal.text_muted));
     }
 }
