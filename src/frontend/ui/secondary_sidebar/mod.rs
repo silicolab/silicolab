@@ -76,10 +76,11 @@ pub(crate) fn render_secondary_sidebar_content(
                     let title = task.title.clone();
                     let active = state.tasks.active_panel == Some(*task_run_id);
                     Frame::group(ui.style())
-                        .stroke(Stroke::new(
-                            1.0,
-                            if active { pal.accent } else { pal.hairline },
-                        ))
+                        // The active task tab previously drew an accent-colored
+                        // (blue) outline; drop it so every tab uses the same
+                        // neutral hairline. The active tab still reads as active
+                        // via the selectable_label highlight below.
+                        .stroke(Stroke::new(1.0, pal.hairline))
                         .inner_margin(Margin::symmetric(6, 4))
                         .show(ui, |ui| {
                             ui.horizontal(|ui| {
