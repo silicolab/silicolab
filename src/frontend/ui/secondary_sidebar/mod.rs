@@ -10,11 +10,13 @@ use crate::{
 
 use super::{core_button_text_color, docked_sidebar_scroll_area, with_core_button_style};
 
+mod disorder;
 mod md_run;
 mod md_system;
 mod stage_detail;
 mod task_panels;
 
+pub(crate) use disorder::*;
 pub(crate) use md_run::*;
 pub(crate) use md_system::*;
 pub(crate) use stage_detail::*;
@@ -135,6 +137,7 @@ pub(crate) fn render_secondary_sidebar_content(
         TaskPanelKind::SupercellPrompt => render_supercell_task_panel(state, ui, actions),
         TaskPanelKind::ProteinPrepPrompt => render_protein_prep_task_panel(state, ui, actions),
         TaskPanelKind::MdSystemPrompt => render_md_system_task_panel(state, ui, actions),
+        TaskPanelKind::DisorderedSystemPrompt => render_disorder_task_panel(state, ui, actions),
         TaskPanelKind::MdRunPrompt => render_md_run_task_panel(state, ui, actions),
         TaskPanelKind::None => {
             ui.label("This task runs directly and does not need a panel.");

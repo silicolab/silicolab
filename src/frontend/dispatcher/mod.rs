@@ -53,6 +53,7 @@ use crate::{
 };
 
 mod builders;
+mod disorder;
 mod files;
 mod jobs;
 mod project;
@@ -63,6 +64,7 @@ mod sketch;
 mod tasks;
 
 pub(crate) use builders::*;
+pub(crate) use disorder::*;
 pub(crate) use files::*;
 pub(crate) use jobs::*;
 pub(crate) use project::*;
@@ -163,6 +165,77 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::ImportCustomForceFieldFile => import_custom_force_field_file(state),
         AppAction::StartMdRun => start_pending_md_run(state),
         AppAction::CancelMdRunPrompt => cancel_pending_md_run_request(state),
+        AppAction::StartDisorder => start_pending_disorder(state),
+        AppAction::CancelDisorderPrompt => cancel_pending_disorder_request(state),
+        AppAction::SetDisorderName(name) => with_disorder_prompt(state, |p| p.output_name = name),
+        AppAction::AddDisorderComponent(entry) => add_disorder_component(state, entry),
+        AppAction::RemoveDisorderComponent(index) => with_disorder_prompt(state, |p| {
+            if index < p.components.len() {
+                p.components.remove(index);
+            }
+        }),
+        AppAction::SetDisorderComponentEntry { index, entry_id } => {
+            with_disorder_prompt(state, |p| {
+                if let Some(component) = p.components.get_mut(index) {
+                    component.entry_id = entry_id;
+                }
+            })
+        }
+        AppAction::SetDisorderComponentCount { index, count } => with_disorder_prompt(state, |p| {
+            if let Some(component) = p.components.get_mut(index) {
+                component.count = count;
+            }
+        }),
+        AppAction::SetDisorderComponentAmount { index, value } => {
+            with_disorder_prompt(state, |p| {
+                if let Some(component) = p.components.get_mut(index) {
+                    component.amount_value = value;
+                }
+            })
+        }
+        AppAction::SetDisorderAmountMode(mode) => {
+            with_disorder_prompt(state, |p| p.amount_mode = mode)
+        }
+        AppAction::SetDisorderRegionKind(kind) => {
+            with_disorder_prompt(state, |p| p.region_kind = kind)
+        }
+        AppAction::SetDisorderBoxLength { axis, value } => with_disorder_prompt(state, |p| {
+            if axis < 3 {
+                p.box_lengths[axis] = value;
+            }
+        }),
+        AppAction::SetDisorderSphereRadius(radius) => {
+            with_disorder_prompt(state, |p| p.sphere_radius = radius)
+        }
+        AppAction::SetDisorderCylinder { radius, length } => with_disorder_prompt(state, |p| {
+            p.cyl_radius = radius;
+            p.cyl_length = length;
+        }),
+        AppAction::SetDisorderSense(outside) => {
+            with_disorder_prompt(state, |p| p.sense_outside = outside)
+        }
+        AppAction::SetDisorderTolerance(tolerance) => {
+            with_disorder_prompt(state, |p| p.tolerance_angstrom = tolerance)
+        }
+        AppAction::SetDisorderSeed(seed) => with_disorder_prompt(state, |p| p.seed = seed),
+        AppAction::RandomizeDisorderSeed => randomize_disorder_seed(state),
+        AppAction::SetDisorderObstacle(entry) => {
+            with_disorder_prompt(state, |p| p.obstacle_entry_id = entry)
+        }
+        AppAction::SetDisorderSetCell(on) => {
+            with_disorder_prompt(state, |p| p.set_cell_from_region = on)
+        }
+        AppAction::SetDisorderPeriodic(on) => with_disorder_prompt(state, |p| p.periodic = on),
+        AppAction::SetDisorderShowAdvanced(on) => {
+            with_disorder_prompt(state, |p| p.show_advanced = on)
+        }
+        AppAction::SetDisorderLimits {
+            max_restarts,
+            max_steps,
+        } => with_disorder_prompt(state, |p| {
+            p.max_restarts = max_restarts;
+            p.max_steps = max_steps;
+        }),
         AppAction::SetMdRunPreset(preset) => set_md_run_preset(state, preset),
         AppAction::SetMdRunOverride(axis, value) => set_md_run_override(state, axis, value),
         AppAction::SetMdRunTemperature(temperature) => {

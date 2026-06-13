@@ -88,6 +88,7 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     }
     poll_engine_job(state, ctx);
     poll_optimization_job(state, ctx);
+    poll_disorder_job(state, ctx);
     poll_qm_job(state, ctx);
     poll_trajectory_jobs(state, ctx);
     poll_update_check(state, ctx);

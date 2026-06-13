@@ -14,6 +14,7 @@ pub enum TaskKind {
     ExpandSupercell,
     PrepareProtein,
     BuildMdSystem,
+    BuildDisorderedSystem,
     AddHydrogens,
     RecomputeBonds,
     RunMd,
@@ -30,6 +31,7 @@ pub enum TaskPanelKind {
     SupercellPrompt,
     ProteinPrepPrompt,
     MdSystemPrompt,
+    DisorderedSystemPrompt,
     MdRunPrompt,
 }
 
@@ -264,6 +266,21 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         outcome: TaskOutcome::CreateEntry,
         backend: TaskBackend::InlineNative,
         uses_run_directory: true,
+    },
+    TaskController {
+        id: "build-disordered-system",
+        title: "Build Disordered System",
+        short_title: "Disordered System",
+        theme: "Molecular Dynamics",
+        method: "Randomized Packing",
+        application: "System Building",
+        description: "Pack copies of one or more molecules into a box, sphere, or cylinder without \
+                      clashes — liquids, mixtures, droplets, pores, or packing around a solute.",
+        kind: TaskKind::BuildDisorderedSystem,
+        panel: TaskPanelKind::DisorderedSystemPrompt,
+        outcome: TaskOutcome::CreateEntry,
+        backend: TaskBackend::BackgroundNative,
+        uses_run_directory: false,
     },
     TaskController {
         id: "add-hydrogens",
