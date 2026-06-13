@@ -82,6 +82,23 @@ and it is wrong to err in either direction. Routing genuinely per-frame values
 through dispatch bloats the action and undo machinery; letting persisted state
 skip dispatch silently breaks undo, replay, and save.
 
+### In-progress editor sessions
+
+A second, related case is an **in-progress editing session** that is not yet
+committed to the workspace: the structure editor (`StructureEditor`) and the 2D
+molecule sketcher (`SketcherState`), both held as `Option<…>` fields on
+`UiState`. These are not per-frame derived state — they live across frames and
+carry their own internal undo/redo — but the *draft* they hold is still
+transient: it is mutated directly by the rendering code as the user edits (drag
+an atom, draw a bond), and **only the committed result crosses
+`AppAction → dispatch`** (e.g. `ApplyStructureEdits`, `CommitSketch`, which
+build the new/edited entry through the normal entry machinery). The session's
+own undo stack is local to the session and is discarded when it closes; the
+workspace-level history only records the single committed change. Keep this
+shape for any future "draft then commit" editor: own the draft in `UiState`,
+mutate it directly while open, and route only open/commit/cancel through the
+dispatcher.
+
 ## Engine discovery is performance-sensitive
 
 `registry.rs::probe()` is cheap: it only checks `PATH` and configured overrides

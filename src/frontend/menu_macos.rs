@@ -194,6 +194,7 @@ impl MacMenu {
                     true,
                     accel(Modifiers::META, Code::KeyN),
                 ),
+                &MenuItem::with_id("file.sketch_molecule", "Sketch Molecule…", true, None),
                 &MenuItem::with_id(
                     "file.open_file",
                     "Open File…",
@@ -379,6 +380,7 @@ impl MacMenu {
             "file.save_project" => MenuCommand::Action(AppAction::SaveProject),
             "file.close_project" => MenuCommand::Action(AppAction::CloseProject),
             "file.new_entry" => MenuCommand::Action(AppAction::NewEmptyEntry),
+            "file.sketch_molecule" => MenuCommand::Action(AppAction::SketchMolecule),
             "file.open_file" => MenuCommand::Action(AppAction::OpenFile),
             "file.fetch_pdb" => MenuCommand::Action(AppAction::OpenPdbFetchDialog),
             "file.save" => MenuCommand::Action(AppAction::Save),

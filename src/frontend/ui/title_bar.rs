@@ -110,6 +110,10 @@ pub(crate) fn render_title_bar(
                         actions.push(AppAction::NewEmptyEntry);
                         ui.close();
                     }
+                    if ui.button("Sketch Molecule...").clicked() {
+                        actions.push(AppAction::SketchMolecule);
+                        ui.close();
+                    }
                     if ui.button("Open File...").clicked() {
                         actions.push(AppAction::OpenFile);
                         ui.close();

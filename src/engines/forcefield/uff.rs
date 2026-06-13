@@ -873,10 +873,15 @@ fn uff_type_for_atom(
         "H" => Ok("H_"),
         "C" if has_bond_type(atom_neighbors, BondType::Aromatic) => Ok("C_R"),
         "C" if has_bond_type(atom_neighbors, BondType::Triple) => Ok("C_1"),
+        // Two double bonds on one carbon means a cumulene/allene centre (also
+        // CO2, ketene, isocyanate): sp-hybridised and linear, not bent sp2.
+        "C" if count_bond_type(atom_neighbors, BondType::Double) >= 2 => Ok("C_1"),
         "C" if has_bond_type(atom_neighbors, BondType::Double) => Ok("C_2"),
         "C" => Ok("C_3"),
         "N" if has_bond_type(atom_neighbors, BondType::Aromatic) => Ok("N_R"),
         "N" if has_bond_type(atom_neighbors, BondType::Triple) => Ok("N_1"),
+        // Likewise a nitrogen with two double bonds (azide/diazo centre) is sp.
+        "N" if count_bond_type(atom_neighbors, BondType::Double) >= 2 => Ok("N_1"),
         "N" if has_bond_type(atom_neighbors, BondType::Double) => Ok("N_2"),
         "N" => Ok("N_3"),
         "O" if has_bond_type(atom_neighbors, BondType::Aromatic) => Ok("O_R"),
@@ -898,6 +903,10 @@ fn uff_type_for_atom(
 
 fn has_bond_type(neighbors: &[(usize, BondType)], bond_type: BondType) -> bool {
     neighbors.iter().any(|(_, ty)| *ty == bond_type)
+}
+
+fn count_bond_type(neighbors: &[(usize, BondType)], bond_type: BondType) -> usize {
+    neighbors.iter().filter(|(_, ty)| *ty == bond_type).count()
 }
 
 fn parameter_by_key(key: &str) -> Option<UffAtomParameters> {

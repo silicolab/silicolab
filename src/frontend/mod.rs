@@ -15,6 +15,7 @@ mod qm_commands;
 mod reticular_panel;
 mod selection;
 mod services;
+mod sketcher;
 mod state;
 mod structure_editor;
 mod structure_import;
@@ -35,6 +36,7 @@ pub use console::CommandConsoleState;
 pub use nanosheet_panel::NanosheetBuilderPanel;
 pub use reticular_panel::ReticularBuilderPanel;
 pub use selection::AtomSelection;
+pub use sketcher::SketcherState;
 pub use state::AtomStyle;
 pub use structure_editor::StructureEditor;
 pub use viewport::{

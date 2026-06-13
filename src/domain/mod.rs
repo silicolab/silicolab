@@ -1,6 +1,8 @@
 pub mod biopolymer;
 pub mod chemistry;
 pub mod nonbonded;
+pub mod sketch;
+pub mod smiles;
 pub mod structure;
 pub mod trajectory;
 
