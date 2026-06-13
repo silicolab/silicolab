@@ -63,17 +63,19 @@ impl PrimaryView {
 pub enum PanelTab {
     Output,
     Console,
+    Chat,
     TaskMonitor,
 }
 
 impl PanelTab {
     pub fn all() -> &'static [Self] {
-        &[Self::Console, Self::TaskMonitor, Self::Output]
+        &[Self::Console, Self::Chat, Self::TaskMonitor, Self::Output]
     }
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Console => "Console",
+            Self::Chat => "Chat",
             Self::TaskMonitor => "Task Monitor",
             Self::Output => "Output",
         }
@@ -1085,6 +1087,11 @@ pub struct UiState {
     /// triggered from the update badge), distinct from `available_update`
     /// which only records that a newer release *exists*.
     pub self_update: SelfUpdateStatus,
+    /// In-app LLM assistant session: neutral conversation history, the turn
+    /// state machine, the in-flight tool batch, and the Chat-tab transcript.
+    /// Like the editor sessions above it lives across frames; only the
+    /// dispatcher and the poll-driven loop mutate it.
+    pub agent: crate::frontend::agent::AgentSession,
 }
 
 /// Lifecycle of a user-initiated in-place update: idle until the user clicks
@@ -1148,6 +1155,7 @@ impl Default for UiState {
             available_update: None,
             text_viewer: None,
             self_update: SelfUpdateStatus::default(),
+            agent: crate::frontend::agent::AgentSession::default(),
         }
     }
 }

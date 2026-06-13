@@ -5,14 +5,18 @@
 //! the tool; in Move mode a secondary drag rotates. Undo snapshots are taken at
 //! the start of each mutating gesture or click.
 
-use eframe::egui::{Key, PointerButton, Pos2, Rect, Response, Ui};
+use eframe::egui::{Key, PointerButton, Pos2, Rect, Response, Ui, Vec2};
 use nalgebra::Point2;
 
 use super::{Gesture, SketchTool, SketcherState, placement};
 use crate::domain::{BondType, sketch::BOND_LENGTH};
+use crate::frontend::navigation;
 
 /// Picking radius in screen pixels.
 const PICK_PX: f32 = 14.0;
+
+/// Navigation tuning for the OS this binary targets (see [`navigation`]).
+const NAV_PROFILE: navigation::InputProfile = navigation::platform_profile();
 
 /// Everything the gesture logic needs about this frame's pointer.
 pub(super) struct Frame {
@@ -56,7 +60,8 @@ pub(super) fn handle(state: &mut SketcherState, response: &Response, ui: &Ui, fr
     }
 }
 
-/// Zoom on scroll (toward the pointer) and pan with middle / secondary drags.
+/// Pan with two-finger trackpad scroll or middle / secondary drags; zoom (toward
+/// the pointer) on mouse wheel, trackpad pinch, or Ctrl/Cmd + scroll.
 fn navigate(state: &mut SketcherState, response: &Response, ui: &Ui, frame: &Frame) {
     // Pan: middle drag in any tool, or secondary drag outside Move (where it
     // rotates instead).
@@ -69,14 +74,19 @@ fn navigate(state: &mut SketcherState, response: &Response, ui: &Ui, frame: &Fra
     if !response.hovered() {
         return;
     }
-    let scroll = ui.input(|input| input.smooth_scroll_delta.y);
-    if scroll.abs() > f32::EPSILON
+
+    // Trackpad two-finger scroll pans; wheel / pinch / Ctrl+scroll zoom. The
+    // device split is handled by `route_events`, shared with the 3D viewport.
+    let nav = ui.input(|input| navigation::route_events(&input.events, &NAV_PROFILE));
+    if nav.pan != Vec2::ZERO {
+        state.pan += nav.pan;
+    }
+    if (nav.zoom - 1.0).abs() > f32::EPSILON
         && let Some(pointer) = frame.pointer
     {
         // Keep the model point under the cursor fixed while zooming.
         let before = state.to_model(frame.rect, pointer);
-        let factor = (scroll * 0.0015).exp();
-        state.zoom = (state.zoom * factor).clamp(6.0, 200.0);
+        state.zoom = (state.zoom * nav.zoom).clamp(6.0, 200.0);
         let after = state.to_screen(frame.rect, before);
         state.pan += pointer - after;
     }

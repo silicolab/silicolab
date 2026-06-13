@@ -1,4 +1,5 @@
 mod actions;
+mod agent;
 mod app;
 mod block_editor;
 mod cli;
@@ -11,6 +12,7 @@ mod md_support;
 #[cfg(target_os = "macos")]
 mod menu_macos;
 mod nanosheet_panel;
+mod navigation;
 mod qm_commands;
 mod reticular_panel;
 mod selection;

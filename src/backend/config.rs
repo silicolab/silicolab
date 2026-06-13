@@ -130,6 +130,43 @@ pub struct RemoteHost {
     pub engine_versions: HashMap<String, String>,
 }
 
+/// Settings for the in-app LLM assistant. Holds only non-secret selection: the
+/// provider id, model, effort, and an optional `base_url` override for
+/// OpenAI-compatible providers. **The API key is never stored here** — it is read
+/// from the provider's environment variable at call time (see
+/// `frontend::agent::registry`), preserving the no-secrets-in-config invariant
+/// SSH already follows.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssistantConfig {
+    /// Whether the assistant is usable (the Chat tab still renders a hint when a
+    /// key is missing). On by default.
+    pub enabled: bool,
+    /// Active provider id, keyed into `frontend::agent::registry::PROVIDERS`.
+    pub provider: String,
+    /// Active model id within the selected provider.
+    pub model: String,
+    /// Reasoning effort; adapters map or drop it per model capability.
+    pub effort: crate::io::llm::types::Effort,
+    /// Base-URL override for OpenAI-compatible providers. `None` uses
+    /// the provider's registry default. Non-secret.
+    #[serde(default)]
+    pub base_url: Option<String>,
+}
+
+impl Default for AssistantConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            provider: "anthropic".to_string(),
+            // Sonnet 4.6: cheaper/faster than Opus, very strong tool use — the
+            // recommended default driver (Opus 4.8 remains selectable).
+            model: "claude-sonnet-4-6".to_string(),
+            effort: crate::io::llm::types::Effort::High,
+            base_url: None,
+        }
+    }
+}
+
 fn default_ssh_port() -> u16 {
     22
 }
@@ -197,6 +234,10 @@ pub struct AppConfig {
     /// before this field existed fails to parse and falls back to
     /// `AppConfig::default()` once. See [`crate::backend::representation`].
     pub representation: RepresentationPrefs,
+    /// In-app LLM assistant selection (provider/model/effort). Never stores the
+    /// API key. `#[serde(default)]` so an older `settings.json` still parses.
+    #[serde(default)]
+    pub assistant: AssistantConfig,
 }
 
 fn default_glass() -> bool {
@@ -259,6 +300,7 @@ impl Default for AppConfig {
             check_updates: default_check_updates(),
             auto_install_updates: default_auto_install_updates(),
             representation: RepresentationPrefs::default(),
+            assistant: AssistantConfig::default(),
         }
     }
 }

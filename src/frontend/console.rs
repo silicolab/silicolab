@@ -1069,6 +1069,50 @@ fn is_valid_variable_name(name: &str) -> bool {
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '_')
 }
 
+/// The full `.sls` command catalog with examples — the static, cacheable system
+/// prompt for the in-app assistant. Kept here (next to the dispatch it
+/// documents) so it stays in step as commands change; never include volatile
+/// per-turn state here (that flows through the agent's `inspect` tool).
+pub fn command_catalog() -> String {
+    [
+        "SilicoLab `.sls` command catalog. One command per `run_command` call.",
+        "",
+        "Loading structures:",
+        "  open <path>                 Load a structure file (.pdb/.cif/.xyz/.mol2/.gro) as a new entry.",
+        "  fetch <pdb-id>              Download a structure by PDB id (e.g. `fetch 4hhb`).",
+        "    [--db <base-url>] [--dir <directory>]",
+        "  sketch <SMILES>             Build a 3D structure from SMILES (e.g. `sketch CCO`).",
+        "",
+        "Viewport (per active entry; add `--global` to apply project-wide):",
+        "  view background <color>     Named color or #rrggbb (e.g. `view background white`).",
+        "  view cell on|off            Show/hide the unit cell.",
+        "  view water on|off           Show/hide solvent.",
+        "  view light soft|gentle|studio",
+        "  view silhouette on|off [--width n]",
+        "  representation <style>      cartoon | ball-stick | stick | wireframe | sphere | dots | hidden.",
+        "  cartoon helix|sheet|coil --width n --thickness n",
+        "  cartoon smoothing n; cartoon profile n",
+        "  color chain <id> <color>; color ions <color>; color hetero",
+        "  surface chain <id>; surface style fill|mesh; surface transparency <0-100>; surface clear",
+        "  show ions [--within 3.5]",
+        "",
+        "Editing (gated — the user confirms before these run):",
+        "  hydrogen add                Add missing hydrogens to the active structure.",
+        "  delete chain <A,B,...>      Delete the listed chains.",
+        "  save image <path.png>       Render the viewport to a PNG.",
+        "  save view <path.sls>        Save the current view as a replayable script.",
+        "",
+        "Simulation (gated — minutes/GPU):",
+        "  md build                    Box + capture topology for the active structure.",
+        "  md simulate [--time 1ns] [--temperature 300] [--no-relax]",
+        "  qm energy|optimize|freq [--method b3lyp] [--basis def2-svp] [--charge 0] [--spin 1]",
+        "",
+        "Tips: render commands target the active entry unless given `--global`. Call `inspect` \
+         first when you are unsure what is loaded.",
+    ]
+    .join("\n")
+}
+
 fn help_text() -> String {
     [
         "commands:",

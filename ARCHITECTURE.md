@@ -28,7 +28,7 @@ higher one:
 
 ```
 domain/    pure data, no UI or IO
-  → io/        file formats
+  → io/        file formats + outbound transport (PDB fetch, update check, LLM)
   → backend/   persistence
   → engines/   compute
   → workflows/ composed operations
