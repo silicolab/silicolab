@@ -200,6 +200,64 @@ fn mark_dirty(state: &mut AppState, ui: &egui::Ui) {
     state.mark_layout_dirty(now);
 }
 
+/// The in-window reveal handle for a collapsed-but-non-empty dock area: a thin
+/// clickable strip drawn in place of the hidden area (an up caret + the panel's
+/// name along the bottom edge, a left caret along the right edge). Clicking it
+/// reopens the area. This is the always-present counterpart to the "Hide" caret,
+/// so a collapsed Console/Assistant can be brought back without the native menu
+/// bar (absent on macOS title bars) or a tab drag. The caller wraps it in the
+/// thin panel that reserves the strip's space.
+pub(super) fn render_dock_collapsed_handle(
+    state: &AppState,
+    ui: &mut egui::Ui,
+    area: DockArea,
+    actions: &mut Vec<AppAction>,
+) {
+    let pal = crate::frontend::theme::palette(ui);
+    let label = collapsed_area_label(state, area);
+    let caret = match area {
+        DockArea::Bottom => egui_phosphor::regular::CARET_UP,
+        DockArea::Right => egui_phosphor::regular::CARET_LEFT,
+    };
+    // The bottom strip is wide enough to name what reopens; the right strip is a
+    // narrow column, so it shows just the caret with the name on hover.
+    let text = match area {
+        DockArea::Bottom => format!("{caret}  {label}"),
+        DockArea::Right => caret.to_string(),
+    };
+    let size = egui::vec2(ui.available_width(), ui.available_height());
+    let clicked = with_core_button_style(ui, false, |ui| {
+        ui.add_sized(
+            size,
+            Button::new(RichText::new(text).color(core_button_text_color(&pal, false))),
+        )
+    })
+    .on_hover_text(format!("Show {label}"))
+    .clicked();
+    if clicked {
+        actions.push(AppAction::ToggleDockArea(area));
+    }
+}
+
+/// Name of the panel a collapsed area would reopen to — its active tab (or the
+/// first tab), so the reveal handle reads "Assistant" / "Console" rather than a
+/// generic label. Falls back to "Panel" for the (unreachable here) empty case.
+fn collapsed_area_label(state: &AppState, area: DockArea) -> String {
+    let area_state = state.ui.layout.dock.area(area);
+    let tab = area_state
+        .active
+        .or_else(|| area_state.tabs.first().copied());
+    match tab {
+        Some(DockTab::Static(view)) => view.label().to_string(),
+        Some(DockTab::Task(id)) => state
+            .tasks
+            .task_run(id)
+            .map(|task| task.title.clone())
+            .unwrap_or_else(|| "Panel".to_string()),
+        None => "Panel".to_string(),
+    }
+}
+
 /// Render one tab's button (and, for a task tab, a trailing close affordance).
 /// Returns the button's response (for click-to-activate) and whether the close
 /// affordance was clicked.
