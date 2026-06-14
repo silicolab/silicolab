@@ -394,7 +394,7 @@ fn render_assistant_settings(
              directly; the API key is read from its environment variable, else the app key \
              store — never settings.json.",
         )
-        .small()
+        .size(CAPTION_SIZE)
         .color(pal.text_tertiary),
     );
     ui.add_space(6.0);
@@ -477,14 +477,14 @@ fn render_assistant_settings(
         ModelFetchStatus::Error(reason) => {
             ui.label(
                 RichText::new(format!("{}  {reason}", egui_phosphor::regular::WARNING))
-                    .small()
+                    .size(CAPTION_SIZE)
                     .color(pal.status_amber),
             );
         }
         ModelFetchStatus::Idle if !fetched.is_empty() => {
             ui.label(
                 RichText::new(format!("{} models listed live.", fetched.len()))
-                    .small()
+                    .size(CAPTION_SIZE)
                     .color(pal.text_tertiary),
             );
         }
@@ -492,7 +492,7 @@ fn render_assistant_settings(
     }
     ui.label(
         RichText::new("Live list from the provider; offline keeps the built-in list.")
-            .small()
+            .size(CAPTION_SIZE)
             .color(pal.text_tertiary),
     );
 
@@ -552,7 +552,7 @@ fn render_assistant_settings(
     if !caps.supports_effort {
         ui.label(
             RichText::new("This model does not use a reasoning-effort setting.")
-                .small()
+                .size(CAPTION_SIZE)
                 .color(pal.text_tertiary),
         );
     }
@@ -562,7 +562,7 @@ fn render_assistant_settings(
     if provider.key_env.is_empty() {
         ui.label(
             RichText::new("This provider needs no API key.")
-                .small()
+                .size(CAPTION_SIZE)
                 .color(pal.text_tertiary),
         );
         return;
@@ -592,7 +592,7 @@ fn render_assistant_settings(
     };
     ui.label(
         RichText::new(format!("{icon}  {text}"))
-            .small()
+            .size(CAPTION_SIZE)
             .color(color),
     );
 
@@ -626,7 +626,7 @@ fn render_assistant_settings(
             "Stored in an app-managed file in ~/.silicolab (not settings.json; obfuscated at \
              rest, which is not encryption). The environment variable takes precedence when set.",
         )
-        .small()
+        .size(CAPTION_SIZE)
         .color(pal.text_tertiary),
     );
 
@@ -653,7 +653,7 @@ fn render_stored_keys_overview(
     if stored.is_empty() {
         ui.label(
             RichText::new("No keys configured yet.")
-                .small()
+                .size(CAPTION_SIZE)
                 .color(pal.text_tertiary),
         );
         return;
@@ -666,12 +666,16 @@ fn render_stored_keys_overview(
                 registry::KeySource::Env => {
                     ui.label(
                         RichText::new(format!("from {} — managed outside the app", spec.key_env))
-                            .small()
+                            .size(CAPTION_SIZE)
                             .color(pal.text_tertiary),
                     );
                 }
                 registry::KeySource::File => {
-                    ui.label(RichText::new("stored").small().color(pal.status_green));
+                    ui.label(
+                        RichText::new("stored")
+                            .size(CAPTION_SIZE)
+                            .color(pal.status_green),
+                    );
                     if ui.button("Remove").clicked() {
                         actions.push(AppAction::ClearStoredKey(spec.id.to_string()));
                     }
