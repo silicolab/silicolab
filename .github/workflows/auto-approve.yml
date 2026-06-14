@@ -1,0 +1,30 @@
+name: Auto-approve
+
+# Satisfies the "require 1 approval" rule on main for PRs you open yourself, so
+# auto-merge can complete without a second person. Collaborators are unaffected:
+# github-actions[bot] only approves PRs authored by the repo owner (nmrtist).
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  approve:
+    name: Auto-approve own PR
+    # Only the owner's non-draft PRs. The bot is a distinct identity from the
+    # author, so it is allowed to approve (you cannot approve your own PR).
+    if: >-
+      github.event.pull_request.user.login == 'nmrtist' &&
+      github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Approve as github-actions[bot]
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        # dismiss_stale_reviews_on_push drops this approval on every push; the
+        # `synchronize` trigger re-runs the job to re-approve the new head.
+        run: gh pr review --approve "$PR_URL"
