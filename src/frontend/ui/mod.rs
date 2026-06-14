@@ -18,7 +18,9 @@ use crate::{
     },
 };
 
+mod about;
 mod bottom_panel;
+mod modal;
 mod secondary_sidebar;
 mod settings_modal;
 // Reachable from `state.rs` (which stores `SettingCategory` in `SettingsState`),
@@ -399,4 +401,5 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
     render_pdb_fetch_window(state, actions, &ctx);
     render_text_viewer_window(state, &ctx);
     settings_modal::show(state, &ctx, actions);
+    about::show(state, &ctx, actions);
 }

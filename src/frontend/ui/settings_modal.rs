@@ -12,7 +12,7 @@
 //! the dialog opens or closes, so there is nothing for the dispatcher to
 //! mediate. Every *value* change inside still flows through `AppAction`.
 
-use eframe::egui::{self, Align, Color32, Layout, RichText, Sense, UiBuilder};
+use eframe::egui::{self, Align, Layout, RichText};
 
 use super::settings_registry;
 use crate::frontend::{actions::AppAction, state::AppState};
@@ -31,7 +31,7 @@ pub fn show(state: &mut AppState, ctx: &egui::Context, actions: &mut Vec<AppActi
         return;
     }
 
-    render_backdrop(state, ctx);
+    super::modal::render_backdrop(state, ctx, "settings_modal_backdrop");
 
     let mut close = false;
 
@@ -45,7 +45,15 @@ pub fn show(state: &mut AppState, ctx: &egui::Context, actions: &mut Vec<AppActi
         .resizable(false)
         .collapsible(false)
         .order(egui::Order::Foreground)
-        .frame(settings_window_frame(ctx))
+        .frame(super::modal::window_frame(
+            ctx,
+            egui::Margin {
+                left: FRAME_MARGIN,
+                right: FRAME_RIGHT_MARGIN,
+                top: FRAME_MARGIN,
+                bottom: FRAME_MARGIN,
+            },
+        ))
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
@@ -114,69 +122,6 @@ pub fn show(state: &mut AppState, ctx: &egui::Context, actions: &mut Vec<AppActi
 
     if close || ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
         state.ui.layout.settings_open = false;
-    }
-}
-
-fn settings_window_frame(ctx: &egui::Context) -> egui::Frame {
-    let style = ctx.global_style();
-    let dark = style.visuals.dark_mode;
-    let shadow_color = if dark {
-        Color32::from_black_alpha(105)
-    } else {
-        Color32::from_black_alpha(55)
-    };
-    let stroke_color = if dark {
-        Color32::from_white_alpha(28)
-    } else {
-        Color32::from_black_alpha(22)
-    };
-
-    egui::Frame::window(&style)
-        .inner_margin(egui::Margin {
-            left: FRAME_MARGIN,
-            right: FRAME_RIGHT_MARGIN,
-            top: FRAME_MARGIN,
-            bottom: FRAME_MARGIN,
-        })
-        .outer_margin(egui::Margin::same(18))
-        .corner_radius(egui::CornerRadius::same(
-            crate::frontend::theme::radius::MODAL,
-        ))
-        .stroke(egui::Stroke::new(1.0, stroke_color))
-        .shadow(egui::Shadow {
-            offset: [0, 8],
-            blur: 24,
-            spread: 0,
-            color: shadow_color,
-        })
-}
-
-fn render_backdrop(state: &AppState, ctx: &egui::Context) {
-    egui::Area::new(egui::Id::new("settings_modal_backdrop"))
-        .order(egui::Order::Foreground)
-        .interactable(true)
-        .show(ctx, |ui| {
-            let rect = ui.ctx().content_rect();
-            let mut backdrop = ui.new_child(
-                UiBuilder::new()
-                    .sense(Sense::CLICK | Sense::DRAG)
-                    .max_rect(rect),
-            );
-            backdrop.set_min_size(rect.size());
-
-            ui.painter()
-                .rect_filled(rect, 0.0, settings_backdrop_tint(state, ctx));
-            let _ = backdrop.response();
-        });
-}
-
-fn settings_backdrop_tint(state: &AppState, ctx: &egui::Context) -> Color32 {
-    let dark = ctx.global_style().visuals.dark_mode;
-    match (state.ui.glass_active, dark) {
-        (true, true) => Color32::from_black_alpha(34),
-        (true, false) => Color32::from_white_alpha(42),
-        (false, true) => Color32::from_black_alpha(78),
-        (false, false) => Color32::from_white_alpha(92),
     }
 }
 

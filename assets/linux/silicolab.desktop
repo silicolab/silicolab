@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=SilicoLab
+GenericName=Computational Chemistry Environment
+Comment=Computational environment for chemistry, biology & materials research
+Exec=silicolab %F
+Icon=silicolab
+Terminal=false
+Categories=Science;Education;Chemistry;

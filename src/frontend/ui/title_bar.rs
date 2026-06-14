@@ -237,6 +237,12 @@ pub(crate) fn render_title_bar(
                         }
                     });
                 });
+                ui.menu_button(RichText::new("Help").color(title_color), |ui| {
+                    if ui.button("About SilicoLab").clicked() {
+                        state.ui.layout.about_open = true;
+                        ui.close();
+                    }
+                });
             });
 
             // The former "Style" menu lived here; its controls now belong to the

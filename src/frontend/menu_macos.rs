@@ -23,9 +23,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use eframe::egui;
 use muda::accelerator::{Accelerator, Code, Modifiers};
-use muda::{
-    AboutMetadata, CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu,
-};
+use muda::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use objc2_foundation::{NSProcessInfo, NSString};
 
 use crate::backend::config::{ColorScheme, ThemeMode};
@@ -41,6 +39,7 @@ use crate::frontend::state::AppState;
 /// which `ARCHITECTURE.md` explicitly exempts from the dispatcher.
 pub enum MenuCommand {
     Action(AppAction),
+    ShowAbout,
     ToggleSettings,
     TogglePrimarySidebar,
     ToggleSecondarySidebar,
@@ -126,14 +125,7 @@ impl MacMenu {
         // --- Application menu (must be the first submenu: muda promotes it to
         // the macOS app menu) ---
         let app_menu = Submenu::new("SilicoLab", true);
-        let about = PredefinedMenuItem::about(
-            Some("About SilicoLab"),
-            Some(AboutMetadata {
-                name: Some("SilicoLab".to_owned()),
-                version: Some(env!("CARGO_PKG_VERSION").to_owned()),
-                ..Default::default()
-            }),
-        );
+        let about = MenuItem::with_id("app.about", "About SilicoLab", true, None);
         let settings = MenuItem::with_id(
             "app.settings",
             "Settings…",
@@ -376,6 +368,7 @@ impl MacMenu {
     fn map_id(&self, id: &MenuId) -> Option<MenuCommand> {
         let id = id.as_ref();
         let command = match id {
+            "app.about" => MenuCommand::ShowAbout,
             "app.settings" => MenuCommand::ToggleSettings,
             "app.quit" => MenuCommand::Quit,
             "file.new_project" => MenuCommand::Action(AppAction::CreateProject),

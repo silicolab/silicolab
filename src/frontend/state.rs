@@ -121,6 +121,10 @@ pub struct LayoutState {
     /// no persisted state changes when it toggles, so there is nothing for the
     /// dispatcher to mediate.
     pub settings_open: bool,
+    /// Whether the custom About window is open. Transient chrome like
+    /// `settings_open`: flipped directly by the menu entry points, never
+    /// persisted, so the dispatcher does not mediate it.
+    pub about_open: bool,
     pub primary_sidebar_width: f32,
     pub secondary_sidebar_width: f32,
     pub panel_height: f32,
@@ -150,6 +154,7 @@ impl Default for LayoutState {
             show_secondary_sidebar: false,
             show_panel: true,
             settings_open: false,
+            about_open: false,
             primary_sidebar_width: SIDEBAR_DEFAULT_WIDTH_PRIMARY,
             secondary_sidebar_width: SIDEBAR_DEFAULT_WIDTH_SECONDARY,
             panel_height: PANEL_DEFAULT_HEIGHT,
