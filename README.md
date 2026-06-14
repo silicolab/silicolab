@@ -1,9 +1,13 @@
-<p align="center">
-  <img src="assets/icon/window-256.png" width="128" alt="SilicoLab icon">
+<p align="left">
+  <img src="assets/icon/window-256.png" alt="" height="42" align="middle">
+  &nbsp;&nbsp;
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-dark.svg">
+    <img src="assets/brand/wordmark-light.svg" alt="SilicoLab" height="44" align="middle">
+  </picture>
 </p>
 
-<h1 align="center">SilicoLab</h1>
-<p align="center"><em>Computational environment for chemistry, biology &amp; materials research.</em></p>
+<p align="left"><em>Computational environment for chemistry, biology &amp; materials research.</em></p>
 
 ![SilicoLab screenshot](docs/images/main-window.png)
 

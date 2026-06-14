@@ -8,6 +8,10 @@ fn main() {
     // cross-compilation (the icon is silently skipped, or the crate is missing
     // entirely). `CARGO_CFG_TARGET_OS` reflects what we're building *for*.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        // Re-run (and re-embed) when the icon changes; without this Cargo only
+        // tracks build.rs itself, so editing the .ico alone leaves the old icon
+        // baked into the executable until a `cargo clean`.
+        println!("cargo:rerun-if-changed=assets/icon/silicolab.ico");
         let mut res = winresource::WindowsResource::new();
         res.set_icon("assets/icon/silicolab.ico");
         if let Err(error) = res.compile() {
