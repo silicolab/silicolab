@@ -21,6 +21,11 @@ pub fn flush_pending_autosave(state: &mut AppState, ctx: &egui::Context) {
 /// undo history) and release the session lock so the next launch knows the
 /// session ended cleanly. Skips database compaction to keep exit responsive.
 pub fn shutdown(state: &mut AppState) {
+    // The workbench layout is a global preference (persisted even in a scratch
+    // workspace), so flush any pending layout save before the project-only gate.
+    if state.layout_save_deadline().is_some() {
+        persist_layout(state);
+    }
     if !state.workspace.is_project() {
         return;
     }
@@ -70,6 +75,10 @@ pub(crate) fn reset_transient_state(state: &mut AppState) {
     state.ui.hovered_atom = None;
     state.ui.viewport_cache.clear();
     state.active_task_run = None;
+    // Task tabs belong to the project's task runs; drop them so a closed/switched
+    // project doesn't leave stale (and unreachable) task tabs docked. Fixed-view
+    // placement is untouched.
+    state.ui.layout.dock.clear_task_tabs();
 }
 
 pub(crate) fn replace_workspace_from_project(

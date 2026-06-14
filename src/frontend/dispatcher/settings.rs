@@ -266,46 +266,18 @@ pub(crate) fn open_remote_hosts_settings(state: &mut AppState) {
         crate::frontend::ui::settings_registry::SettingCategory::Engines;
 }
 
-pub(crate) fn resize_sidebar(state: &mut AppState, side: Side, delta: f32, ctx: &egui::Context) {
+/// Resize the primary (left) sidebar. The right sidebar and bottom panel are
+/// dock areas now and resize via `dock::resize_area`.
+pub(crate) fn resize_sidebar(state: &mut AppState, delta: f32, ctx: &egui::Context) {
     let max_w = sidebar_max_width(ctx.viewport_rect().width());
-    let (width, min) = match side {
-        Side::Primary => (
-            &mut state.ui.layout.primary_sidebar_width,
-            SIDEBAR_MIN_WIDTH_PRIMARY,
-        ),
-        Side::Secondary => (
-            &mut state.ui.layout.secondary_sidebar_width,
-            SIDEBAR_MIN_WIDTH_SECONDARY,
-        ),
-    };
-    *width = (*width + delta).clamp(min, max_w);
+    let width = &mut state.ui.layout.primary_sidebar_width;
+    *width = (*width + delta).clamp(SIDEBAR_MIN_WIDTH_PRIMARY, max_w);
 }
 
-pub(crate) fn reset_sidebar(state: &mut AppState, side: Side, ctx: &egui::Context) {
+pub(crate) fn reset_sidebar(state: &mut AppState, ctx: &egui::Context) {
     let max_w = sidebar_max_width(ctx.viewport_rect().width());
-    let (width, min, default) = match side {
-        Side::Primary => (
-            &mut state.ui.layout.primary_sidebar_width,
-            SIDEBAR_MIN_WIDTH_PRIMARY,
-            SIDEBAR_DEFAULT_WIDTH_PRIMARY,
-        ),
-        Side::Secondary => (
-            &mut state.ui.layout.secondary_sidebar_width,
-            SIDEBAR_MIN_WIDTH_SECONDARY,
-            SIDEBAR_DEFAULT_WIDTH_SECONDARY,
-        ),
-    };
-    *width = default.clamp(min, max_w);
-}
-
-pub(crate) fn resize_panel(state: &mut AppState, delta: f32, ctx: &egui::Context) {
-    let max_h = (ctx.viewport_rect().height() * 0.6).max(160.0);
-    state.ui.layout.panel_height =
-        (state.ui.layout.panel_height + delta).clamp(PANEL_MIN_HEIGHT, max_h);
-}
-
-pub(crate) fn reset_panel(state: &mut AppState) {
-    state.ui.layout.panel_height = PANEL_DEFAULT_HEIGHT;
+    state.ui.layout.primary_sidebar_width =
+        SIDEBAR_DEFAULT_WIDTH_PRIMARY.clamp(SIDEBAR_MIN_WIDTH_PRIMARY, max_w);
 }
 
 /// Persist the frosted-glass preference. The clear color and chrome fills read

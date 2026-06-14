@@ -401,8 +401,13 @@ pub(crate) fn render_md_run_task_panel(
             .button(format!("{}  Show Output", egui_phosphor::regular::TERMINAL))
             .clicked()
         {
-            state.ui.layout.show_panel = true;
-            state.ui.layout.active_panel_tab = PanelTab::Output;
+            state
+                .ui
+                .layout
+                .dock
+                .reveal_static(crate::frontend::state::StaticView::Output);
+            let now = ui.input(|input| input.time);
+            state.mark_layout_dirty(now);
         }
     } else {
         ui.label("MD configuration is unavailable.");

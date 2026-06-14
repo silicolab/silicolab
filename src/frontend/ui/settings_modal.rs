@@ -5,7 +5,7 @@
 //! covered. The body is generated from the schema-driven [`settings_registry`]:
 //! a two-pane layout with a category rail on the left and the selected
 //! category's groups on the right, plus a search box that flattens matches
-//! across every category (VSCode-style).
+//! across every category.
 //!
 //! Like the other transient chrome flags, `settings_open` is flipped directly
 //! by the entry points and here on dismissal — no persisted state changes when

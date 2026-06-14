@@ -6,11 +6,11 @@ use crate::frontend::{
     ViewportDrawArgs,
     actions::AppAction,
     draw_viewport,
-    state::AppState,
+    state::{AppState, DockArea},
     viewport::{HOVER_FRAME, STRUCTURE_INTERACTION_FRAME},
 };
 
-use super::bottom_panel::render_bottom_panel;
+use super::dock::render_dock_area;
 
 /// Structure id used for the viewport's geometry cache while a trajectory is
 /// playing. `u64::MAX` cannot collide with a real entry id, so playback never
@@ -22,22 +22,24 @@ pub(super) fn render_workspace(
     ui: &mut egui::Ui,
     actions: &mut Vec<AppAction>,
 ) {
-    if state.ui.layout.show_panel {
-        // Fixed height + driven by our own `panel_height`: egui 0.34's resizable
-        // `Panel` persists the framed content rect as the next frame's size, and
-        // with fill content that feeds back into a few-pixel-per-frame growth
-        // that runs away on continuous repaints. `exact_size` pins the height so
-        // it can't drift; the divider is resized by a custom handle (see
-        // `show_workbench`) that writes `panel_height`, matching the sidebars.
+    if state.ui.layout.dock.is_visible(DockArea::Bottom) {
+        // Fixed height + driven by our own `dock.bottom_height`: egui 0.34's
+        // resizable `Panel` persists the framed content rect as the next frame's
+        // size, and with fill content that feeds back into a few-pixel-per-frame
+        // growth that runs away on continuous repaints. `exact_size` pins the
+        // height so it can't drift; the divider is resized by a custom handle (see
+        // `show_workbench`) that writes `dock.bottom_height`, matching the sidebars.
         egui::Panel::bottom("bottom_panel")
-            .exact_size(state.ui.layout.panel_height)
+            .exact_size(state.ui.layout.dock.bottom_height)
             .show_separator_line(false)
             .frame(
                 Frame::default()
                     .fill(crate::frontend::theme::palette(ui).sidebar)
                     .inner_margin(Margin::symmetric(10, 8)),
             )
-            .show_inside(ui, |ui| render_bottom_panel(state, ui, actions));
+            .show_inside(ui, |ui| {
+                render_dock_area(state, ui, DockArea::Bottom, actions)
+            });
     }
 
     egui::CentralPanel::default()

@@ -1,4 +1,4 @@
-//! Schema-driven settings registry (VSCode-style).
+//! Schema-driven settings registry.
 //!
 //! Each user setting is described once as a [`SettingDescriptor`] and the
 //! Settings UI is *generated* from those descriptors rather than hand-coded per
@@ -1086,7 +1086,7 @@ pub fn render_category(
 
 /// Render a flat list of every setting matching `search` (non-empty,
 /// lower-cased) across all categories, with category labels as section
-/// separators (VSCode's search behaviour — the selected category is ignored).
+/// separators (a flat cross-category search — the selected category is ignored).
 pub fn render_search_results(
     state: &mut AppState,
     ui: &mut egui::Ui,

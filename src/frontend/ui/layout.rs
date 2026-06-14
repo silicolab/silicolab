@@ -196,10 +196,11 @@ pub(crate) enum DividerEffect {
     Reset,
 }
 
-/// Interactive resize handle for a panel divider, Claude-style: a faint hairline
-/// at rest that fades into a soft, theme-inverting indicator bar as the pointer
-/// nears it (within `DIVIDER_PROXIMITY_RADIUS`) — hinting that the edge is
-/// draggable without the harsh full-height line egui's native resize paints.
+/// Interactive resize handle for a panel divider — a discreet, proximity-revealed
+/// indicator: a faint hairline at rest that fades into a soft, theme-inverting
+/// indicator bar as the pointer nears it (within `DIVIDER_PROXIMITY_RADIUS`) —
+/// hinting that the edge is draggable without the harsh full-height line egui's
+/// native resize paints.
 ///
 /// `hit_rect` is the slim `Sense::click_and_drag` strip (`±DIVIDER_GRAB_HALF_WIDTH`
 /// around the line, spanning its full length) — narrow so it never steals clicks
