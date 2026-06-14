@@ -82,7 +82,8 @@ pub(crate) fn render_entry_list_item(
             let galley = ui.painter().fonts_mut(|fonts| {
                 fonts.layout_no_wrap(
                     label.to_string(),
-                    egui::FontId::proportional(9.0),
+                    // 11pt floor (was 9) so the MD/QM origin chip stays legible.
+                    egui::FontId::proportional(11.0),
                     pal.accent,
                 )
             });
