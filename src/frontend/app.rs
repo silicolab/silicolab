@@ -343,6 +343,9 @@ impl eframe::App for SilicoLabApp {
             for command in menu.drain() {
                 match command {
                     MenuCommand::Action(action) => actions.push(action),
+                    MenuCommand::ShowAbout => {
+                        self.state.ui.layout.about_open = true;
+                    }
                     MenuCommand::ToggleSettings => {
                         let open = &mut self.state.ui.layout.settings_open;
                         *open = !*open;
