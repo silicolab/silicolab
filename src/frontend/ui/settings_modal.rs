@@ -21,6 +21,13 @@ use crate::frontend::{actions::AppAction, state::AppState};
 /// layout breathes and the blur slider has room.
 const MODAL_WIDTH: f32 = 720.0;
 const PANE_HEIGHT: f32 = 440.0;
+/// Locked total content height = header + search box + separator + [`PANE_HEIGHT`]
+/// plus their inter-row spacing. Pinning it (with [`MODAL_WIDTH`]) stops the
+/// auto-sized window from recomputing its size per category, which — under the
+/// `CENTER_CENTER` pivot — used to nudge the whole window (and its rail)
+/// sideways on every hover/switch. The right pane scrolls, so over-tall
+/// categories never clip.
+const MODAL_HEIGHT: f32 = 525.0;
 const RAIL_WIDTH: f32 = 165.0;
 const FRAME_MARGIN: i8 = 12;
 const FRAME_RIGHT_MARGIN: i8 = 6;
@@ -56,6 +63,10 @@ pub fn show(state: &mut AppState, ctx: &egui::Context, actions: &mut Vec<AppActi
         ))
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
+        // Hard-lock the size so the window can't resize (and thus re-center)
+        // frame to frame as categories of differing content swap in. Still
+        // draggable, so it can be pulled aside to see the workspace.
+        .fixed_size([MODAL_WIDTH, MODAL_HEIGHT])
         .show(ctx, |ui| {
             ui.set_width(MODAL_WIDTH);
             let pal = crate::frontend::theme::palette(ui);
