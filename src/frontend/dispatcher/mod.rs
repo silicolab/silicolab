@@ -303,7 +303,8 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SetAssistantApiKey(key) => {
             crate::frontend::agent::set_assistant_api_key(state, &key)
         }
-        AppAction::ClearAssistantApiKey => crate::frontend::agent::clear_assistant_api_key(state),
+        AppAction::ClearStoredKey(id) => crate::frontend::agent::clear_stored_key(state, &id),
+        AppAction::RefreshModels => crate::frontend::agent::fetch_models(state, ctx),
         AppAction::SetThemeMode(mode) => set_theme_mode(state, mode, ctx),
         AppAction::SetColorScheme(scheme) => set_color_scheme(state, scheme, ctx),
         AppAction::SetRepresentation(edit) => set_representation(state, edit),

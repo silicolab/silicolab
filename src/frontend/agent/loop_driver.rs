@@ -14,11 +14,11 @@ use eframe::egui;
 use crate::backend::config::save_config;
 use crate::backend::entries::EntryOrigin;
 use crate::frontend::agent::registry;
-use crate::frontend::agent::session::{AgentPhase, TranscriptEntry};
+use crate::frontend::agent::session::{AgentPhase, ModelFetchStatus, TranscriptEntry};
 use crate::frontend::agent::tools;
 use crate::frontend::jobs::{
     AgentHeavyJob, AgentTurnEvent, EngineWorkerMessage, QmWorkerMessage, RunningEngineJob,
-    RunningQmJob, spawn_agent_turn, spawn_gromacs_pipeline_job, spawn_qm_job,
+    RunningQmJob, spawn_agent_turn, spawn_gromacs_pipeline_job, spawn_model_fetch, spawn_qm_job,
 };
 use crate::frontend::state::AppState;
 use crate::io::llm::types::{
@@ -577,6 +577,10 @@ pub fn switch_provider_model(state: &mut AppState, provider: &str, model: &str) 
     state.config.assistant.provider = provider.to_string();
     state.config.assistant.model = model.to_string();
     strip_reasoning(&mut state.ui.agent.history);
+    // The fetch status is global; clear it so a prior provider's spinner or
+    // error note doesn't bleed onto the newly selected one. The fetched model
+    // ids are keyed per provider, so they survive the switch.
+    state.ui.agent.model_fetch = ModelFetchStatus::Idle;
     persist(state);
     refresh_key_status(state);
 }
@@ -605,33 +609,97 @@ pub fn set_assistant_base_url(state: &mut AppState, base_url: &str) {
     persist(state);
 }
 
-/// Store the active provider's API key in the OS keychain (never in config).
+/// Store the active provider's API key in the app key store (never in config).
 pub fn set_assistant_api_key(state: &mut AppState, key: &str) {
-    let provider = registry::active_provider(&state.config.assistant).id;
-    match registry::set_keychain_key(provider, key.trim()) {
-        Ok(()) => state.set_message("Saved the API key to the OS keychain."),
+    let provider = registry::active_provider(&state.config.assistant);
+    match crate::backend::secrets::set_stored_key(provider.id, key.trim()) {
+        Ok(()) => state.set_message(format!("Saved the API key for {}.", provider.label)),
         Err(error) => state.set_message(format!("Could not save the API key: {error}")),
     }
     refresh_key_status(state);
 }
 
-/// Remove the active provider's stored key from the OS keychain.
-pub fn clear_assistant_api_key(state: &mut AppState) {
-    let provider = registry::active_provider(&state.config.assistant).id;
-    match registry::clear_keychain_key(provider) {
-        Ok(()) => state.set_message("Removed the stored API key from the keychain."),
+/// Remove a provider's stored key from the app key store. Takes the provider id
+/// rather than assuming the active one, so it backs both the active "Clear"
+/// button and the per-row Remove in the keys overview.
+pub fn clear_stored_key(state: &mut AppState, provider_id: &str) {
+    let label = registry::provider_spec(provider_id)
+        .map(|spec| spec.label)
+        .unwrap_or(provider_id);
+    match crate::backend::secrets::clear_stored_key(provider_id) {
+        Ok(()) => state.set_message(format!("Removed the stored API key for {label}.")),
         Err(error) => state.set_message(format!("Could not remove the API key: {error}")),
     }
     refresh_key_status(state);
 }
 
-/// Recompute whether a key is available for the active provider (reads env +
-/// keychain) and cache it on the session, so the render path never hits the
-/// keychain. Called on provider/key changes and once at startup.
+/// Recompute whether a key is available for the active provider (reads env + the
+/// key store) and cache it on the session, so the render path never hits the
+/// key store. Called on provider/key changes and once at startup.
 pub fn refresh_key_status(state: &mut AppState) {
     let available =
         registry::api_key_for(registry::active_provider(&state.config.assistant)).is_some();
     state.ui.agent.key_available = Some(available);
+}
+
+/// Kick off a live `/models` fetch for the active provider. Resolves the key the
+/// same way a turn does (env → key store); with no key it records an error
+/// instead of spawning. The result is drained in [`poll_model_fetch`]. A fetch
+/// already in flight is left to finish.
+pub fn fetch_models(state: &mut AppState, ctx: &egui::Context) {
+    if state.jobs.model_fetch.is_some() {
+        return;
+    }
+    let spec = registry::active_provider(&state.config.assistant);
+    let Some(key) = registry::api_key_for(spec) else {
+        state.ui.agent.model_fetch = ModelFetchStatus::Error(format!(
+            "Add a key for {} first to list its models.",
+            spec.label
+        ));
+        ctx.request_repaint();
+        return;
+    };
+    let base_url = registry::effective_base_url(&state.config.assistant, spec);
+    state.jobs.model_fetch = Some(spawn_model_fetch(
+        spec.id.to_string(),
+        spec.kind,
+        base_url,
+        key,
+    ));
+    state.ui.agent.model_fetch = ModelFetchStatus::Fetching;
+    ctx.request_repaint_after(AGENT_POLL);
+}
+
+/// Drain the in-flight model fetch (called from `poll_jobs`). On success the ids
+/// are cached under their provider id and the status returns to Idle; on failure
+/// the status carries a short reason. The cached list is keyed by provider, so a
+/// result arriving after the user switched providers is still stored correctly.
+pub fn poll_model_fetch(state: &mut AppState, ctx: &egui::Context) {
+    let Some(job) = state.jobs.model_fetch.take() else {
+        return;
+    };
+    match job.receiver.try_recv() {
+        Ok(Ok(ids)) => {
+            let count = ids.len();
+            state.ui.agent.fetched_models.insert(job.provider_id, ids);
+            state.ui.agent.model_fetch = ModelFetchStatus::Idle;
+            state.set_message(format!("Listed {count} models from the provider."));
+            ctx.request_repaint();
+        }
+        Ok(Err(error)) => {
+            state.ui.agent.model_fetch = ModelFetchStatus::Error(error);
+            ctx.request_repaint();
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => {
+            state.jobs.model_fetch = Some(job);
+            ctx.request_repaint_after(AGENT_POLL);
+        }
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            state.ui.agent.model_fetch =
+                ModelFetchStatus::Error("model fetch worker stopped".to_string());
+            ctx.request_repaint();
+        }
+    }
 }
 
 // --- helpers -------------------------------------------------------------- //

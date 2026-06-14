@@ -82,7 +82,7 @@ impl StaticView {
     pub fn label(self) -> &'static str {
         match self {
             Self::Console => "Console",
-            Self::Chat => "Chat",
+            Self::Chat => "Assistant",
             Self::TaskMonitor => "Task Monitor",
             Self::Output => "Output",
         }
