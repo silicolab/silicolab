@@ -82,14 +82,15 @@ pub(super) fn render_dock_area(
 
             for info in &tab_infos {
                 let id = Id::new(("dock_tab", area, info.tab));
-                let dragged = ui.dnd_drag_source(id, DraggedTab { tab: info.tab }, |ui| {
-                    render_tab_inner(ui, info, &pal)
+                let dragged = drag_source(ui, id, DraggedTab { tab: info.tab }, |ui| {
+                    render_tab_inner(ui, id, info, &pal)
                 });
-                let (button, x_clicked) = dragged.inner;
+                let (chip, x_clicked) = dragged.inner;
                 slot_rects.push((info.tab, dragged.response.rect));
-                // The click resolves on the inner button (the drag source only
-                // senses drags), so click-to-activate and drag coexist.
-                if button.clicked() {
+                // The chip senses click *and* drag, so egui's drag threshold keeps
+                // a plain click a click — it activates here while a drag past the
+                // threshold floats the tab (see `drag_source` / `render_tab_inner`).
+                if chip.clicked() {
                     activate = Some(info.tab);
                 }
                 if x_clicked && let DockTab::Task(task_run_id) = info.tab {
@@ -258,37 +259,153 @@ fn collapsed_area_label(state: &AppState, area: DockArea) -> String {
     }
 }
 
-/// Render one tab's button (and, for a task tab, a trailing close affordance).
-/// Returns the button's response (for click-to-activate) and whether the close
-/// affordance was clicked.
-fn render_tab_inner(ui: &mut egui::Ui, info: &TabInfo, pal: &Palette) -> (egui::Response, bool) {
-    ui.spacing_mut().item_spacing.x = 4.0;
-    let button = ui
-        .scope(|ui| {
-            configure_panel_tab_button_visuals(ui, info.selected);
-            ui.add(
-                Button::new(
-                    RichText::new(&info.label).color(core_button_text_color(pal, info.selected)),
-                )
-                .selected(info.selected),
-            )
-        })
-        .inner;
-    let mut x_clicked = false;
-    if info.closeable {
-        x_clicked = ui
-            .add(
-                Button::new(
-                    RichText::new(egui_phosphor::regular::X)
-                        .size(12.0)
-                        .color(core_button_text_color(pal, info.selected)),
-                )
-                .frame(false),
-            )
-            .on_hover_text("Close tab")
-            .clicked();
+/// The floating-preview half of a dock-tab drag, standing in for the painting
+/// that [`egui::Ui::dnd_drag_source`] does. The *sensing* half lives on the chip
+/// itself (see [`render_tab_inner`]), which senses `click_and_drag` so egui's
+/// native 6px / long-press threshold (`is_decidedly_dragging`) decides click vs
+/// drag — a plain click never becomes a drag. (egui's own helper instead layers
+/// a pure `Sense::drag()` widget on top, which both skips that threshold *and*,
+/// per `hit_test`, makes egui ignore the click-widgets beneath it — so the tab
+/// wouldn't activate and its close glyph was dead.) Once the chip is decidedly
+/// dragging, `is_being_dragged` is true and we repaint it on a layer that follows
+/// the pointer, with the drag payload set for the strip's drop handling.
+fn drag_source<R>(
+    ui: &mut egui::Ui,
+    id: Id,
+    payload: DraggedTab,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
+    if ui.ctx().is_being_dragged(id) {
+        egui::DragAndDrop::set_payload(ui.ctx(), payload);
+
+        // Paint the body to a floating layer that tracks the pointer.
+        let layer_id = egui::LayerId::new(Order::Tooltip, id);
+        let egui::InnerResponse { inner, response } =
+            ui.scope_builder(egui::UiBuilder::new().layer_id(layer_id), add_contents);
+        if let Some(pointer) = ui.ctx().pointer_interact_pos() {
+            let delta = pointer - response.rect.center();
+            ui.ctx().transform_layer_shapes(
+                layer_id,
+                egui::emath::TSTransform::from_translation(delta),
+            );
+        }
+        egui::InnerResponse::new(inner, response)
+    } else {
+        ui.scope(add_contents)
     }
-    (button, x_clicked)
+}
+
+/// Render one tab as a single rounded chip: the (elided) title and, for a task
+/// tab, a close affordance *inside* the chip on its right edge. Returns the
+/// chip's response (for click-to-activate / drag) and whether the close glyph was
+/// clicked. Drawn by hand rather than as two `Button`s so the close glyph sits
+/// within the chip with its own hit target, and so a long title elides instead
+/// of shoving the close glyph past the (narrow) sidebar's clip edge.
+fn render_tab_inner(
+    ui: &mut egui::Ui,
+    id: Id,
+    info: &TabInfo,
+    pal: &Palette,
+) -> (egui::Response, bool) {
+    const H_PAD: f32 = 10.0; // chip side padding (matches the old button_padding.x)
+    const V_PAD: f32 = 5.0;
+    const GAP: f32 = 6.0; // title → close glyph
+    const CLOSE: f32 = 14.0; // close hit box (square)
+    const MAX_TITLE_W: f32 = 180.0; // elide longer titles so the close stays in view
+
+    let selected = info.selected;
+
+    // Single-line, ellipsized title. Its colour is left as `PLACEHOLDER` and
+    // resolved at paint time so hover can lift it.
+    let mut job = egui::text::LayoutJob::single_section(
+        info.label.clone(),
+        egui::text::TextFormat {
+            font_id: egui::TextStyle::Button.resolve(ui.style()),
+            color: egui::Color32::PLACEHOLDER,
+            ..Default::default()
+        },
+    );
+    job.wrap = egui::text::TextWrapping::truncate_at_width(MAX_TITLE_W);
+    let galley = ui.painter().layout_job(job);
+
+    let close_w = if info.closeable { GAP + CLOSE } else { 0.0 };
+    let chip_size = egui::vec2(
+        galley.size().x + close_w + 2.0 * H_PAD,
+        galley.size().y.max(CLOSE) + 2.0 * V_PAD,
+    );
+
+    // Reserve the slot, then sense click *and* drag on the chip under the stable
+    // `id` (so `drag_source` can track the drag). Sensing both lets egui's drag
+    // threshold tell a click from a drag: a short press activates, a press that
+    // travels past the threshold drags.
+    let (rect, _) = ui.allocate_exact_size(chip_size, egui::Sense::hover());
+    let response = ui.interact(rect, id, egui::Sense::click_and_drag());
+
+    // The close glyph is interacted *after* the chip so it owns clicks over its
+    // own rect (egui reports the close click and the chip drag both); reading it
+    // now also lets the chip keep its hover wash while the pointer is over the
+    // glyph (which otherwise occludes the chip's `hovered`).
+    let close = info.closeable.then(|| {
+        let close_rect = egui::Rect::from_center_size(
+            egui::pos2(rect.right() - H_PAD - CLOSE / 2.0, rect.center().y),
+            egui::vec2(CLOSE, CLOSE),
+        );
+        let response = ui
+            .interact(
+                close_rect,
+                Id::new(("dock_tab_close", info.tab)),
+                egui::Sense::click(),
+            )
+            .on_hover_text("Close tab");
+        (close_rect, response)
+    });
+
+    let hovered = response.hovered() || close.as_ref().is_some_and(|(_, r)| r.hovered());
+
+    // Chip background, mirroring the old tab-button states (transparent at rest,
+    // a soft wash on hover, a blue tint when active).
+    let fill = match (selected, hovered) {
+        (true, true) => pal.blue_overlay(74),
+        (true, false) => pal.blue_overlay(58),
+        (false, true) => pal.neutral_overlay(18),
+        (false, false) => egui::Color32::TRANSPARENT,
+    };
+    if fill != egui::Color32::TRANSPARENT {
+        ui.painter().rect_filled(
+            rect,
+            egui::CornerRadius::same(crate::frontend::theme::radius::CHIP),
+            fill,
+        );
+    }
+
+    let title_pos = egui::pos2(rect.left() + H_PAD, rect.center().y - galley.size().y / 2.0);
+    ui.painter().galley(
+        title_pos,
+        galley,
+        core_button_text_color(pal, selected || hovered),
+    );
+
+    let mut x_clicked = false;
+    if let Some((close_rect, close)) = close {
+        let close_hovered = close.hovered();
+        if close_hovered {
+            ui.painter().rect_filled(
+                close_rect,
+                egui::CornerRadius::same(crate::frontend::theme::radius::CHIP),
+                pal.neutral_overlay(30),
+            );
+        }
+        ui.painter().text(
+            close_rect.center(),
+            egui::Align2::CENTER_CENTER,
+            egui_phosphor::regular::X,
+            egui::FontId::proportional(12.0),
+            core_button_text_color(pal, selected || hovered || close_hovered),
+        );
+        x_clicked = close.clicked();
+    }
+
+    (response, x_clicked)
 }
 
 /// Index at which a dropped tab should be inserted, from the pointer's x against
@@ -326,40 +443,6 @@ fn paint_insertion_bar(
         (strip_rect.top() + 4.0)..=(strip_rect.bottom() - 4.0),
         Stroke::new(2.0, pal.accent),
     );
-}
-
-/// Visuals for a dock tab button: transparent at rest, a soft wash on hover, and
-/// a tinted highlight when selected. Moved here from the bottom panel so both
-/// areas share one styling.
-pub(super) fn configure_panel_tab_button_visuals(ui: &mut Ui, selected: bool) {
-    let pal = crate::frontend::theme::palette(ui);
-    let inactive_fill = egui::Color32::TRANSPARENT;
-    let hovered_fill = pal.neutral_overlay(18);
-    let selected_fill = pal.blue_overlay(58);
-    let selected_hover_fill = pal.blue_overlay(74);
-    let text_color = core_button_text_color(&pal, selected);
-    let selected_text = core_button_text_color(&pal, true);
-    let visuals = &mut ui.style_mut().visuals.widgets;
-
-    visuals.inactive.weak_bg_fill = inactive_fill;
-    visuals.inactive.bg_fill = inactive_fill;
-    visuals.inactive.bg_stroke = Stroke::NONE;
-    visuals.inactive.fg_stroke.color = text_color;
-
-    visuals.hovered.weak_bg_fill = hovered_fill;
-    visuals.hovered.bg_fill = hovered_fill;
-    visuals.hovered.bg_stroke = Stroke::NONE;
-    visuals.hovered.fg_stroke.color = selected_text;
-
-    visuals.active.weak_bg_fill = selected_hover_fill;
-    visuals.active.bg_fill = selected_hover_fill;
-    visuals.active.bg_stroke = Stroke::NONE;
-    visuals.active.fg_stroke.color = selected_text;
-
-    visuals.open.weak_bg_fill = selected_fill;
-    visuals.open.bg_fill = selected_fill;
-    visuals.open.bg_stroke = Stroke::NONE;
-    visuals.open.fg_stroke.color = selected_text;
 }
 
 /// The body of a task-detail tab: header plus the per-kind panel. Only the
