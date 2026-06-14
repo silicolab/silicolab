@@ -23,9 +23,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use eframe::egui;
 use muda::accelerator::{Accelerator, Code, Modifiers};
-use muda::{
-    CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu,
-};
+use muda::{CheckMenuItem, Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use objc2_foundation::{NSProcessInfo, NSString};
 
 use crate::backend::config::{ColorScheme, ThemeMode};

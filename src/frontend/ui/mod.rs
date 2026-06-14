@@ -18,9 +18,9 @@ use crate::{
     },
 };
 
+mod about;
 mod bottom_panel;
 mod secondary_sidebar;
-mod about;
 mod settings_modal;
 // Reachable from `state.rs` (which stores `SettingCategory` in `SettingsState`),
 // so it can't stay private to this module.

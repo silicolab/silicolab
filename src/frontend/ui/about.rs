@@ -56,7 +56,10 @@ pub fn show(state: &mut AppState, ctx: &egui::Context, _actions: &mut Vec<AppAct
 
             ui.vertical_centered(|ui| {
                 ui.add_space(2.0);
-                ui.image(egui::load::SizedTexture::new(texture.id(), egui::vec2(ICON_PX, ICON_PX)));
+                ui.image(egui::load::SizedTexture::new(
+                    texture.id(),
+                    egui::vec2(ICON_PX, ICON_PX),
+                ));
                 ui.add_space(14.0);
 
                 // Wordmark: "Silico" neutral + "Lab" violet.
@@ -99,9 +102,15 @@ pub fn show(state: &mut AppState, ctx: &egui::Context, _actions: &mut Vec<AppAct
 /// Wordmark accent colors (spec §5): "Lab" violet, "Silico" neutral.
 fn wordmark_colors(dark: bool) -> (Color32, Color32) {
     if dark {
-        (Color32::from_rgb(0xE8, 0xE6, 0xE0), Color32::from_rgb(0xB7, 0x9C, 0xFF))
+        (
+            Color32::from_rgb(0xE8, 0xE6, 0xE0),
+            Color32::from_rgb(0xB7, 0x9C, 0xFF),
+        )
     } else {
-        (Color32::from_rgb(0x36, 0x33, 0x2C), Color32::from_rgb(0x7B, 0x5C, 0xFF))
+        (
+            Color32::from_rgb(0x36, 0x33, 0x2C),
+            Color32::from_rgb(0x7B, 0x5C, 0xFF),
+        )
     }
 }
 
@@ -163,7 +172,8 @@ fn render_backdrop(state: &AppState, ctx: &egui::Context) {
                     .max_rect(rect),
             );
             backdrop.set_min_size(rect.size());
-            ui.painter().rect_filled(rect, 0.0, backdrop_tint(state, ctx));
+            ui.painter()
+                .rect_filled(rect, 0.0, backdrop_tint(state, ctx));
             let _ = backdrop.response();
         });
 }
