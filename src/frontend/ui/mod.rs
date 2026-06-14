@@ -265,6 +265,22 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
                 });
             });
         secondary_rendered_w = width;
+    } else if state.ui.layout.dock.is_collapsed(DockArea::Right) {
+        // Collapsed but non-empty: a thin vertical reveal strip stands in for the
+        // sidebar so the Assistant can be reopened in-window without the (macOS-
+        // only-native) View menu.
+        egui::Panel::right("secondary_sidebar_handle")
+            .resizable(false)
+            .exact_size(30.0)
+            .show_separator_line(false)
+            .frame(
+                Frame::default()
+                    .fill(crate::frontend::theme::chrome_fill(pal.sidebar, glass))
+                    .inner_margin(Margin::same(2)),
+            )
+            .show_inside(ui, |ui| {
+                dock::render_dock_collapsed_handle(state, ui, DockArea::Right, actions)
+            });
     }
 
     egui::CentralPanel::default()

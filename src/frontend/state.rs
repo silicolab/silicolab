@@ -214,6 +214,15 @@ impl DockModel {
         !state.tabs.is_empty() && !state.collapsed
     }
 
+    /// An area the user has explicitly collapsed while it still holds tabs — the
+    /// "I hid it and now it's gone" state. Distinct from a merely *empty* area
+    /// (also hidden, but with nothing to reopen): only this state earns the
+    /// in-window reveal handle.
+    pub fn is_collapsed(&self, area: DockArea) -> bool {
+        let state = self.area(area);
+        !state.tabs.is_empty() && state.collapsed
+    }
+
     pub fn area_of(&self, tab: DockTab) -> Option<DockArea> {
         DockArea::all()
             .into_iter()
@@ -2236,6 +2245,24 @@ mod tests {
         dock.bottom.tabs.clear();
         dock.bottom.active = None;
         assert!(!dock.is_visible(DockArea::Bottom)); // empty -> hidden
+    }
+
+    #[test]
+    fn is_collapsed_only_for_a_hidden_non_empty_area() {
+        // `is_collapsed` backs the in-window reveal handle: it must fire exactly
+        // when the user hid a panel that still holds tabs (the "I collapsed it
+        // and now it's gone" case), and never for an empty area (nothing to
+        // reveal) or a shown one.
+        let mut dock = DockModel::default();
+        assert!(!dock.is_collapsed(DockArea::Right)); // shown by default
+        assert!(!dock.is_collapsed(DockArea::Bottom));
+        dock.right.collapsed = true;
+        assert!(dock.is_collapsed(DockArea::Right)); // non-empty + collapsed
+        // An empty area is hidden too, but has nothing to reveal:
+        dock.bottom.tabs.clear();
+        dock.bottom.active = None;
+        dock.bottom.collapsed = true;
+        assert!(!dock.is_collapsed(DockArea::Bottom));
     }
 
     #[test]

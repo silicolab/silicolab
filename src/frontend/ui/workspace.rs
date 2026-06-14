@@ -10,7 +10,7 @@ use crate::frontend::{
     viewport::{HOVER_FRAME, STRUCTURE_INTERACTION_FRAME},
 };
 
-use super::dock::render_dock_area;
+use super::dock::{render_dock_area, render_dock_collapsed_handle};
 
 /// Structure id used for the viewport's geometry cache while a trajectory is
 /// playing. `u64::MAX` cannot collide with a real entry id, so playback never
@@ -39,6 +39,21 @@ pub(super) fn render_workspace(
             )
             .show_inside(ui, |ui| {
                 render_dock_area(state, ui, DockArea::Bottom, actions)
+            });
+    } else if state.ui.layout.dock.is_collapsed(DockArea::Bottom) {
+        // Collapsed but non-empty: a thin reveal strip stands in for the panel so
+        // it can be reopened in-window (see `render_dock_collapsed_handle`).
+        let pal = crate::frontend::theme::palette(ui);
+        egui::Panel::bottom("bottom_panel_handle")
+            .exact_size(26.0)
+            .show_separator_line(false)
+            .frame(
+                Frame::default()
+                    .fill(pal.sidebar)
+                    .inner_margin(Margin::symmetric(10, 3)),
+            )
+            .show_inside(ui, |ui| {
+                render_dock_collapsed_handle(state, ui, DockArea::Bottom, actions)
             });
     }
 
