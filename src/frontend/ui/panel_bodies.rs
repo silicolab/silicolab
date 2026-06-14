@@ -145,7 +145,7 @@ pub(super) fn render_chat_panel(
     let phase = state.ui.agent.phase;
     let assistant_enabled = state.config.assistant.enabled;
     let provider = registry::active_provider(&state.config.assistant);
-    // Cached (the live check reads the OS keychain); refreshed off the hot path.
+    // Cached (the live check reads env + the key store); refreshed off the hot path.
     let key_present = state.ui.agent.key_available.unwrap_or(false);
     let pending_call = state.ui.agent.pending_approval().cloned();
 
@@ -379,8 +379,9 @@ fn render_chat_empty_state(
         ui.add_space(2.0);
         ui.label(
             RichText::new(
-                "Fetch a structure, restyle the view, or set up a calculation — \
-                 I drive SilicoLab with the same console commands.",
+                "Fetch a structure, restyle the view, or set up a calculation — try \
+                 \"fetch 1ubq and show it as cartoon\". I drive SilicoLab with the same \
+                 console commands you would type.",
             )
             .small()
             .color(pal.text_tertiary),
@@ -390,8 +391,8 @@ fn render_chat_empty_state(
         ui.add_space(10.0);
         ui.label(
             RichText::new(format!(
-                "{}  No API key found. Set {} and restart, or pick another provider in \
-                 Settings ▸ Assistant.",
+                "{}  No API key found. Add one in Settings ▸ Assistant, set {} and restart, \
+                 or pick another provider there.",
                 egui_phosphor::regular::WARNING,
                 provider.key_env
             ))

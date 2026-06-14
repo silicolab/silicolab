@@ -370,17 +370,17 @@ fn render_tasks_placeholder(
 
 // --- Assistant ------------------------------------------------------------ //
 
-/// The in-app LLM assistant settings: enable, provider, model, effort, and a
-/// read-only API-key status. The provider list is data-driven from
-/// `frontend::agent::registry`, so adding GLM/DeepSeek/OpenRouter is a config
-/// row there, not new UI. Every control emits an `AppAction`; the key is never
-/// stored, only read from its environment variable.
+/// The in-app LLM assistant settings: enable, provider, model (with live
+/// refresh), effort, per-provider key entry, and a "Stored keys" overview. The
+/// provider list is data-driven from `frontend::agent::registry`, so adding a
+/// provider is a config row there, not new UI. Every control emits an
+/// `AppAction`; keys go to the app key store (or an env var), never settings.json.
 fn render_assistant_settings(
     state: &mut AppState,
     ui: &mut egui::Ui,
     actions: &mut Vec<AppAction>,
 ) {
-    use crate::frontend::agent::registry;
+    use crate::frontend::agent::{ModelFetchStatus, registry};
 
     let pal = crate::frontend::theme::palette(ui);
 
@@ -391,7 +391,8 @@ fn render_assistant_settings(
     ui.label(
         RichText::new(
             "Drives SilicoLab with the same console commands a user types. Pay your provider \
-             directly; the API key is read from an environment variable and never stored.",
+             directly; the API key is read from its environment variable, else the app key \
+             store — never settings.json.",
         )
         .small()
         .color(pal.text_tertiary),
@@ -428,32 +429,72 @@ fn render_assistant_settings(
             });
     });
 
-    // Model picker.
-    let selected_model_label = provider
-        .models
+    // Model picker — built-in models first, then any live-fetched ids for this
+    // provider. The static list always shows; a live refresh only augments it.
+    let fetched = state
+        .ui
+        .agent
+        .fetched_models
+        .get(provider.id)
+        .cloned()
+        .unwrap_or_default();
+    let models = registry::merged_model_ids(provider, &fetched);
+    let fetch_status = state.ui.agent.model_fetch.clone();
+    let fetching = matches!(fetch_status, ModelFetchStatus::Fetching);
+    let selected_model_label = models
         .iter()
-        .find(|model| model.id == current_model)
-        .map(|model| model.label)
-        .unwrap_or(current_model.as_str());
+        .find(|(id, _)| *id == current_model)
+        .map(|(_, label)| label.clone())
+        .unwrap_or_else(|| current_model.clone());
     ui.horizontal(|ui| {
         ui.label("Model");
         egui::ComboBox::from_id_salt("assistant.model")
             .selected_text(selected_model_label)
             .show_ui(ui, |ui| {
-                for model in provider.models {
-                    if ui
-                        .selectable_label(model.id == current_model, model.label)
-                        .clicked()
-                        && model.id != current_model
+                for (id, label) in &models {
+                    if ui.selectable_label(*id == current_model, label).clicked()
+                        && *id != current_model
                     {
                         actions.push(AppAction::SwitchProviderModel {
                             provider: provider.id.to_string(),
-                            model: model.id.to_string(),
+                            model: id.clone(),
                         });
                     }
                 }
             });
+        ui.add_enabled_ui(!fetching, |ui| {
+            if ui.button("Refresh models").clicked() {
+                actions.push(AppAction::RefreshModels);
+            }
+        });
+        if fetching {
+            ui.spinner();
+        }
     });
+    // Live-fetch status under the picker: an amber note on failure, a count once
+    // a live list is cached, and a one-line explanation either way.
+    match &fetch_status {
+        ModelFetchStatus::Error(reason) => {
+            ui.label(
+                RichText::new(format!("{}  {reason}", egui_phosphor::regular::WARNING))
+                    .small()
+                    .color(pal.status_amber),
+            );
+        }
+        ModelFetchStatus::Idle if !fetched.is_empty() => {
+            ui.label(
+                RichText::new(format!("{} models listed live.", fetched.len()))
+                    .small()
+                    .color(pal.text_tertiary),
+            );
+        }
+        _ => {}
+    }
+    ui.label(
+        RichText::new("Live list from the provider; offline keeps the built-in list.")
+            .small()
+            .color(pal.text_tertiary),
+    );
 
     // Free-text model id — model ids drift, and OpenRouter/local take arbitrary
     // ids, so let the user type one directly. Committed on Enter / focus loss.
@@ -516,7 +557,7 @@ fn render_assistant_settings(
         );
     }
 
-    // API key: environment variable (preferred) or OS keychain. Never config.
+    // API key: environment variable (preferred) or the app key store. Never config.
     ui.add_space(6.0);
     if provider.key_env.is_empty() {
         ui.label(
@@ -533,9 +574,9 @@ fn render_assistant_settings(
             format!("Using the key from {}", provider.key_env),
             pal.status_green,
         ),
-        registry::KeySource::Keychain => (
+        registry::KeySource::File => (
             egui_phosphor::regular::CHECK_CIRCLE,
-            "Using the key stored in the OS keychain".to_string(),
+            "Using the stored key".to_string(),
             pal.status_green,
         ),
         registry::KeySource::Missing => (
@@ -555,8 +596,8 @@ fn render_assistant_settings(
             .color(color),
     );
 
-    // Store a key in the OS keychain (an alternative to the env var, which still
-    // wins when set). Held in egui temp memory, committed on a button click.
+    // Store a key in the app key store (an alternative to the env var, which
+    // still wins when set). Held in egui temp memory, committed on a button click.
     let key_id = ui.id().with("assistant.api_key");
     let mut key = ui
         .data(|data| data.get_temp::<String>(key_id))
@@ -566,28 +607,79 @@ fn render_assistant_settings(
             egui::TextEdit::singleline(&mut key)
                 .desired_width(220.0)
                 .password(true)
-                .hint_text("Paste a key to store in the keychain"),
+                .hint_text("Paste a key to store"),
         );
         if response.changed() {
             ui.data_mut(|data| data.insert_temp(key_id, key.clone()));
         }
-        if ui.button("Save to keychain").clicked() && !key.trim().is_empty() {
+        if ui.button("Save key").clicked() && !key.trim().is_empty() {
             actions.push(AppAction::SetAssistantApiKey(key.clone()));
             ui.data_mut(|data| data.remove_temp::<String>(key_id));
         }
         if ui.button("Clear").clicked() {
-            actions.push(AppAction::ClearAssistantApiKey);
+            actions.push(AppAction::ClearStoredKey(provider.id.to_string()));
             ui.data_mut(|data| data.remove_temp::<String>(key_id));
         }
     });
     ui.label(
         RichText::new(
-            "Stored in your OS keychain, never in settings.json. The environment \
-             variable takes precedence when set.",
+            "Stored in an app-managed file in ~/.silicolab (not settings.json; obfuscated at \
+             rest, which is not encryption). The environment variable takes precedence when set.",
         )
         .small()
         .color(pal.text_tertiary),
     );
+
+    render_stored_keys_overview(ui, actions, &pal);
+}
+
+/// The "Stored keys" overview: every provider that currently has a usable key,
+/// across env vars and the app key store — the answer to "where did my key go".
+/// File-store rows get a Remove button; env rows are read-only (managed outside
+/// the app). This list doubles as the save confirmation: a just-saved provider
+/// appears here as "stored".
+fn render_stored_keys_overview(
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+    pal: &crate::frontend::theme::Palette,
+) {
+    use crate::frontend::agent::registry;
+
+    ui.add_space(8.0);
+    ui.separator();
+    ui.label(RichText::new("Stored keys").strong());
+
+    let stored = registry::stored_keys();
+    if stored.is_empty() {
+        ui.label(
+            RichText::new("No keys configured yet.")
+                .small()
+                .color(pal.text_tertiary),
+        );
+        return;
+    }
+    for (spec, source) in stored {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(egui_phosphor::regular::KEY).color(pal.text_muted));
+            ui.label(spec.label);
+            match source {
+                registry::KeySource::Env => {
+                    ui.label(
+                        RichText::new(format!("from {} — managed outside the app", spec.key_env))
+                            .small()
+                            .color(pal.text_tertiary),
+                    );
+                }
+                registry::KeySource::File => {
+                    ui.label(RichText::new("stored").small().color(pal.status_green));
+                    if ui.button("Remove").clicked() {
+                        actions.push(AppAction::ClearStoredKey(spec.id.to_string()));
+                    }
+                }
+                _ => {}
+            }
+        });
+    }
 }
 
 /// A labeled single-line text field that edits a buffer in egui temp memory and

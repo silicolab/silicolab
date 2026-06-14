@@ -12,8 +12,9 @@ pub mod tools;
 mod mock;
 
 pub use loop_driver::{
-    approve_tool_call, cancel_agent, clear_assistant_api_key, poll_agent_heavy, poll_agent_turn,
-    refresh_key_status, reject_tool_call, send_agent_message, set_assistant_api_key,
-    set_assistant_base_url, set_assistant_effort, set_assistant_enabled, switch_provider_model,
+    approve_tool_call, cancel_agent, clear_stored_key, fetch_models, poll_agent_heavy,
+    poll_agent_turn, poll_model_fetch, refresh_key_status, reject_tool_call, send_agent_message,
+    set_assistant_api_key, set_assistant_base_url, set_assistant_effort, set_assistant_enabled,
+    switch_provider_model,
 };
-pub use session::{AgentPhase, AgentSession, TranscriptEntry};
+pub use session::{AgentPhase, AgentSession, ModelFetchStatus, TranscriptEntry};

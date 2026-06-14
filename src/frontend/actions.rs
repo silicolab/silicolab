@@ -246,10 +246,13 @@ pub enum AppAction {
     /// Set (blank clears) the base-URL override for an OpenAI-compatible
     /// assistant provider and persist.
     SetAssistantBaseUrl(String),
-    /// Store the entered API key for the active provider in the OS keychain.
+    /// Store the entered API key for the active provider in the app key store.
     SetAssistantApiKey(String),
-    /// Remove the active provider's stored key from the OS keychain.
-    ClearAssistantApiKey,
+    /// Remove the stored key for the provider with this id (active "Clear" button
+    /// and the per-row Remove in the keys overview).
+    ClearStoredKey(String),
+    /// Fetch the active provider's live model list from its `/models` endpoint.
+    RefreshModels,
     /// Set the light/dark appearance preference and persist it.
     SetThemeMode(crate::backend::config::ThemeMode),
     /// Set the accent + neutral color scheme and persist it.
