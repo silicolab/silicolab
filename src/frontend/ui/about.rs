@@ -62,16 +62,31 @@ pub fn show(state: &mut AppState, ctx: &egui::Context, _actions: &mut Vec<AppAct
                 ));
                 ui.add_space(14.0);
 
-                // Wordmark: "Silico" neutral + "Lab" violet.
+                // Wordmark: "Silico" neutral + "Lab" violet, built as one galley
+                // so vertical_centered centers it on its real width (a hardcoded
+                // width guess drifts off-center when the font or text changes).
                 let (silico, lab) = wordmark_colors(dark);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 0.0;
-                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                        ui.add_space((ui.available_width() - 168.0).max(0.0) / 2.0);
-                        ui.label(RichText::new("Silico").size(30.0).strong().color(silico));
-                        ui.label(RichText::new("Lab").size(30.0).strong().color(lab));
-                    });
-                });
+                let font = egui::FontId::proportional(30.0);
+                let mut wordmark = egui::text::LayoutJob::default();
+                wordmark.append(
+                    "Silico",
+                    0.0,
+                    egui::TextFormat {
+                        font_id: font.clone(),
+                        color: silico,
+                        ..Default::default()
+                    },
+                );
+                wordmark.append(
+                    "Lab",
+                    0.0,
+                    egui::TextFormat {
+                        font_id: font,
+                        color: lab,
+                        ..Default::default()
+                    },
+                );
+                ui.label(wordmark);
 
                 ui.add_space(4.0);
                 ui.label(
@@ -83,12 +98,14 @@ pub fn show(state: &mut AppState, ctx: &egui::Context, _actions: &mut Vec<AppAct
                 ui.add_space(14.0);
 
                 ui.horizontal(|ui| {
-                    ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-                        ui.add_space((ui.available_width() - 200.0).max(0.0) / 2.0);
-                        ui.hyperlink_to("Repository", REPO_URL);
-                        ui.add_space(18.0);
-                        ui.hyperlink_to("Documentation", DOCS_URL);
-                    });
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    let gap = 18.0;
+                    let width =
+                        link_width(ui, "Repository") + gap + link_width(ui, "Documentation");
+                    ui.add_space((ui.available_width() - width).max(0.0) / 2.0);
+                    ui.hyperlink_to("Repository", REPO_URL);
+                    ui.add_space(gap);
+                    ui.hyperlink_to("Documentation", DOCS_URL);
                 });
                 ui.add_space(4.0);
             });
@@ -112,6 +129,16 @@ fn wordmark_colors(dark: bool) -> (Color32, Color32) {
             Color32::from_rgb(0x7B, 0x5C, 0xFF),
         )
     }
+}
+
+/// Rendered width of body-style `text`, used to center the link row on its real
+/// width instead of a hardcoded guess.
+fn link_width(ui: &egui::Ui, text: &str) -> f32 {
+    let font_id = egui::TextStyle::Body.resolve(ui.style());
+    ui.painter()
+        .layout_no_wrap(text.to_owned(), font_id, Color32::WHITE)
+        .size()
+        .x
 }
 
 /// Upload the committed 256² icon once and cache the handle in egui temp memory
