@@ -2,11 +2,10 @@
 //!
 //! Replaces the macOS-only native About panel (which can show the app icon but
 //! not a styled wordmark) and gives Windows/Linux an About for the first time.
-//! Opened by setting `state.ui.layout.about_open`; closed by Esc, the close
-//! button, or clicking the backdrop. Self-contained to minimize collision with
-//! other in-flight UI work.
+//! Opened by setting `state.ui.layout.about_open`; closed by Esc or the close
+//! button. Shares its window frame and backdrop with Settings via [`super::modal`].
 
-use eframe::egui::{self, Align, Color32, Layout, RichText, Sense, UiBuilder};
+use eframe::egui::{self, Align, Color32, Layout, RichText};
 
 use crate::frontend::{actions::AppAction, state::AppState};
 
@@ -25,7 +24,7 @@ pub fn show(state: &mut AppState, ctx: &egui::Context, _actions: &mut Vec<AppAct
         return;
     }
 
-    render_backdrop(state, ctx);
+    super::modal::render_backdrop(state, ctx, "about_backdrop");
 
     let mut close = false;
     let texture = icon_texture(ctx);
@@ -36,7 +35,7 @@ pub fn show(state: &mut AppState, ctx: &egui::Context, _actions: &mut Vec<AppAct
         .resizable(false)
         .collapsible(false)
         .order(egui::Order::Foreground)
-        .frame(window_frame(ctx))
+        .frame(super::modal::window_frame(ctx, egui::Margin::same(18)))
         .pivot(egui::Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
         .show(ctx, |ui| {
@@ -157,60 +156,4 @@ fn icon_texture(ctx: &egui::Context) -> egui::TextureHandle {
     let handle = ctx.load_texture("about_icon", color, egui::TextureOptions::LINEAR);
     ctx.data_mut(|d| d.insert_temp(id, handle.clone()));
     handle
-}
-
-fn window_frame(ctx: &egui::Context) -> egui::Frame {
-    let style = ctx.global_style();
-    let dark = style.visuals.dark_mode;
-    let shadow_color = if dark {
-        Color32::from_black_alpha(105)
-    } else {
-        Color32::from_black_alpha(55)
-    };
-    let stroke_color = if dark {
-        Color32::from_white_alpha(28)
-    } else {
-        Color32::from_black_alpha(22)
-    };
-    egui::Frame::window(&style)
-        .inner_margin(egui::Margin::same(18))
-        .outer_margin(egui::Margin::same(18))
-        .corner_radius(egui::CornerRadius::same(
-            crate::frontend::theme::radius::MODAL,
-        ))
-        .stroke(egui::Stroke::new(1.0, stroke_color))
-        .shadow(egui::Shadow {
-            offset: [0, 8],
-            blur: 24,
-            spread: 0,
-            color: shadow_color,
-        })
-}
-
-fn render_backdrop(state: &AppState, ctx: &egui::Context) {
-    egui::Area::new(egui::Id::new("about_backdrop"))
-        .order(egui::Order::Foreground)
-        .interactable(true)
-        .show(ctx, |ui| {
-            let rect = ui.ctx().content_rect();
-            let mut backdrop = ui.new_child(
-                UiBuilder::new()
-                    .sense(Sense::CLICK | Sense::DRAG)
-                    .max_rect(rect),
-            );
-            backdrop.set_min_size(rect.size());
-            ui.painter()
-                .rect_filled(rect, 0.0, backdrop_tint(state, ctx));
-            let _ = backdrop.response();
-        });
-}
-
-fn backdrop_tint(state: &AppState, ctx: &egui::Context) -> Color32 {
-    let dark = ctx.global_style().visuals.dark_mode;
-    match (state.ui.glass_active, dark) {
-        (true, true) => Color32::from_black_alpha(34),
-        (true, false) => Color32::from_white_alpha(42),
-        (false, true) => Color32::from_black_alpha(78),
-        (false, false) => Color32::from_white_alpha(92),
-    }
 }

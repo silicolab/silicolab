@@ -20,6 +20,7 @@ use crate::{
 
 mod about;
 mod bottom_panel;
+mod modal;
 mod secondary_sidebar;
 mod settings_modal;
 // Reachable from `state.rs` (which stores `SettingCategory` in `SettingsState`),

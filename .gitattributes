@@ -3,3 +3,5 @@
 
 # Binary assets — never normalize or diff as text.
 *.png binary
+*.ico binary
+*.icns binary
