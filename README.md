@@ -1,6 +1,9 @@
-# SilicoLab
+<p align="center">
+  <img src="assets/icon/window-256.png" width="128" alt="SilicoLab icon">
+</p>
 
-Computational environment for chemistry, biology & materials research.
+<h1 align="center">SilicoLab</h1>
+<p align="center"><em>Computational environment for chemistry, biology &amp; materials research.</em></p>
 
 ![SilicoLab screenshot](docs/images/main-window.png)
 
