@@ -491,6 +491,34 @@ pub fn apply(ctx: &egui::Context) {
             // A wider grab zone for panel resize, so the sidebar divider is easy
             // to catch (and reliably beats the inset scroll bar next to it).
             style.interaction.resize_grab_radius_side = 7.0;
+            // Type scale aligned with AppKit: 13pt body/controls, an 11pt floor
+            // for secondary text (`.small()`), monospace bumped to match body.
+            // egui's defaults (Body/Button 12.5, Small 9, Monospace 12) leave
+            // captions and the `.small()` chrome too small to read on macOS; one
+            // central override here lifts every named-TextStyle call site at once
+            // (visuals — set via `set_visuals_of` on theme/scheme change — never
+            // touch `text_styles`, so this survives live theme switches).
+            use egui::{FontFamily, FontId, TextStyle};
+            style.text_styles = [
+                (
+                    TextStyle::Small,
+                    FontId::new(11.0, FontFamily::Proportional),
+                ),
+                (TextStyle::Body, FontId::new(13.0, FontFamily::Proportional)),
+                (
+                    TextStyle::Button,
+                    FontId::new(13.0, FontFamily::Proportional),
+                ),
+                (
+                    TextStyle::Heading,
+                    FontId::new(18.0, FontFamily::Proportional),
+                ),
+                (
+                    TextStyle::Monospace,
+                    FontId::new(13.0, FontFamily::Monospace),
+                ),
+            ]
+            .into();
         });
     }
 
