@@ -20,6 +20,7 @@ use crate::{
 
 mod bottom_panel;
 mod secondary_sidebar;
+mod about;
 mod settings_modal;
 // Reachable from `state.rs` (which stores `SettingCategory` in `SettingsState`),
 // so it can't stay private to this module.
@@ -399,4 +400,5 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
     render_pdb_fetch_window(state, actions, &ctx);
     render_text_viewer_window(state, &ctx);
     settings_modal::show(state, &ctx, actions);
+    about::show(state, &ctx, actions);
 }
