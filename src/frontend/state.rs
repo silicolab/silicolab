@@ -2,7 +2,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use crate::{
     backend::{
-        config::{AppConfig, RecentProject},
+        config::{AppConfig, DockAreaLayout, DockLayoutConfig, RecentProject},
         entries::EntryStore,
         history::{EditSnapshot, History},
         project::WorkspaceSession,
@@ -59,15 +59,22 @@ impl PrimaryView {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PanelTab {
+/// A fixed (always-available) view that can be docked in either area: the
+/// console, the assistant chat, the task monitor, or the command output. These
+/// are the movable counterparts of the per-task panels and are the only tabs
+/// whose placement persists across launches (task tabs are session state).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum StaticView {
     Output,
     Console,
     Chat,
     TaskMonitor,
 }
 
-impl PanelTab {
+impl StaticView {
+    /// Every fixed view. Order is used only by the load-time completeness pass
+    /// (each area renders its own `tabs` order); the historical bottom-panel tab
+    /// order is preserved here for familiarity.
     pub fn all() -> &'static [Self] {
         &[Self::Console, Self::Chat, Self::TaskMonitor, Self::Output]
     }
@@ -79,6 +86,344 @@ impl PanelTab {
             Self::TaskMonitor => "Task Monitor",
             Self::Output => "Output",
         }
+    }
+
+    /// Stable token used for persistence — decoupled from the enum order so the
+    /// variants can be reordered without invalidating a saved layout (mirrors
+    /// [`AtomStyle::token`]).
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Console => "console",
+            Self::Chat => "chat",
+            Self::TaskMonitor => "task_monitor",
+            Self::Output => "output",
+        }
+    }
+
+    pub fn from_token(token: &str) -> Option<Self> {
+        Some(match token {
+            "console" => Self::Console,
+            "chat" => Self::Chat,
+            "task_monitor" => Self::TaskMonitor,
+            "output" => Self::Output,
+            _ => return None,
+        })
+    }
+
+    /// The area a view defaults into when a saved layout doesn't place it. Chat
+    /// lives on the right (next to the structure, like comparable assistants);
+    /// the rest live in the bottom panel.
+    pub fn home_area(self) -> DockArea {
+        match self {
+            Self::Chat => DockArea::Right,
+            _ => DockArea::Bottom,
+        }
+    }
+}
+
+/// One tab in a dock area: either a fixed view or a per-task detail panel keyed
+/// by its task-run id. `Copy` + `'static` so it is a valid drag-and-drop payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DockTab {
+    Static(StaticView),
+    Task(u64),
+}
+
+/// A dockable area. The left primary sidebar is intentionally not a dock target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DockArea {
+    Bottom,
+    Right,
+}
+
+impl DockArea {
+    pub fn all() -> [Self; 2] {
+        [Self::Bottom, Self::Right]
+    }
+}
+
+/// The ordered tabs of one dock area, the active tab, and whether the user has
+/// explicitly collapsed it. `active` is `None` only when `tabs` is empty.
+#[derive(Debug, Clone, Default)]
+pub struct DockAreaState {
+    pub tabs: Vec<DockTab>,
+    pub active: Option<DockTab>,
+    pub collapsed: bool,
+}
+
+/// Placement and sizing of the two dock areas. The single source of truth for
+/// which view/panel is shown where; the renderer and the dispatcher both drive
+/// it through the helpers below (none of which touch `egui::Context`). The fixed
+/// views are mirrored to [`DockLayoutConfig`] for persistence; task tabs are
+/// session-only and are rebuilt by [`DockModel::add_task`].
+#[derive(Debug, Clone)]
+pub struct DockModel {
+    pub bottom: DockAreaState,
+    pub right: DockAreaState,
+    pub right_width: f32,
+    pub bottom_height: f32,
+}
+
+impl Default for DockModel {
+    fn default() -> Self {
+        Self {
+            // Bottom shows console / monitor / output (console active), matching
+            // the historical bottom-panel tabs — visible at rest.
+            bottom: DockAreaState {
+                tabs: vec![
+                    DockTab::Static(StaticView::Console),
+                    DockTab::Static(StaticView::TaskMonitor),
+                    DockTab::Static(StaticView::Output),
+                ],
+                active: Some(DockTab::Static(StaticView::Console)),
+                collapsed: false,
+            },
+            // Chat's home is the right sidebar and it is shown at rest, so a
+            // first run opens straight into the assistant.
+            right: DockAreaState {
+                tabs: vec![DockTab::Static(StaticView::Chat)],
+                active: Some(DockTab::Static(StaticView::Chat)),
+                collapsed: false,
+            },
+            right_width: SIDEBAR_DEFAULT_WIDTH_SECONDARY,
+            bottom_height: PANEL_DEFAULT_HEIGHT,
+        }
+    }
+}
+
+impl DockModel {
+    pub fn area(&self, area: DockArea) -> &DockAreaState {
+        match area {
+            DockArea::Bottom => &self.bottom,
+            DockArea::Right => &self.right,
+        }
+    }
+
+    pub fn area_mut(&mut self, area: DockArea) -> &mut DockAreaState {
+        match area {
+            DockArea::Bottom => &mut self.bottom,
+            DockArea::Right => &mut self.right,
+        }
+    }
+
+    /// An area is shown when it holds at least one tab and the user has not
+    /// explicitly collapsed it — the single visibility rule (auto-hide is
+    /// structural; `collapsed` is the explicit override).
+    pub fn is_visible(&self, area: DockArea) -> bool {
+        let state = self.area(area);
+        !state.tabs.is_empty() && !state.collapsed
+    }
+
+    pub fn area_of(&self, tab: DockTab) -> Option<DockArea> {
+        DockArea::all()
+            .into_iter()
+            .find(|&area| self.area(area).tabs.contains(&tab))
+    }
+
+    /// Remove `tab` from whichever area holds it, repointing that area's active
+    /// tab to the last remaining one when the removed tab was active (mirrors
+    /// `TaskManager::close_panel`). Returns the area it left.
+    pub fn remove_tab(&mut self, tab: DockTab) -> Option<DockArea> {
+        let area = self.area_of(tab)?;
+        let state = self.area_mut(area);
+        state.tabs.retain(|candidate| *candidate != tab);
+        if state.active == Some(tab) {
+            state.active = state.tabs.last().copied();
+        }
+        Some(area)
+    }
+
+    /// Insert `tab` into `area` at `at` (appended when `None`), after removing any
+    /// existing copy from either area so a tab lives in exactly one place. Makes
+    /// it active and reveals the area.
+    pub fn insert_tab(&mut self, area: DockArea, tab: DockTab, at: Option<usize>) {
+        self.remove_tab(tab);
+        let state = self.area_mut(area);
+        let index = at.unwrap_or(state.tabs.len()).min(state.tabs.len());
+        state.tabs.insert(index, tab);
+        state.active = Some(tab);
+        state.collapsed = false;
+    }
+
+    /// Move `tab` to `area` at the given index, handling a same-area reorder (the
+    /// target index is recomputed after the source removal shifts it).
+    pub fn move_tab(&mut self, tab: DockTab, to: DockArea, at: Option<usize>) {
+        let adjusted = match (self.area_of(tab), at) {
+            (Some(from), Some(index)) if from == to => {
+                let old = self.area(to).tabs.iter().position(|t| *t == tab);
+                match old {
+                    Some(old) if old < index => Some(index - 1),
+                    _ => Some(index),
+                }
+            }
+            _ => at,
+        };
+        self.insert_tab(to, tab, adjusted);
+    }
+
+    /// Make `tab` the active tab of `area` and reveal the area (no-op if the tab
+    /// isn't in that area).
+    pub fn activate(&mut self, area: DockArea, tab: DockTab) {
+        let state = self.area_mut(area);
+        if state.tabs.contains(&tab) {
+            state.active = Some(tab);
+            state.collapsed = false;
+        }
+    }
+
+    /// Ensure the fixed `view` exists (appending it to its home area if absent),
+    /// then activate and reveal its area. Backs the "show this view" buttons.
+    pub fn reveal_static(&mut self, view: StaticView) {
+        let tab = DockTab::Static(view);
+        let area = self.area_of(tab).unwrap_or_else(|| {
+            let home = view.home_area();
+            self.area_mut(home).tabs.push(tab);
+            home
+        });
+        self.activate(area, tab);
+    }
+
+    /// Add a task panel tab to its home area (the area already holding a task tab,
+    /// else the right sidebar), make it active, and reveal the area.
+    pub fn add_task(&mut self, task_run_id: u64) {
+        let home = self.task_home_area();
+        self.insert_tab(home, DockTab::Task(task_run_id), None);
+    }
+
+    pub fn remove_task(&mut self, task_run_id: u64) {
+        self.remove_tab(DockTab::Task(task_run_id));
+    }
+
+    /// Drop every task tab (keeping the fixed views), e.g. on project close.
+    pub fn clear_task_tabs(&mut self) {
+        for area in DockArea::all() {
+            let state = self.area_mut(area);
+            state.tabs.retain(|tab| matches!(tab, DockTab::Static(_)));
+            if state
+                .active
+                .is_some_and(|active| !state.tabs.contains(&active))
+            {
+                state.active = state.tabs.last().copied();
+            }
+        }
+    }
+
+    /// Where a freshly opened task panel docks: the area already hosting a task
+    /// tab (so a run of tasks stays grouped after the user moves one), else the
+    /// right sidebar.
+    fn task_home_area(&self) -> DockArea {
+        DockArea::all()
+            .into_iter()
+            .find(|&area| {
+                self.area(area)
+                    .tabs
+                    .iter()
+                    .any(|tab| matches!(tab, DockTab::Task(_)))
+            })
+            .unwrap_or(DockArea::Right)
+    }
+
+    /// Serialize the fixed-view placement (task tabs are excluded structurally).
+    pub fn to_config(&self) -> DockLayoutConfig {
+        DockLayoutConfig {
+            bottom: area_to_config(&self.bottom),
+            right: area_to_config(&self.right),
+            right_width: self.right_width,
+            bottom_height: self.bottom_height,
+        }
+    }
+
+    /// Rebuild from a saved layout, then run a completeness pass so every fixed
+    /// view appears in exactly one area (no view can ever be unreachable, even
+    /// from a hand-edited or older `settings.json`). No task tabs are restored.
+    pub fn from_config(config: &DockLayoutConfig) -> Self {
+        let mut model = Self {
+            bottom: area_from_config(&config.bottom),
+            right: area_from_config(&config.right),
+            right_width: config.right_width,
+            bottom_height: config.bottom_height,
+        };
+        model.ensure_all_static_views();
+        model
+    }
+
+    fn ensure_all_static_views(&mut self) {
+        for &view in StaticView::all() {
+            let tab = DockTab::Static(view);
+            let holders: Vec<DockArea> = DockArea::all()
+                .into_iter()
+                .filter(|&area| self.area(area).tabs.contains(&tab))
+                .collect();
+            match holders.as_slice() {
+                [] => {
+                    // Missing entirely — restore it to its home area.
+                    let state = self.area_mut(view.home_area());
+                    state.tabs.push(tab);
+                    if state.active.is_none() {
+                        state.active = Some(tab);
+                    }
+                }
+                [_only] => {}
+                _ => {
+                    // Present in more than one area — keep the first, drop the rest.
+                    for &area in &holders[1..] {
+                        let state = self.area_mut(area);
+                        state.tabs.retain(|candidate| *candidate != tab);
+                        if state.active == Some(tab) {
+                            state.active = state.tabs.last().copied();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Serialize one area's fixed views (in order); a task tab can't be restored, so
+/// an active task falls back to the area's first fixed view.
+fn area_to_config(state: &DockAreaState) -> DockAreaLayout {
+    let tabs: Vec<String> = state
+        .tabs
+        .iter()
+        .filter_map(|tab| match tab {
+            DockTab::Static(view) => Some(view.token().to_string()),
+            DockTab::Task(_) => None,
+        })
+        .collect();
+    let active = match state.active {
+        Some(DockTab::Static(view)) => Some(view.token().to_string()),
+        _ => tabs.first().cloned(),
+    };
+    DockAreaLayout {
+        tabs,
+        active,
+        collapsed: state.collapsed,
+    }
+}
+
+/// Rebuild one area from a saved layout: parse known tokens (skip unknown ones),
+/// de-duplicate, and reconcile the active tab to a present view.
+fn area_from_config(layout: &DockAreaLayout) -> DockAreaState {
+    let mut tabs: Vec<DockTab> = Vec::new();
+    for token in &layout.tabs {
+        if let Some(view) = StaticView::from_token(token) {
+            let tab = DockTab::Static(view);
+            if !tabs.contains(&tab) {
+                tabs.push(tab);
+            }
+        }
+    }
+    let active = layout
+        .active
+        .as_deref()
+        .and_then(StaticView::from_token)
+        .map(DockTab::Static)
+        .filter(|tab| tabs.contains(tab))
+        .or_else(|| tabs.first().copied());
+    DockAreaState {
+        tabs,
+        active,
+        collapsed: layout.collapsed,
     }
 }
 
@@ -111,10 +456,7 @@ pub struct EntryListState {
 #[derive(Debug, Clone)]
 pub struct LayoutState {
     pub active_primary_view: PrimaryView,
-    pub active_panel_tab: PanelTab,
     pub show_primary_sidebar: bool,
-    pub show_secondary_sidebar: bool,
-    pub show_panel: bool,
     /// Whether the Settings modal dialog is open. Transient window chrome (it is
     /// never persisted), so — like the sidebar-visibility flags above — it is
     /// flipped directly by the UI entry points rather than through an AppAction:
@@ -126,8 +468,12 @@ pub struct LayoutState {
     /// persisted, so the dispatcher does not mediate it.
     pub about_open: bool,
     pub primary_sidebar_width: f32,
-    pub secondary_sidebar_width: f32,
-    pub panel_height: f32,
+    /// The dockable bottom panel + right sidebar: which views/panels live where,
+    /// their order, the active tab per area, visibility, and the two area sizes.
+    /// Replaces the former fixed `active_panel_tab` / `show_secondary_sidebar` /
+    /// `show_panel` / `secondary_sidebar_width` / `panel_height` fields. Its fixed
+    /// views are persisted across launches; see [`DockModel`].
+    pub dock: DockModel,
 }
 
 pub const SIDEBAR_MIN_WIDTH_PRIMARY: f32 = 220.0;
@@ -136,6 +482,11 @@ pub const SIDEBAR_DEFAULT_WIDTH_PRIMARY: f32 = 240.0;
 pub const SIDEBAR_DEFAULT_WIDTH_SECONDARY: f32 = 320.0;
 pub const PANEL_MIN_HEIGHT: f32 = 120.0;
 pub const PANEL_DEFAULT_HEIGHT: f32 = 180.0;
+
+/// Debounce before a changed workbench layout is written to `settings.json`.
+/// Long enough to coalesce a divider drag or a burst of tab clicks into one save
+/// once the user pauses; short enough that an isolated change persists promptly.
+const LAYOUT_SAVE_DEBOUNCE_SECS: f64 = 0.6;
 
 /// Maximum allowed width for either sidebar: half the window, capped at 480 px,
 /// but never below `SIDEBAR_MIN_WIDTH_SECONDARY` so `clamp(min, max_w)` is always
@@ -149,24 +500,13 @@ impl Default for LayoutState {
     fn default() -> Self {
         Self {
             active_primary_view: PrimaryView::EntryList,
-            active_panel_tab: PanelTab::Console,
             show_primary_sidebar: true,
-            show_secondary_sidebar: false,
-            show_panel: true,
             settings_open: false,
             about_open: false,
             primary_sidebar_width: SIDEBAR_DEFAULT_WIDTH_PRIMARY,
-            secondary_sidebar_width: SIDEBAR_DEFAULT_WIDTH_SECONDARY,
-            panel_height: PANEL_DEFAULT_HEIGHT,
+            dock: DockModel::default(),
         }
     }
-}
-
-/// Which sidebar a layout resize action targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Side {
-    Primary,
-    Secondary,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1298,6 +1638,12 @@ pub struct AppState {
     /// persist-worthy action and drained on the UI thread once the debounce
     /// window elapses, so rapid interactions don't each pay a full project save.
     autosave_deadline: Option<f64>,
+    /// egui time (seconds) at which a changed workbench layout should be written
+    /// to `settings.json`, or `None` when the persisted layout is up to date.
+    /// Separate from `autosave_deadline` because the layout is a global
+    /// preference (not project data) and so must persist even in a scratch
+    /// workspace, where project autosave is a no-op.
+    layout_save_deadline: Option<f64>,
 }
 
 impl AppState {
@@ -1350,7 +1696,12 @@ impl AppState {
             workspace_save_path: save_path,
             last_logged_message: message,
             autosave_deadline: None,
+            layout_save_deadline: None,
         };
+        // Apply the persisted workbench layout (a global preference). Task tabs
+        // are session state and are never restored here; they are recreated as
+        // tasks open.
+        state.ui.layout.dock = DockModel::from_config(&state.config.dock_layout);
         if let Some(snapshot) = project_snapshot.as_ref() {
             state.ui.project_viewport = snapshot.view.viewport.clone();
             state.ui.viewport = state.ui.project_viewport.clone();
@@ -1574,6 +1925,23 @@ impl AppState {
         self.autosave_deadline = None;
     }
 
+    /// Mark the persisted workbench layout dirty, scheduling a coalesced write to
+    /// `settings.json` a short while after `now_seconds` (egui clock). Repeated
+    /// calls push the deadline back so a divider drag or a burst of tab clicks
+    /// collapses into a single save once the user pauses — the dock itself is
+    /// mutated directly for instant feedback; only the disk write is debounced.
+    pub fn mark_layout_dirty(&mut self, now_seconds: f64) {
+        self.layout_save_deadline = Some(now_seconds + LAYOUT_SAVE_DEBOUNCE_SECS);
+    }
+
+    pub fn layout_save_deadline(&self) -> Option<f64> {
+        self.layout_save_deadline
+    }
+
+    pub fn clear_layout_save_deadline(&mut self) {
+        self.layout_save_deadline = None;
+    }
+
     pub fn project_snapshot(&self) -> Option<ProjectSnapshot> {
         let project = self.workspace.project()?;
         Some(ProjectSnapshot {
@@ -1723,13 +2091,152 @@ impl AppState {
         let active_view = self.ui.layout.active_primary_view;
         self.ui.layout = LayoutState::default();
         self.ui.layout.active_primary_view = active_view;
+        // The fresh dock holds no task tabs, so drop the matching panel/form
+        // state too — otherwise an open task panel would survive the reset with
+        // no tab to reach it.
+        self.tasks.panels.clear();
+        self.tasks.active_panel = None;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AppState, MdRunPrompt, MdStageEdit};
+    use super::{AppState, DockArea, DockModel, DockTab, MdRunPrompt, MdStageEdit, StaticView};
     use crate::workflows::molecular_dynamics::{MdStage, StageLength};
+
+    /// The config-side literal default (`DockLayoutConfig::default`, in the
+    /// backend layer) must stay in lock-step with `DockModel::default`, since the
+    /// two are spelled out independently (the backend can't reference the
+    /// frontend's view tokens or size consts).
+    #[test]
+    fn default_dock_matches_config_default() {
+        let from_model = DockModel::default().to_config();
+        let literal = crate::backend::config::DockLayoutConfig::default();
+        assert_eq!(from_model.bottom.tabs, literal.bottom.tabs);
+        assert_eq!(from_model.bottom.active, literal.bottom.active);
+        assert_eq!(from_model.bottom.collapsed, literal.bottom.collapsed);
+        assert_eq!(from_model.right.tabs, literal.right.tabs);
+        assert_eq!(from_model.right.active, literal.right.active);
+        assert_eq!(from_model.right.collapsed, literal.right.collapsed);
+        assert_eq!(from_model.right_width, literal.right_width);
+        assert_eq!(from_model.bottom_height, literal.bottom_height);
+    }
+
+    /// A saved layout missing a view, duplicating one, or naming an unknown token
+    /// is repaired on load so every fixed view is reachable in exactly one area.
+    #[test]
+    fn from_config_repairs_incomplete_layout() {
+        use crate::backend::config::{DockAreaLayout, DockLayoutConfig};
+        let config = DockLayoutConfig {
+            bottom: DockAreaLayout {
+                // Console duplicated, an unknown token, and Chat/Output/Monitor
+                // missing entirely.
+                tabs: vec!["console".into(), "console".into(), "mystery".into()],
+                active: Some("console".into()),
+                collapsed: false,
+            },
+            right: DockAreaLayout {
+                tabs: vec![],
+                active: None,
+                collapsed: true,
+            },
+            right_width: 300.0,
+            bottom_height: 200.0,
+        };
+        let model = DockModel::from_config(&config);
+        for view in StaticView::all() {
+            let tab = DockTab::Static(*view);
+            let holders = DockArea::all()
+                .into_iter()
+                .filter(|&area| model.area(area).tabs.contains(&tab))
+                .count();
+            assert_eq!(holders, 1, "{view:?} must appear in exactly one area");
+        }
+        // Chat is restored to its home (right) area.
+        assert!(
+            model
+                .right
+                .tabs
+                .contains(&DockTab::Static(StaticView::Chat))
+        );
+    }
+
+    #[test]
+    fn insert_tab_dedups_across_areas_and_focuses() {
+        let mut dock = DockModel::default();
+        // Chat lives in the right area by default; moving it to the bottom must
+        // remove it from the right (a tab lives in exactly one place), make it
+        // active in the bottom, and reveal the bottom.
+        let chat = DockTab::Static(StaticView::Chat);
+        dock.insert_tab(DockArea::Bottom, chat, Some(0));
+        assert!(!dock.right.tabs.contains(&chat));
+        assert_eq!(dock.bottom.tabs.first(), Some(&chat));
+        assert_eq!(dock.bottom.active, Some(chat));
+        assert!(!dock.bottom.collapsed);
+    }
+
+    #[test]
+    fn move_tab_reorders_within_area_with_index_adjustment() {
+        // Bottom default order: Console, TaskMonitor, Output.
+        let mut dock = DockModel::default();
+        let console = DockTab::Static(StaticView::Console);
+        // Move Console (index 0) to the end (index 3): after removing it the list
+        // is [TaskMonitor, Output] and the requested index adjusts to 2.
+        dock.move_tab(console, DockArea::Bottom, Some(3));
+        assert_eq!(
+            dock.bottom.tabs,
+            vec![
+                DockTab::Static(StaticView::TaskMonitor),
+                DockTab::Static(StaticView::Output),
+                console,
+            ]
+        );
+    }
+
+    #[test]
+    fn remove_tab_repoints_active_to_last() {
+        let mut dock = DockModel::default();
+        // Console is active in the bottom; removing it repoints active to the new
+        // last remaining tab.
+        dock.remove_tab(DockTab::Static(StaticView::Console));
+        assert_eq!(dock.bottom.active, dock.bottom.tabs.last().copied());
+        assert!(dock.bottom.active.is_some());
+    }
+
+    #[test]
+    fn add_task_is_sticky_to_the_area_holding_tasks() {
+        let mut dock = DockModel::default();
+        // First task homes to the right sidebar.
+        dock.add_task(1);
+        assert_eq!(dock.area_of(DockTab::Task(1)), Some(DockArea::Right));
+        // Drag it to the bottom; a second task now homes alongside it (sticky).
+        dock.move_tab(DockTab::Task(1), DockArea::Bottom, None);
+        dock.add_task(2);
+        assert_eq!(dock.area_of(DockTab::Task(2)), Some(DockArea::Bottom));
+    }
+
+    #[test]
+    fn clear_task_tabs_keeps_fixed_views() {
+        let mut dock = DockModel::default();
+        dock.add_task(7); // -> right, active
+        dock.clear_task_tabs();
+        assert!(dock.area_of(DockTab::Task(7)).is_none());
+        // The fixed Chat view remains and is the right area's active tab again.
+        assert!(dock.right.tabs.contains(&DockTab::Static(StaticView::Chat)));
+        assert_eq!(dock.right.active, Some(DockTab::Static(StaticView::Chat)));
+    }
+
+    #[test]
+    fn is_visible_combines_emptiness_and_collapse() {
+        let mut dock = DockModel::default();
+        assert!(dock.is_visible(DockArea::Bottom)); // has tabs, not collapsed
+        assert!(dock.is_visible(DockArea::Right)); // has Chat, not collapsed by default
+        dock.right.collapsed = true;
+        assert!(!dock.is_visible(DockArea::Right)); // explicitly collapsed -> hidden
+        dock.bottom.tabs.clear();
+        dock.bottom.active = None;
+        assert!(!dock.is_visible(DockArea::Bottom)); // empty -> hidden
+    }
 
     #[test]
     fn empty_startup_does_not_create_initial_entry() {

@@ -11,7 +11,9 @@ pub(crate) fn create_task_from_template(state: &mut AppState, template_id: &'sta
     state.ui.layout.show_primary_sidebar = true;
     if controller.requires_panel() {
         state.tasks.open_panel(task_run_id);
-        state.ui.layout.show_secondary_sidebar = true;
+        // Dock the panel as a tab in its home area (revealing the area). Task tabs
+        // are session state, so this placement is never persisted.
+        state.ui.layout.dock.add_task(task_run_id);
     }
     state.set_message(format!(
         "Opened task #{}: {}",
@@ -140,23 +142,29 @@ pub(crate) fn record_task_result_entry(state: &mut AppState, task_run_id: u64, e
 
 pub(crate) fn open_task_panel(state: &mut AppState, task_run_id: u64) {
     state.tasks.open_panel(task_run_id);
-    state.ui.layout.show_secondary_sidebar = true;
+    state.ui.layout.dock.add_task(task_run_id);
     ensure_panel_form(state, task_run_id);
 }
 
 pub(crate) fn close_task_panel(state: &mut AppState, task_run_id: u64) {
+    // The dominant caller is `close_active_task_panel` on task completion/cancel,
+    // so this must stay cheap: drop the tab (the area auto-hides when it was the
+    // last tab) and never touch the disk — task tabs are not persisted.
     state.tasks.close_panel(task_run_id);
-    if state.tasks.panels.is_empty() {
-        state.ui.layout.show_secondary_sidebar = false;
-    }
+    state.ui.layout.dock.remove_task(task_run_id);
 }
 
 pub(crate) fn activate_task_panel(state: &mut AppState, task_run_id: u64) {
+    use crate::frontend::state::DockTab;
     state.tasks.activate_panel(task_run_id);
-    if let Some(active) = state.tasks.active_panel {
-        state.ui.layout.show_secondary_sidebar = true;
-        ensure_panel_form(state, active);
+    if let Some(area) = state.ui.layout.dock.area_of(DockTab::Task(task_run_id)) {
+        state
+            .ui
+            .layout
+            .dock
+            .activate(area, DockTab::Task(task_run_id));
     }
+    ensure_panel_form(state, task_run_id);
 }
 
 /// Make a task's dashboard renderable on demand: initialize its form state if

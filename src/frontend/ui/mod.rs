@@ -12,15 +12,17 @@ use crate::{
         actions::AppAction,
         services::entry_details,
         state::{
-            AppState, EngineDraft, PANEL_MIN_HEIGHT, PrimaryView, SIDEBAR_MIN_WIDTH_PRIMARY,
-            SIDEBAR_MIN_WIDTH_SECONDARY, SelectionItem, Side, sidebar_max_width,
+            AppState, DockArea, EngineDraft, PANEL_MIN_HEIGHT, PrimaryView,
+            SIDEBAR_MIN_WIDTH_PRIMARY, SIDEBAR_MIN_WIDTH_SECONDARY, SelectionItem,
+            sidebar_max_width,
         },
     },
 };
 
 mod about;
-mod bottom_panel;
+mod dock;
 mod modal;
+mod panel_bodies;
 mod secondary_sidebar;
 mod settings_modal;
 // Reachable from `state.rs` (which stores `SettingCategory` in `SettingsState`),
@@ -30,8 +32,8 @@ mod settings_representation;
 mod style_panel;
 mod workspace;
 
-use bottom_panel::render_status_bar;
-use secondary_sidebar::render_secondary_sidebar;
+use dock::{drag_in_flight, render_dock_reveal_targets};
+use panel_bodies::render_status_bar;
 use style_panel::render_style_panel;
 use workspace::render_workspace;
 
@@ -75,7 +77,13 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
     // opaque (see below). `None` means opaque chrome.
     let glass = state.ui.glass_alpha;
 
-    render_window_resize_handles(&ctx);
+    // Suppress the window-resize handles while a dock tab is being dragged so a
+    // drag near a window edge can never start a window resize (or fight the
+    // edge-reveal drop targets).
+    let tab_drag = drag_in_flight(&ctx);
+    if !tab_drag {
+        render_window_resize_handles(&ctx);
+    }
 
     // Ctrl+, (Cmd+, on macOS) toggles the Settings modal — the platform
     // convention for Preferences. `consume_key` so the keystroke doesn't also
@@ -166,7 +174,7 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
     // (e.g. the bottom panel's "Open Tasks" button, which runs after this block) the
     // divider falls back to a sane position rather than the activity-bar edge.
     let mut primary_rendered_w = state.ui.layout.primary_sidebar_width;
-    let mut secondary_rendered_w = state.ui.layout.secondary_sidebar_width;
+    let mut secondary_rendered_w = state.ui.layout.dock.right_width;
 
     // The primary sidebar is added FIRST so it spans the full window height —
     // the macOS 27 edge-to-edge sidebar: it reaches the window's top and bottom
@@ -229,12 +237,13 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
         )
         .show_inside(ui, |ui| render_status_bar(state, ui));
 
-    if state.ui.layout.show_secondary_sidebar {
+    if state.ui.layout.dock.is_visible(DockArea::Right) {
         let max_w = sidebar_max_width(ctx.viewport_rect().width());
         let width = state
             .ui
             .layout
-            .secondary_sidebar_width
+            .dock
+            .right_width
             .clamp(SIDEBAR_MIN_WIDTH_SECONDARY, max_w);
         egui::Panel::right("secondary_sidebar")
             .resizable(false)
@@ -251,7 +260,9 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
                     }),
             )
             .show_inside(ui, |ui| {
-                render_pinned(ui, |ui| render_secondary_sidebar(state, ui, actions));
+                render_pinned(ui, |ui| {
+                    dock::render_dock_area(state, ui, DockArea::Right, actions)
+                });
             });
         secondary_rendered_w = width;
     }
@@ -266,10 +277,14 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
 
     // The bottom panel is fixed-size (see `render_workspace`) to avoid egui's
     // resizable-panel growth bug, so it gets a custom resize handle — a subtle
-    // centered pill on hover that drives `panel_height`. Its horizontal divider
+    // centered pill on hover that drives `dock.bottom_height`. Its horizontal divider
     // shares no edge with a scroll bar, so there's no grab conflict. (Sidebars
     // use egui's native resize above.)
-    if state.ui.layout.show_panel {
+    // Suppressed during a tab drag so a drag near the edge never grabs the
+    // divider (the dock model also changes visibility only via post-frame
+    // dispatch / direct flips, so the seeded rendered widths above keep geometry
+    // sane on the frame an area shows or hides).
+    if !tab_drag && state.ui.layout.dock.is_visible(DockArea::Bottom) {
         let viewport_rect = ctx.viewport_rect();
         let content_bottom = viewport_rect.bottom() - 24.0; // above the status bar
         // Use the panels' *rendered* widths (see the note above the sidebar panels)
@@ -281,12 +296,12 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
                 0.0
             };
         let workspace_right = viewport_rect.right()
-            - if state.ui.layout.show_secondary_sidebar {
+            - if state.ui.layout.dock.is_visible(DockArea::Right) {
                 secondary_rendered_w
             } else {
                 0.0
             };
-        let y = content_bottom - state.ui.layout.panel_height;
+        let y = content_bottom - state.ui.layout.dock.bottom_height;
         let max_panel_height = (viewport_rect.height() * 0.6).max(160.0);
         // Inset the grab strip past the sidebar dividers (which now run full
         // height at workspace_left / workspace_right) so the bottom corners
@@ -307,8 +322,8 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
             },
             &pal,
         ) {
-            DividerEffect::Delta(d) => actions.push(AppAction::ResizePanel(d)),
-            DividerEffect::Reset => actions.push(AppAction::ResetPanel),
+            DividerEffect::Delta(d) => actions.push(AppAction::ResizeArea(DockArea::Bottom, d)),
+            DividerEffect::Reset => actions.push(AppAction::ResetArea(DockArea::Bottom)),
             DividerEffect::None => {}
         }
     }
@@ -329,7 +344,7 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
         // Keyed off the same frame-start snapshot as the panel itself: the title
         // bar's toggle (rendered in between) can flip the live flag mid-frame,
         // and the divider must match the sidebar actually drawn this frame.
-        if sidebar_visible {
+        if sidebar_visible && !tab_drag {
             // Draw the divider at the panel's rendered edge (see the note above the
             // sidebar panels); drag emits AppAction::ResizeSidebar which the
             // dispatcher applies to the stored `primary_sidebar_width`.
@@ -353,12 +368,12 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
                 },
                 &pal,
             ) {
-                DividerEffect::Delta(d) => actions.push(AppAction::ResizeSidebar(Side::Primary, d)),
-                DividerEffect::Reset => actions.push(AppAction::ResetSidebar(Side::Primary)),
+                DividerEffect::Delta(d) => actions.push(AppAction::ResizeSidebar(d)),
+                DividerEffect::Reset => actions.push(AppAction::ResetSidebar),
                 DividerEffect::None => {}
             }
         }
-        if state.ui.layout.show_secondary_sidebar {
+        if state.ui.layout.dock.is_visible(DockArea::Right) && !tab_drag {
             let line_x = vp.right() - secondary_rendered_w;
             match render_resize_divider(
                 &ctx,
@@ -376,13 +391,34 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
                 },
                 &pal,
             ) {
-                DividerEffect::Delta(d) => {
-                    actions.push(AppAction::ResizeSidebar(Side::Secondary, d))
-                }
-                DividerEffect::Reset => actions.push(AppAction::ResetSidebar(Side::Secondary)),
+                DividerEffect::Delta(d) => actions.push(AppAction::ResizeArea(DockArea::Right, d)),
+                DividerEffect::Reset => actions.push(AppAction::ResetArea(DockArea::Right)),
                 DividerEffect::None => {}
             }
         }
+    }
+
+    // While a tab is being dragged, offer inset drop targets along the workspace
+    // edges so a hidden/empty dock area can receive the tab (and reveal itself).
+    {
+        let vp = ctx.viewport_rect();
+        let left = vp.left()
+            + if state.ui.layout.show_primary_sidebar {
+                primary_rendered_w
+            } else {
+                0.0
+            };
+        let right = vp.right()
+            - if state.ui.layout.dock.is_visible(DockArea::Right) {
+                secondary_rendered_w
+            } else {
+                0.0
+            };
+        let workspace_rect = Rect::from_min_max(
+            egui::pos2(left, vp.top() + 32.0),
+            egui::pos2(right, vp.bottom() - 24.0),
+        );
+        render_dock_reveal_targets(&ctx, workspace_rect, &state.ui.layout.dock, &pal, actions);
     }
 
     // Hairline border hugging the rounded window. Painted last so it sits atop

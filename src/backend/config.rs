@@ -237,6 +237,68 @@ pub struct AppConfig {
     /// API key. `#[serde(default)]` so an older `settings.json` still parses.
     #[serde(default)]
     pub assistant: AssistantConfig,
+    /// Persisted workbench layout: which movable views are docked in which area,
+    /// their order, the active view per area, area visibility, and the two area
+    /// sizes. A user preference (shared across projects, like the theme), not
+    /// project data. `#[serde(default)]` so an older `settings.json` still parses
+    /// and falls back to the default layout. Only the fixed views persist here;
+    /// per-task panels are session state and are never written. See
+    /// [`crate::frontend::state::DockModel`].
+    #[serde(default)]
+    pub dock_layout: DockLayoutConfig,
+}
+
+/// Persisted state of one dock area (the bottom panel or the right sidebar). The
+/// `tabs`/`active` strings are fixed-view tokens (see
+/// [`crate::frontend::state::StaticView::token`]); unknown tokens are skipped on
+/// load, so the schema tolerates reordering or removing a view.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DockAreaLayout {
+    pub tabs: Vec<String>,
+    pub active: Option<String>,
+    #[serde(default)]
+    pub collapsed: bool,
+}
+
+/// Persisted workbench layout mirror of [`crate::frontend::state::DockModel`].
+/// Lives in the backend layer (no dependency on `frontend`), so the default
+/// placement is spelled out here with literal view tokens and sizes; a test in
+/// `state.rs` asserts it stays in lock-step with `DockModel::default()`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DockLayoutConfig {
+    pub bottom: DockAreaLayout,
+    pub right: DockAreaLayout,
+    pub right_width: f32,
+    pub bottom_height: f32,
+}
+
+impl Default for DockLayoutConfig {
+    fn default() -> Self {
+        Self {
+            // Bottom shows the console/monitor/output trio (console active),
+            // matching the historical bottom-panel tabs.
+            bottom: DockAreaLayout {
+                tabs: vec![
+                    "console".to_string(),
+                    "task_monitor".to_string(),
+                    "output".to_string(),
+                ],
+                active: Some("console".to_string()),
+                collapsed: false,
+            },
+            // Chat's home is the right sidebar and the area is shown at rest, so
+            // a first run opens straight into the assistant.
+            right: DockAreaLayout {
+                tabs: vec!["chat".to_string()],
+                active: Some("chat".to_string()),
+                collapsed: false,
+            },
+            // Mirror SIDEBAR_DEFAULT_WIDTH_SECONDARY / PANEL_DEFAULT_HEIGHT
+            // (frontend consts, kept in sync by the state.rs lock-step test).
+            right_width: 320.0,
+            bottom_height: 180.0,
+        }
+    }
 }
 
 fn default_glass() -> bool {
@@ -300,6 +362,7 @@ impl Default for AppConfig {
             auto_install_updates: default_auto_install_updates(),
             representation: RepresentationPrefs::default(),
             assistant: AssistantConfig::default(),
+            dock_layout: DockLayoutConfig::default(),
         }
     }
 }
