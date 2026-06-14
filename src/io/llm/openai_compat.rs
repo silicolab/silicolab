@@ -422,8 +422,9 @@ fn truncate(text: &str, max: usize) -> String {
 /// usual cause is a Base URL pointing at a web page (e.g. a relay's UI or a
 /// landing page) instead of its API root, which answers 200 with HTML — so name
 /// that and point at the Base URL rather than surfacing a raw parser offset like
-/// "expected value at line 1 column 1".
-fn non_json_response_message(body: &str) -> String {
+/// "expected value at line 1 column 1". Shared with the live model-list fetch
+/// (`frontend::jobs`), which hits the same wrong-Base-URL failure.
+pub(crate) fn non_json_response_message(body: &str) -> String {
     let trimmed = body.trim_start();
     if trimmed.is_empty() {
         "the endpoint returned an empty response, not JSON — check the Base URL".to_string()

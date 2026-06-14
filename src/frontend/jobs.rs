@@ -373,11 +373,24 @@ fn fetch_model_ids(
         .limit(MODEL_FETCH_MAX_BYTES)
         .read_to_string()
         .map_err(|error| error.to_string())?;
+    interpret_models_response(status, &text)
+}
+
+/// Turn a `/models` HTTP response into model ids, or a readable error. A
+/// non-JSON body (HTML error page, empty, a relay's SPA index) almost always
+/// means the Base URL is wrong, so it gets the same "points at the API root
+/// (… /v1)" hint the completion path gives — regardless of status, since a wrong
+/// URL can 404 to a page as readily as 200 to one. A valid JSON body with a
+/// non-200 status is a real API error, surfaced as the status.
+fn interpret_models_response(status: u16, body: &str) -> Result<Vec<String>, String> {
+    let Ok(json) = serde_json::from_str::<Value>(body) else {
+        return Err(crate::io::llm::openai_compat::non_json_response_message(
+            body,
+        ));
+    };
     if status != 200 {
         return Err(format!("provider returned HTTP {status}"));
     }
-    let json: Value =
-        serde_json::from_str(&text).map_err(|error| format!("malformed response: {error}"))?;
     Ok(parse_model_ids(&json))
 }
 
@@ -912,5 +925,46 @@ mod tests {
             parse_model_ids(&json!({ "data": [{ "id": "ok" }, { "name": "no-id" }] })),
             vec!["ok"]
         );
+    }
+
+    #[test]
+    fn interpret_models_response_reads_ids_on_ok() {
+        assert_eq!(
+            interpret_models_response(200, r#"{"data":[{"id":"x"},{"id":"y"}]}"#),
+            Ok(vec!["x".to_string(), "y".to_string()])
+        );
+    }
+
+    #[test]
+    fn interpret_models_response_html_points_at_base_url() {
+        // The exact symptom the user hit: Base URL without `/v1` returns the
+        // relay's web page, not JSON. The error must read like the chat path —
+        // name the HTML page and point at the `/v1` API root, not raw serde.
+        let err = interpret_models_response(200, "<!doctype html><html></html>").unwrap_err();
+        assert!(err.contains("HTML"), "got: {err}");
+        assert!(err.contains("/v1"), "got: {err}");
+        assert!(!err.contains("malformed"), "leaks serde wording: {err}");
+    }
+
+    #[test]
+    fn interpret_models_response_empty_body_flags_base_url() {
+        let err = interpret_models_response(200, "   ").unwrap_err();
+        assert!(err.contains("empty"), "got: {err}");
+    }
+
+    #[test]
+    fn interpret_models_response_non_json_error_page_hints_url_regardless_of_status() {
+        // A wrong Base URL can 404 to an HTML page too; that is still a
+        // wrong-URL signal, so it gets the same hint rather than a bare status.
+        let err = interpret_models_response(404, "<html>not found</html>").unwrap_err();
+        assert!(err.contains("HTML"), "got: {err}");
+    }
+
+    #[test]
+    fn interpret_models_response_json_error_reports_status() {
+        // A valid JSON body with a non-200 status is a real API error, not a
+        // wrong URL — surface the status.
+        let err = interpret_models_response(503, r#"{"error":"nope"}"#).unwrap_err();
+        assert!(err.contains("503"), "got: {err}");
     }
 }
