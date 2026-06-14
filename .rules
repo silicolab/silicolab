@@ -1,0 +1,51 @@
+# SilicoLab rules
+
+Keep these rules short, practical, and focused on the invariants that are expensive to repair later.
+
+# Rust coding guidelines
+
+* Avoid comments that merely restate code. Use comments for non-obvious invariants, design constraints, edge cases, or why a straightforward-looking alternative is wrong.
+* Do not create shallow one-function modules just to look organized. Add a new file or module when it represents a real domain concept, layer boundary, or reusable component.
+* Avoid panics in production paths that handle user data, external files, subprocess output, or network responses. Return useful errors instead.
+* Do not silently discard fallible errors. Propagate them, handle them, or make the deliberate ignore visible.
+* Do not introduce global state for convenience unless the existing architecture already has an ownership point for that state.
+
+# Architecture invariants
+
+* Before adding a new command, action, engine setting, or persistence path, search for the existing pattern and extend it instead of creating a parallel path.
+* The GUI and CLI share the same `.sls` command definitions in `src/frontend/console.rs`. Add or change a script command once there; do not create separate GUI-only and CLI-only implementations.
+* Higher layers may depend on lower layers only; lower layers must not import or call higher layers. Layer order, lowest to highest:
+
+  ```text
+  domain/ <- io/ <- backend/ <- engines/ <- workflows/ <- frontend/
+  ```
+
+* Put code in the lowest layer that can own it. Lower layers should not depend on higher layers; `domain/` should stay free of UI and IO.
+* Projects are directories of SQLite databases. Do not introduce a separate single-file project format without an ADR, issue, or documented design note.
+* Keep generated project data backward-compatible unless there is an explicit migration path.
+* Prefer structured parsing and serialization for project files and command definitions. Avoid ad hoc string parsing when an existing parser or data model owns the format.
+
+# GUI state
+
+The GUI uses an Elm-style flow.
+
+* Persisted application state changes should go through `AppAction` and `src/frontend/dispatcher/mod.rs::dispatch`.
+* UI rendering code under `src/frontend/ui/` should read state and emit actions, not mutate persisted workspace state directly.
+* Draft editor state may be mutated locally while an editor is open, but the committed result should enter the workspace through the normal action/history path.
+* Do not bypass the action/history system for changes that should be undoable or persisted.
+* Background workers should report results back through the established frontend/dispatcher flow; they should not directly mutate GUI state.
+
+# Engines and long-running work
+
+* Engine probing must be cheap and non-blocking. Slow version detection, subprocess work, network requests, and filesystem-heavy scans should run lazily, explicitly, or in background work with cached results.
+* Preserve the shared launch model where WSL-hosted engines use a `command_prefix` such as `["wsl.exe", "-e"]` and native engines use an empty prefix.
+* When changing engine launch behavior, test or reason separately about native Windows execution and WSL-prefixed execution.
+
+# Commit hygiene
+
+* Use Conventional Commits for commit messages, matching the existing project style.
+
+# Rules hygiene
+
+These rules are read by every agent session. Add new rules only for non-obvious, repeated traps. Prefer keeping this file small.
+Remove obsolete rules when architecture changes; stale rules are worse than missing rules.
