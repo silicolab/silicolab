@@ -59,10 +59,15 @@ jobs:
           mkdir -p dist
           cp "target/${{ matrix.target }}/release/$BIN_NAME" dist/
           cp README.md LICENSE-MIT LICENSE-APACHE dist/
+          # Desktop integration: hicolor icons + .desktop. Installers/users copy
+          # the `share` tree to ~/.local/share or /usr/share.
+          mkdir -p dist/share/applications dist/share/icons
+          cp assets/linux/silicolab.desktop dist/share/applications/
+          cp -R assets/icon/hicolor dist/share/icons/
           # List members explicitly (not `.`) so archive entries have no leading
           # `./` — self_update matches the binary path exactly and a `./` prefix
           # would make it unfindable.
-          tar -czf "$ARCHIVE" -C dist "$BIN_NAME" README.md LICENSE-MIT LICENSE-APACHE
+          tar -czf "$ARCHIVE" -C dist "$BIN_NAME" README.md LICENSE-MIT LICENSE-APACHE share
           echo "ASSET=$ARCHIVE" >> "$GITHUB_ENV"
 
       - name: Package (macOS)
@@ -74,6 +79,7 @@ jobs:
           mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
           cp "target/${{ matrix.target }}/release/$BIN_NAME" "$APP/Contents/MacOS/$BIN_NAME"
           chmod +x "$APP/Contents/MacOS/$BIN_NAME"
+          cp assets/icon/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
           cat > "$APP/Contents/Info.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -87,6 +93,7 @@ jobs:
             <key>CFBundleExecutable</key><string>${BIN_NAME}</string>
             <key>CFBundlePackageType</key><string>APPL</string>
             <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+            <key>CFBundleIconFile</key><string>AppIcon</string>
             <key>NSHighResolutionCapable</key><true/>
             <key>LSMinimumSystemVersion</key><string>11.0</string>
           </dict>
