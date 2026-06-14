@@ -101,7 +101,8 @@ pub fn run(structure: Structure, source_path: Option<PathBuf>) -> Result<()> {
 fn window_viewport() -> egui::ViewportBuilder {
     let viewport = egui::ViewportBuilder::default()
         .with_inner_size([1180.0, 760.0])
-        .with_min_inner_size([860.0, 560.0]);
+        .with_min_inner_size([860.0, 560.0])
+        .with_icon(app_icon());
 
     #[cfg(target_os = "macos")]
     {
@@ -124,6 +125,30 @@ fn window_viewport() -> egui::ViewportBuilder {
     #[cfg(not(target_os = "macos"))]
     {
         viewport.with_decorations(false).with_transparent(true)
+    }
+}
+
+/// Decode the embedded 256² window icon into egui's `IconData` (straight RGBA).
+/// Used by `window_viewport` for the title-bar/taskbar/Dock icon. Panics only if
+/// the committed asset is corrupt, which a unit test guards against.
+///
+/// macOS shows this runtime icon in the Dock — eframe's `setApplicationIconImage`
+/// overrides even a bundled `.icns` — so use the padded squircle there to sit
+/// correctly in the native Dock grid. Windows/Linux taskbars have no such grid and
+/// want the full-bleed icon. Both assets are 256² (see `scripts/gen-icons.py`).
+fn app_icon() -> egui::IconData {
+    #[cfg(target_os = "macos")]
+    let bytes: &[u8] = include_bytes!("../../assets/icon/window-256-mac.png");
+    #[cfg(not(target_os = "macos"))]
+    let bytes: &[u8] = include_bytes!("../../assets/icon/window-256.png");
+    let image = image::load_from_memory(bytes)
+        .expect("decode embedded window icon")
+        .to_rgba8();
+    let (width, height) = image.dimensions();
+    egui::IconData {
+        rgba: image.into_raw(),
+        width,
+        height,
     }
 }
 
@@ -326,6 +351,9 @@ impl eframe::App for SilicoLabApp {
             for command in menu.drain() {
                 match command {
                     MenuCommand::Action(action) => actions.push(action),
+                    MenuCommand::ShowAbout => {
+                        self.state.ui.layout.about_open = true;
+                    }
                     MenuCommand::ToggleSettings => {
                         let open = &mut self.state.ui.layout.settings_open;
                         *open = !*open;
@@ -406,5 +434,18 @@ impl eframe::App for SilicoLabApp {
     /// `persist_window`, default true), so it is unaffected by returning false here.
     fn persist_egui_memory(&self) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::app_icon;
+
+    #[test]
+    fn embedded_window_icon_is_256_rgba() {
+        let icon = app_icon();
+        assert_eq!(icon.width, 256);
+        assert_eq!(icon.height, 256);
+        assert_eq!(icon.rgba.len(), 256 * 256 * 4);
     }
 }

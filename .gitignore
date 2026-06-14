@@ -36,3 +36,8 @@ target/
 
 # Claude Code.
 .claude/
+
+# ---- Project-specific ----
+
+# Generated application icon.
+/assets/icon/AppIcon.icns
