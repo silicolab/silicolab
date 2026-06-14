@@ -314,14 +314,29 @@ pub enum AppAction {
     /// Open the saved QM output report of the given QM-produced entry in a
     /// viewer window (triggered by clicking the entry's "QM" badge).
     ShowQmOutput(u64),
-    /// Resize a sidebar by a signed delta (drag direction already applied).
-    ResizeSidebar(crate::frontend::state::Side, f32),
-    /// Reset a sidebar to its default width.
-    ResetSidebar(crate::frontend::state::Side),
-    /// Resize the bottom panel by a signed delta.
-    ResizePanel(f32),
-    /// Reset the bottom panel to its default height.
-    ResetPanel,
+    /// Resize the primary (left) sidebar by a signed delta (drag direction
+    /// already applied). The right sidebar and bottom panel resize via
+    /// `ResizeArea`.
+    ResizeSidebar(f32),
+    /// Reset the primary sidebar to its default width.
+    ResetSidebar,
+    /// Resize a dock area (right sidebar width / bottom panel height) by a signed
+    /// delta. Clamped by the dispatcher against the viewport size.
+    ResizeArea(crate::frontend::state::DockArea, f32),
+    /// Reset a dock area to its default size.
+    ResetArea(crate::frontend::state::DockArea),
+    /// Move a dock tab into `to` at `index` (`None` appends) — the single
+    /// drag-and-drop handler for both reorder-within-area and move-across-area.
+    MoveDockTab {
+        tab: crate::frontend::state::DockTab,
+        to: crate::frontend::state::DockArea,
+        index: Option<usize>,
+    },
+    /// Toggle a dock area's visibility (View / native menu). Revealing an empty
+    /// area restores a default view so the toggle is never a dead no-op.
+    ToggleDockArea(crate::frontend::state::DockArea),
+    /// Reset the entire workbench layout to defaults (and persist).
+    ResetWorkbenchLayout,
 }
 
 /// A visibility change applied to the Style panel's current scope.

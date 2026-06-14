@@ -207,15 +207,24 @@ pub(crate) fn render_title_bar(
                         &mut state.ui.layout.show_primary_sidebar,
                         "Primary Side Bar",
                     );
-                    ui.checkbox(
-                        &mut state.ui.layout.show_secondary_sidebar,
-                        "Secondary Side Bar",
-                    );
-                    ui.checkbox(&mut state.ui.layout.show_panel, "Panel");
+                    // The dock areas' visibility is derived (a checkbox reflects
+                    // whether the area is shown); the toggle routes through an
+                    // action so revealing an empty area restores a default view.
+                    let mut right_visible = state.ui.layout.dock.is_visible(DockArea::Right);
+                    if ui
+                        .checkbox(&mut right_visible, "Secondary Side Bar")
+                        .changed()
+                    {
+                        actions.push(AppAction::ToggleDockArea(DockArea::Right));
+                    }
+                    let mut bottom_visible = state.ui.layout.dock.is_visible(DockArea::Bottom);
+                    if ui.checkbox(&mut bottom_visible, "Panel").changed() {
+                        actions.push(AppAction::ToggleDockArea(DockArea::Bottom));
+                    }
                     ui.checkbox(&mut state.ui.viewport.show_atom_labels, "Show Atom Labels");
                     ui.separator();
                     if ui.button("Reset Workbench Layout").clicked() {
-                        state.reset_layout_keep_view();
+                        actions.push(AppAction::ResetWorkbenchLayout);
                         ui.close();
                     }
                     ui.separator();
@@ -257,7 +266,7 @@ pub(crate) fn render_title_bar(
             if !cfg!(target_os = "macos") {
                 render_window_controls(ui, maximized);
             }
-            // Settings gear (IntelliJ/Cursor convention): right_to_left adds it
+            // Settings gear (common editor convention): right_to_left adds it
             // AFTER the window controls, so it lands to their LEFT — clear of
             // minimize/maximize/close. On macOS (no window controls here) it is
             // the right-most item. Sized to match the sidebar-toggle button.

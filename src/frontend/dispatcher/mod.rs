@@ -42,7 +42,7 @@ use crate::{
         state::{
             AppState, PANEL_DEFAULT_HEIGHT, PANEL_MIN_HEIGHT, SIDEBAR_DEFAULT_WIDTH_PRIMARY,
             SIDEBAR_DEFAULT_WIDTH_SECONDARY, SIDEBAR_MIN_WIDTH_PRIMARY,
-            SIDEBAR_MIN_WIDTH_SECONDARY, SelfUpdateStatus, Side, sidebar_max_width,
+            SIDEBAR_MIN_WIDTH_SECONDARY, SelfUpdateStatus, sidebar_max_width,
         },
         structure_import::{import_document, load_document},
         task_executor::task_executor,
@@ -54,6 +54,7 @@ use crate::{
 
 mod builders;
 mod disorder;
+mod dock;
 mod files;
 mod jobs;
 mod project;
@@ -65,6 +66,7 @@ mod tasks;
 
 pub(crate) use builders::*;
 pub(crate) use disorder::*;
+pub(crate) use dock::*;
 pub(crate) use files::*;
 pub(crate) use jobs::*;
 pub(crate) use project::*;
@@ -324,10 +326,13 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SetTrajectoryFrame(frame) => set_trajectory_frame(state, frame),
         AppAction::StopTrajectory => stop_trajectory(state),
         AppAction::ShowQmOutput(entry_id) => show_qm_output(state, entry_id),
-        AppAction::ResizeSidebar(side, delta) => resize_sidebar(state, side, delta, ctx),
-        AppAction::ResetSidebar(side) => reset_sidebar(state, side, ctx),
-        AppAction::ResizePanel(delta) => resize_panel(state, delta, ctx),
-        AppAction::ResetPanel => reset_panel(state),
+        AppAction::ResizeSidebar(delta) => resize_sidebar(state, delta, ctx),
+        AppAction::ResetSidebar => reset_sidebar(state, ctx),
+        AppAction::ResizeArea(area, delta) => resize_area(state, area, delta, ctx),
+        AppAction::ResetArea(area) => reset_area(state, area, ctx),
+        AppAction::MoveDockTab { tab, to, index } => move_dock_tab(state, tab, to, index, ctx),
+        AppAction::ToggleDockArea(area) => toggle_dock_area(state, area, ctx),
+        AppAction::ResetWorkbenchLayout => reset_workbench_layout(state),
     }
     if let Some(before) = fingerprint_before
         && state.entries_fingerprint() != before

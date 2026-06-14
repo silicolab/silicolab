@@ -1,112 +1,16 @@
-use eframe::egui::{self, Align, Button, Frame, Layout, Margin, RichText, ScrollArea, Stroke, Ui};
+use eframe::egui::{
+    self, Align, Button, Color32, CornerRadius, Frame, Layout, Margin, RichText, ScrollArea, Stroke,
+};
 
 use crate::{
     backend::tasks::{TaskPanelKind, TaskStatus},
     frontend::{
         actions::AppAction,
-        state::{AppState, PanelTab, PrimaryView},
+        state::{AppState, PrimaryView},
         status_text,
     },
 };
-
-use super::{core_button_text_color, with_core_button_style};
-pub(super) fn render_bottom_panel(
-    state: &mut AppState,
-    ui: &mut egui::Ui,
-    actions: &mut Vec<AppAction>,
-) {
-    ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), 30.0),
-        Layout::left_to_right(Align::Center),
-        |ui| {
-            let pal = crate::frontend::theme::palette(ui);
-            ui.spacing_mut().item_spacing.x = 6.0;
-            ui.spacing_mut().button_padding = egui::vec2(10.0, 5.0);
-
-            for tab in PanelTab::all() {
-                let selected = state.ui.layout.active_panel_tab == *tab;
-                let response = ui
-                    .scope(|ui| {
-                        configure_panel_tab_button_visuals(ui, selected);
-                        ui.add(
-                            Button::new(
-                                RichText::new(tab.label())
-                                    .color(core_button_text_color(&pal, selected)),
-                            )
-                            .selected(selected),
-                        )
-                    })
-                    .inner;
-                if response.clicked() {
-                    state.ui.layout.active_panel_tab = *tab;
-                }
-            }
-
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if with_core_button_style(ui, false, |ui| {
-                    ui.add_sized(
-                        [28.0, 28.0],
-                        Button::new(
-                            RichText::new(egui_phosphor::regular::CARET_DOWN)
-                                .color(core_button_text_color(&pal, false)),
-                        ),
-                    )
-                })
-                .on_hover_text("Hide panel")
-                .clicked()
-                {
-                    state.ui.layout.show_panel = false;
-                }
-            });
-        },
-    );
-    weak_panel_hairline(ui, 22);
-
-    // Render the active tab directly in the panel body; each tab fills the
-    // remaining height with a scroll area (`auto_shrink([false, false])`). The
-    // panel's height is fixed by `exact_size` in `render_workspace` — see the
-    // note there about the runaway growth that a resizable panel hit.
-    ui.set_width(ui.available_width());
-    match state.ui.layout.active_panel_tab {
-        PanelTab::Output => render_output_panel(state, ui),
-        PanelTab::Console => render_console_panel(state, ui, actions),
-        PanelTab::Chat => render_chat_panel(state, ui, actions),
-        PanelTab::TaskMonitor => render_task_monitor_panel(state, ui, actions),
-    }
-}
-
-fn configure_panel_tab_button_visuals(ui: &mut Ui, selected: bool) {
-    let pal = crate::frontend::theme::palette(ui);
-    let inactive_fill = egui::Color32::TRANSPARENT;
-    let hovered_fill = pal.neutral_overlay(18);
-    let selected_fill = pal.blue_overlay(58);
-    let selected_hover_fill = pal.blue_overlay(74);
-    let text_color = core_button_text_color(&pal, selected);
-    let selected_text = core_button_text_color(&pal, true);
-    let visuals = &mut ui.style_mut().visuals.widgets;
-
-    visuals.inactive.weak_bg_fill = inactive_fill;
-    visuals.inactive.bg_fill = inactive_fill;
-    visuals.inactive.bg_stroke = Stroke::NONE;
-    visuals.inactive.fg_stroke.color = text_color;
-
-    visuals.hovered.weak_bg_fill = hovered_fill;
-    visuals.hovered.bg_fill = hovered_fill;
-    visuals.hovered.bg_stroke = Stroke::NONE;
-    visuals.hovered.fg_stroke.color = selected_text;
-
-    visuals.active.weak_bg_fill = selected_hover_fill;
-    visuals.active.bg_fill = selected_hover_fill;
-    visuals.active.bg_stroke = Stroke::NONE;
-    visuals.active.fg_stroke.color = selected_text;
-
-    visuals.open.weak_bg_fill = selected_fill;
-    visuals.open.bg_fill = selected_fill;
-    visuals.open.bg_stroke = Stroke::NONE;
-    visuals.open.fg_stroke.color = selected_text;
-}
-
-fn render_output_panel(state: &mut AppState, ui: &mut egui::Ui) {
+pub(super) fn render_output_panel(state: &mut AppState, ui: &mut egui::Ui) {
     ui.set_width(ui.available_width());
     ScrollArea::vertical()
         .auto_shrink([false, false])
@@ -119,7 +23,11 @@ fn render_output_panel(state: &mut AppState, ui: &mut egui::Ui) {
         });
 }
 
-fn render_console_panel(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec<AppAction>) {
+pub(super) fn render_console_panel(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+) {
     const PROMPT_ROW_HEIGHT: f32 = 34.0;
     const INPUT_OUTER_HEIGHT: f32 = 28.0;
     const INPUT_X_MARGIN: f32 = 8.0;
@@ -207,7 +115,7 @@ fn render_console_panel(state: &mut AppState, ui: &mut egui::Ui, actions: &mut V
     ui.add_space(BOTTOM_PADDING);
 }
 
-fn weak_panel_hairline(ui: &mut egui::Ui, alpha: u8) {
+pub(super) fn weak_panel_hairline(ui: &mut egui::Ui, alpha: u8) {
     let pal = crate::frontend::theme::palette(ui);
     let width = ui.available_width();
     let (rect, _) = ui.allocate_exact_size(egui::vec2(width, 1.0), egui::Sense::hover());
@@ -218,8 +126,17 @@ fn weak_panel_hairline(ui: &mut egui::Ui, alpha: u8) {
     );
 }
 
-fn render_chat_panel(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec<AppAction>) {
+/// Clearance reserved below the chat composer so its lower edge clears the host
+/// area's bottom margin (where the panel content rect clips) and the status bar.
+const COMPOSER_BOTTOM_PAD: f32 = 12.0;
+
+pub(super) fn render_chat_panel(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+) {
     use crate::frontend::agent::{AgentPhase, registry};
+    use crate::frontend::theme::radius;
 
     let pal = crate::frontend::theme::palette(ui);
     ui.set_width(ui.available_width());
@@ -232,102 +149,186 @@ fn render_chat_panel(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec<
     let key_present = state.ui.agent.key_available.unwrap_or(false);
     let pending_call = state.ui.agent.pending_approval().cloned();
 
-    // Bottom-up so the input pins to the bottom and the transcript fills the
+    // Bottom-up so the composer pins to the bottom and the transcript fills the
     // space above it without overflowing the fixed-height panel (the panel
     // height is fixed by `exact_size` in `render_workspace`).
     ui.with_layout(Layout::bottom_up(Align::Min), |ui| {
-        // --- Input row (bottommost) ---
-        ui.horizontal(|ui| {
-            let send_enabled = assistant_enabled && key_present && !busy && pending_call.is_none();
-            let hint = if !assistant_enabled {
-                "Assistant disabled"
-            } else if !key_present {
-                "Set the API key env var"
-            } else if busy {
-                "Working…"
-            } else {
-                "Ask the assistant to do something"
-            };
-            let response = ui.add_enabled(
-                send_enabled,
-                egui::TextEdit::singleline(&mut state.ui.agent.input)
-                    .desired_width(f32::INFINITY)
-                    .hint_text(hint),
-            );
-            let submit =
-                response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
-            if send_enabled && (submit || ui.button("Send").clicked()) {
-                let message = state.ui.agent.input.trim().to_string();
-                if !message.is_empty() {
-                    actions.push(AppAction::SendAgentMessage(message));
-                    state.ui.agent.input.clear();
-                }
-            }
-            if busy && ui.button("Stop").clicked() {
-                actions.push(AppAction::CancelAgent);
-            }
-        });
+        // Bottom padding: in a `bottom_up` layout the first element anchors to the
+        // host area's full bottom edge (ignoring the panel's inner margin), so the
+        // composer would otherwise sit flush against the status bar and have its
+        // lower edge clipped by the panel content rect. Reserve clearance first.
+        ui.add_space(COMPOSER_BOTTOM_PAD);
 
-        // --- Approval bar (above the input) ---
+        // --- Composer (bottommost): a single rounded field that grows to the
+        // panel width with the send affordance tucked inside on the right. ---
+        let send_enabled = assistant_enabled && key_present && !busy && pending_call.is_none();
+        let hint = if !assistant_enabled {
+            "Assistant disabled"
+        } else if !key_present {
+            "Set the API key env var"
+        } else if busy {
+            "Working…"
+        } else {
+            "Ask the assistant anything"
+        };
+
+        let composer_radius = radius::CARD;
+        let inner_radius = radius::concentric(composer_radius, 4);
+        Frame::default()
+            .fill(pal.input_fill)
+            .stroke(Stroke::new(1.0, pal.hairline))
+            .corner_radius(CornerRadius::same(composer_radius))
+            .inner_margin(Margin::symmetric(8, 6))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 6.0;
+                    const BUTTON_SIZE: f32 = 26.0;
+                    let text_width = (ui.available_width() - BUTTON_SIZE - 6.0).max(48.0);
+
+                    let response = ui.add_enabled(
+                        send_enabled,
+                        egui::TextEdit::singleline(&mut state.ui.agent.input)
+                            .desired_width(text_width)
+                            .frame(Frame::NONE)
+                            .vertical_align(Align::Center)
+                            .hint_text(hint),
+                    );
+                    let submit = response.lost_focus()
+                        && ui.input(|input| input.key_pressed(egui::Key::Enter));
+
+                    let mut send = submit;
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if busy {
+                            let stop = Button::new(
+                                RichText::new(egui_phosphor::regular::X).color(pal.text_primary),
+                            )
+                            .fill(pal.neutral_overlay(20))
+                            .corner_radius(CornerRadius::same(inner_radius))
+                            .min_size(egui::vec2(BUTTON_SIZE, BUTTON_SIZE));
+                            if ui.add(stop).clicked() {
+                                actions.push(AppAction::CancelAgent);
+                            }
+                        } else {
+                            let (fill, ink) = if send_enabled {
+                                (pal.accent, Color32::WHITE)
+                            } else {
+                                (pal.neutral_overlay(16), pal.text_tertiary)
+                            };
+                            let button = Button::new(
+                                RichText::new(egui_phosphor::regular::ARROW_UP).color(ink),
+                            )
+                            .fill(fill)
+                            .corner_radius(CornerRadius::same(inner_radius))
+                            .min_size(egui::vec2(BUTTON_SIZE, BUTTON_SIZE));
+                            if ui.add_enabled(send_enabled, button).clicked() {
+                                send = true;
+                            }
+                        }
+                    });
+
+                    if send_enabled && send {
+                        let message = state.ui.agent.input.trim().to_string();
+                        if !message.is_empty() {
+                            actions.push(AppAction::SendAgentMessage(message));
+                            state.ui.agent.input.clear();
+                        }
+                    }
+                });
+            });
+
+        ui.add_space(8.0);
+
+        // --- Approval bar (above the composer): an amber-tinted card. ---
         if let Some(call) = &pending_call {
-            weak_panel_hairline(ui, 14);
             let command = call
                 .input
                 .get("command")
                 .and_then(|value| value.as_str())
                 .unwrap_or(&call.name);
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Approve to run:").color(pal.status_amber));
-                ui.monospace(command);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.button("Reject").clicked() {
-                        actions.push(AppAction::RejectToolCall(call.id.clone()));
-                    }
-                    if ui
-                        .add(Button::new(
-                            RichText::new("Approve").color(pal.status_green),
-                        ))
-                        .clicked()
-                    {
-                        actions.push(AppAction::ApproveToolCall(call.id.clone()));
-                    }
+            Frame::default()
+                .fill(blend(pal.status_amber, pal.input_fill, 0.86))
+                .stroke(Stroke::new(1.0, blend(pal.status_amber, pal.hairline, 0.4)))
+                .corner_radius(CornerRadius::same(radius::CARD))
+                .inner_margin(Margin::symmetric(10, 8))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(format!(
+                                "{}  Approve to run",
+                                egui_phosphor::regular::WARNING
+                            ))
+                            .strong()
+                            .color(pal.status_amber),
+                        );
+                    });
+                    ui.add_space(2.0);
+                    ui.label(RichText::new(command).monospace().color(pal.text_primary));
+                    ui.add_space(6.0);
+                    ui.horizontal(|ui| {
+                        let approve = Button::new(
+                            RichText::new(format!("{}  Approve", egui_phosphor::regular::CHECK))
+                                .color(Color32::WHITE),
+                        )
+                        .fill(pal.status_green)
+                        .corner_radius(CornerRadius::same(radius::CONTROL));
+                        if ui.add(approve).clicked() {
+                            actions.push(AppAction::ApproveToolCall(call.id.clone()));
+                        }
+                        if ui
+                            .add(
+                                Button::new(RichText::new("Reject").color(pal.text_primary))
+                                    .fill(pal.neutral_overlay(16))
+                                    .corner_radius(CornerRadius::same(radius::CONTROL)),
+                            )
+                            .clicked()
+                        {
+                            actions.push(AppAction::RejectToolCall(call.id.clone()));
+                        }
+                    });
                 });
-            });
+            ui.add_space(8.0);
         }
 
-        weak_panel_hairline(ui, 14);
-
-        // --- Status line: provider/model + usage ---
-        ui.horizontal(|ui| {
+        // --- Status footer: provider/model + usage, sitting just above the
+        // composer like a quiet meter. ---
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
             ui.label(
                 RichText::new(format!(
-                    "{} · {}",
-                    provider.label, state.config.assistant.model
+                    "{}  {} · {}",
+                    egui_phosphor::regular::SPARKLE,
+                    provider.label,
+                    state.config.assistant.model
                 ))
                 .small()
                 .color(pal.text_tertiary),
             );
-            if let Some(usage) = &state.ui.agent.last_usage {
-                let session = &state.ui.agent.session_usage;
-                ui.label(
-                    RichText::new(format!(
-                        "last {}↑/{}↓ (cache {}r) · session {}↑/{}↓",
-                        compact(usage.input_total()),
-                        compact(usage.output),
-                        compact(usage.cache_read),
-                        compact(session.input_total()),
-                        compact(session.output),
-                    ))
-                    .small()
-                    .color(pal.text_tertiary),
-                );
-            }
             if matches!(phase, AgentPhase::AwaitingModel) {
                 ui.spinner();
             }
+            if let Some(usage) = &state.ui.agent.last_usage {
+                let session = &state.ui.agent.session_usage;
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "{}↑ {}↓ · session {}↑ {}↓",
+                            compact(usage.input_total()),
+                            compact(usage.output),
+                            compact(session.input_total()),
+                            compact(session.output),
+                        ))
+                        .small()
+                        .color(pal.text_tertiary),
+                    );
+                });
+            }
         });
 
+        ui.add_space(6.0);
         weak_panel_hairline(ui, 14);
+        ui.add_space(6.0);
 
         // --- Transcript (fills the remaining height) ---
         ScrollArea::vertical()
@@ -336,40 +337,76 @@ fn render_chat_panel(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec<
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 if state.ui.agent.transcript.is_empty() {
-                    ui.label(
-                        RichText::new(
-                            "Ask the assistant to fetch a structure, restyle the view, or set up \
-                             a calculation. It drives SilicoLab with the same console commands.",
-                        )
-                        .small()
-                        .color(pal.text_tertiary),
-                    );
-                }
-                if !key_present {
-                    ui.label(
-                        RichText::new(format!(
-                            "No API key found. Set {} and restart, or pick another provider in \
-                             Settings ▸ Assistant.",
-                            provider.key_env
-                        ))
-                        .small()
-                        .color(pal.status_amber),
-                    );
+                    render_chat_empty_state(ui, &pal, key_present, provider);
                 }
                 for entry in &state.ui.agent.transcript {
                     render_transcript_entry(ui, &pal, entry);
                 }
                 // Live streaming preview of the in-flight assistant text.
                 if !state.ui.agent.streaming_text.is_empty() {
-                    ui.horizontal_wrapped(|ui| {
-                        ui.label(RichText::new("Assistant").strong().color(pal.status_green));
-                        ui.label(
-                            RichText::new(format!("{}▌", state.ui.agent.streaming_text))
-                                .color(pal.text_primary),
-                        );
-                    });
+                    message_role(ui, egui_phosphor::regular::SPARKLE, "Assistant", pal.accent);
+                    ui.add_space(2.0);
+                    ui.label(
+                        RichText::new(format!("{}▌", state.ui.agent.streaming_text))
+                            .color(pal.text_primary),
+                    );
                 }
             });
+    });
+}
+
+/// First-run welcome shown when the transcript is empty: a centered prompt plus
+/// a missing-key callout when no credential is configured.
+fn render_chat_empty_state(
+    ui: &mut egui::Ui,
+    pal: &crate::frontend::theme::Palette,
+    key_present: bool,
+    provider: &crate::frontend::agent::registry::ProviderSpec,
+) {
+    ui.add_space(12.0);
+    ui.vertical_centered(|ui| {
+        ui.label(
+            RichText::new(egui_phosphor::regular::SPARKLE)
+                .size(28.0)
+                .color(pal.accent),
+        );
+        ui.add_space(6.0);
+        ui.label(
+            RichText::new("How can I help?")
+                .strong()
+                .color(pal.text_primary),
+        );
+        ui.add_space(2.0);
+        ui.label(
+            RichText::new(
+                "Fetch a structure, restyle the view, or set up a calculation — \
+                 I drive SilicoLab with the same console commands.",
+            )
+            .small()
+            .color(pal.text_tertiary),
+        );
+    });
+    if !key_present {
+        ui.add_space(10.0);
+        ui.label(
+            RichText::new(format!(
+                "{}  No API key found. Set {} and restart, or pick another provider in \
+                 Settings ▸ Assistant.",
+                egui_phosphor::regular::WARNING,
+                provider.key_env
+            ))
+            .small()
+            .color(pal.status_amber),
+        );
+    }
+}
+
+/// A small "icon + role" header above an assistant or user message.
+fn message_role(ui: &mut egui::Ui, icon: &str, label: &str, color: Color32) {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 5.0;
+        ui.label(RichText::new(icon).small().color(color));
+        ui.label(RichText::new(label).small().strong().color(color));
     });
 }
 
@@ -379,36 +416,48 @@ fn render_transcript_entry(
     entry: &crate::frontend::agent::TranscriptEntry,
 ) {
     use crate::frontend::agent::TranscriptEntry;
+    use crate::frontend::theme::radius;
     match entry {
         TranscriptEntry::User(text) => {
-            ui.add_space(4.0);
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("You").strong().color(pal.status_blue));
-                ui.label(RichText::new(text).color(pal.text_primary));
-            });
+            ui.add_space(10.0);
+            // The user's turn reads as a soft bubble so it stands apart from the
+            // assistant's flush-left prose.
+            Frame::default()
+                .fill(pal.neutral_overlay(20))
+                .corner_radius(CornerRadius::same(radius::CARD))
+                .inner_margin(Margin::symmetric(10, 8))
+                .show(ui, |ui| {
+                    ui.set_width(ui.available_width());
+                    ui.label(RichText::new(text).color(pal.text_primary));
+                });
         }
         TranscriptEntry::Assistant(text) => {
-            ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new("Assistant").strong().color(pal.status_green));
-                ui.label(RichText::new(text).color(pal.text_primary));
-            });
+            ui.add_space(10.0);
+            message_role(ui, egui_phosphor::regular::SPARKLE, "Assistant", pal.accent);
+            ui.add_space(2.0);
+            ui.label(RichText::new(text).color(pal.text_primary));
         }
         TranscriptEntry::ToolCall { summary } => {
-            ui.monospace(
-                RichText::new(format!("{}  {summary}", egui_phosphor::regular::TERMINAL))
-                    .small()
-                    .color(pal.text_primary),
+            ui.add_space(4.0);
+            render_tool_chip(
+                ui,
+                pal,
+                egui_phosphor::regular::TERMINAL,
+                summary,
+                pal.text_tertiary,
             );
         }
         TranscriptEntry::ToolResult { summary, is_error } => {
-            let color = if *is_error {
-                pal.status_red
+            let (icon, color) = if *is_error {
+                (egui_phosphor::regular::X_CIRCLE, pal.status_red)
             } else {
-                pal.text_tertiary
+                (egui_phosphor::regular::CHECK_CIRCLE, pal.text_tertiary)
             };
-            ui.monospace(RichText::new(summary).small().color(color));
+            ui.add_space(2.0);
+            render_tool_chip(ui, pal, icon, summary, color);
         }
         TranscriptEntry::Notice(text) => {
+            ui.add_space(6.0);
             ui.label(
                 RichText::new(text)
                     .small()
@@ -417,6 +466,36 @@ fn render_transcript_entry(
             );
         }
     }
+}
+
+/// A subdued rounded chip for tool calls and their results — monospace detail on
+/// a faint fill so machine chatter recedes behind the conversation.
+fn render_tool_chip(
+    ui: &mut egui::Ui,
+    pal: &crate::frontend::theme::Palette,
+    icon: &str,
+    summary: &str,
+    color: Color32,
+) {
+    use crate::frontend::theme::radius;
+    Frame::default()
+        .fill(pal.neutral_overlay(12))
+        .corner_radius(CornerRadius::same(radius::CONTROL))
+        .inner_margin(Margin::symmetric(8, 4))
+        .show(ui, |ui| {
+            ui.set_width(ui.available_width());
+            ui.horizontal_wrapped(|ui| {
+                ui.spacing_mut().item_spacing.x = 6.0;
+                ui.label(RichText::new(icon).small().color(color));
+                ui.label(RichText::new(summary).small().monospace().color(color));
+            });
+        });
+}
+
+/// Linear blend toward `b` (`t` = 0 → `a`, `t` = 1 → `b`), used for tinted
+/// callout fills that stay readable on either theme.
+fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
+    crate::frontend::theme::mix(a, b, t)
 }
 
 /// Compact token count, e.g. `1234` → `1.2k`.
@@ -452,7 +531,7 @@ fn task_status_badge(pal: &crate::frontend::theme::Palette, status: TaskStatus) 
     RichText::new(status.label()).strong().color(color)
 }
 
-fn render_task_monitor_panel(
+pub(super) fn render_task_monitor_panel(
     state: &mut AppState,
     ui: &mut egui::Ui,
     actions: &mut Vec<AppAction>,

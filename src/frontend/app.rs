@@ -354,19 +354,19 @@ impl eframe::App for SilicoLabApp {
                         let flag = &mut self.state.ui.layout.show_primary_sidebar;
                         *flag = !*flag;
                     }
-                    MenuCommand::ToggleSecondarySidebar => {
-                        let flag = &mut self.state.ui.layout.show_secondary_sidebar;
-                        *flag = !*flag;
-                    }
-                    MenuCommand::TogglePanel => {
-                        let flag = &mut self.state.ui.layout.show_panel;
-                        *flag = !*flag;
-                    }
+                    MenuCommand::ToggleSecondarySidebar => actions.push(AppAction::ToggleDockArea(
+                        crate::frontend::state::DockArea::Right,
+                    )),
+                    MenuCommand::TogglePanel => actions.push(AppAction::ToggleDockArea(
+                        crate::frontend::state::DockArea::Bottom,
+                    )),
                     MenuCommand::ToggleAtomLabels => {
                         let flag = &mut self.state.ui.viewport.show_atom_labels;
                         *flag = !*flag;
                     }
-                    MenuCommand::ResetWorkbenchLayout => self.state.reset_layout_keep_view(),
+                    MenuCommand::ResetWorkbenchLayout => {
+                        actions.push(AppAction::ResetWorkbenchLayout)
+                    }
                     MenuCommand::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
                 }
             }
@@ -383,6 +383,7 @@ impl eframe::App for SilicoLabApp {
             menu.sync(&self.state, &ctx);
         }
         dispatcher::flush_pending_autosave(&mut self.state, &ctx);
+        dispatcher::flush_pending_layout_save(&mut self.state, &ctx);
         self.state.record_message_change();
     }
 

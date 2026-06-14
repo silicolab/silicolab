@@ -458,14 +458,23 @@ impl MacMenu {
                 .set_checked(layout.show_primary_sidebar);
             self.cache.primary_sidebar = layout.show_primary_sidebar;
         }
-        if layout.show_secondary_sidebar != self.cache.secondary_sidebar {
-            self.secondary_sidebar
-                .set_checked(layout.show_secondary_sidebar);
-            self.cache.secondary_sidebar = layout.show_secondary_sidebar;
+        // The dock areas' visibility is derived (non-empty and not collapsed), so
+        // the checkmark tracks whether the area is shown. It can flip without a
+        // menu click — e.g. the last tab is dragged out — and the value-gated
+        // cache reconciles it next sync.
+        let secondary_visible = layout
+            .dock
+            .is_visible(crate::frontend::state::DockArea::Right);
+        if secondary_visible != self.cache.secondary_sidebar {
+            self.secondary_sidebar.set_checked(secondary_visible);
+            self.cache.secondary_sidebar = secondary_visible;
         }
-        if layout.show_panel != self.cache.panel {
-            self.panel.set_checked(layout.show_panel);
-            self.cache.panel = layout.show_panel;
+        let panel_visible = layout
+            .dock
+            .is_visible(crate::frontend::state::DockArea::Bottom);
+        if panel_visible != self.cache.panel {
+            self.panel.set_checked(panel_visible);
+            self.cache.panel = panel_visible;
         }
         let show_labels = state.ui.viewport.show_atom_labels;
         if show_labels != self.cache.atom_labels {
