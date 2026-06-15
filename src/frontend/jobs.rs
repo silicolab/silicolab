@@ -939,7 +939,7 @@ mod tests {
     #[test]
     fn interpret_models_response_html_points_at_base_url() {
         // The exact symptom the user hit: Base URL without `/v1` returns the
-        // relay's web page, not JSON. The error must read like the chat path —
+        // relay's web page, not JSON. The error must read like the assistant path —
         // name the HTML page and point at the `/v1` API root, not raw serde.
         let err = interpret_models_response(200, "<!doctype html><html></html>").unwrap_err();
         assert!(err.contains("HTML"), "got: {err}");

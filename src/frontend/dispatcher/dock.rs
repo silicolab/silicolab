@@ -28,7 +28,7 @@ pub(crate) fn move_dock_tab(
 }
 
 /// Toggle a dock area's visibility (View / native menu). Revealing an empty area
-/// restores a default view (console for the bottom panel, chat for the right
+/// restores a default view (console for the bottom panel, assistant for the right
 /// sidebar) so the menu item is never a dead no-op.
 pub(crate) fn toggle_dock_area(state: &mut AppState, area: DockArea, ctx: &egui::Context) {
     if state.ui.layout.dock.is_visible(area) {
@@ -38,7 +38,7 @@ pub(crate) fn toggle_dock_area(state: &mut AppState, area: DockArea, ctx: &egui:
         if state.ui.layout.dock.area(area).tabs.is_empty() {
             let default_view = match area {
                 DockArea::Bottom => StaticView::Console,
-                DockArea::Right => StaticView::Chat,
+                DockArea::Right => StaticView::Assistant,
             };
             state.ui.layout.dock.reveal_static(default_view);
         }

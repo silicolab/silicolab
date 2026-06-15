@@ -1,6 +1,6 @@
 //! The provider-agnostic agent session: neutral conversation history, a small
 //! state machine, the in-flight tool batch, and a display transcript for the
-//! Chat tab. Held as `UiState::agent`; mutated only through the dispatcher and
+//! Assistant tab. Held as `UiState::agent`; mutated only through the dispatcher and
 //! the poll-driven [`loop_driver`](super::loop_driver).
 
 use std::collections::{HashMap, VecDeque};
@@ -33,7 +33,7 @@ pub enum AgentPhase {
     Done,
 }
 
-/// One rendered line in the Chat tab. The neutral `history` drives the model;
+/// One rendered line in the Assistant tab. The neutral `history` drives the model;
 /// this drives the display.
 #[derive(Debug, Clone)]
 pub enum TranscriptEntry {
@@ -73,9 +73,9 @@ pub struct AgentSession {
     /// prior assistant turns with their opaque reasoning blobs). The system
     /// prompt is *not* stored here — it is rebuilt per turn into `LlmConfig`.
     pub history: Vec<ChatMessage>,
-    /// What the Chat tab renders.
+    /// What the Assistant tab renders.
     pub transcript: Vec<TranscriptEntry>,
-    /// The chat input box.
+    /// The assistant input box.
     pub input: String,
     pub phase: AgentPhase,
     /// Model turns spent on the current user message (loop bound).

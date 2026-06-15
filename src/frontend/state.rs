@@ -60,14 +60,14 @@ impl PrimaryView {
 }
 
 /// A fixed (always-available) view that can be docked in either area: the
-/// console, the assistant chat, the task monitor, or the command output. These
+/// console, the assistant, the task monitor, or the command output. These
 /// are the movable counterparts of the per-task panels and are the only tabs
 /// whose placement persists across launches (task tabs are session state).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum StaticView {
     Output,
     Console,
-    Chat,
+    Assistant,
     TaskMonitor,
 }
 
@@ -76,13 +76,18 @@ impl StaticView {
     /// (each area renders its own `tabs` order); the historical bottom-panel tab
     /// order is preserved here for familiarity.
     pub fn all() -> &'static [Self] {
-        &[Self::Console, Self::Chat, Self::TaskMonitor, Self::Output]
+        &[
+            Self::Console,
+            Self::Assistant,
+            Self::TaskMonitor,
+            Self::Output,
+        ]
     }
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Console => "Console",
-            Self::Chat => "Assistant",
+            Self::Assistant => "Assistant",
             Self::TaskMonitor => "Task Monitor",
             Self::Output => "Output",
         }
@@ -94,7 +99,7 @@ impl StaticView {
     pub fn token(self) -> &'static str {
         match self {
             Self::Console => "console",
-            Self::Chat => "chat",
+            Self::Assistant => "assistant",
             Self::TaskMonitor => "task_monitor",
             Self::Output => "output",
         }
@@ -103,19 +108,19 @@ impl StaticView {
     pub fn from_token(token: &str) -> Option<Self> {
         Some(match token {
             "console" => Self::Console,
-            "chat" => Self::Chat,
+            "assistant" => Self::Assistant,
             "task_monitor" => Self::TaskMonitor,
             "output" => Self::Output,
             _ => return None,
         })
     }
 
-    /// The area a view defaults into when a saved layout doesn't place it. Chat
+    /// The area a view defaults into when a saved layout doesn't place it. Assistant
     /// lives on the right (next to the structure, like comparable assistants);
     /// the rest live in the bottom panel.
     pub fn home_area(self) -> DockArea {
         match self {
-            Self::Chat => DockArea::Right,
+            Self::Assistant => DockArea::Right,
             _ => DockArea::Bottom,
         }
     }
@@ -178,11 +183,11 @@ impl Default for DockModel {
                 active: Some(DockTab::Static(StaticView::Console)),
                 collapsed: false,
             },
-            // Chat's home is the right sidebar and it is shown at rest, so a
+            // Assistant's home is the right sidebar and it is shown at rest, so a
             // first run opens straight into the assistant.
             right: DockAreaState {
-                tabs: vec![DockTab::Static(StaticView::Chat)],
-                active: Some(DockTab::Static(StaticView::Chat)),
+                tabs: vec![DockTab::Static(StaticView::Assistant)],
+                active: Some(DockTab::Static(StaticView::Assistant)),
                 collapsed: false,
             },
             right_width: SIDEBAR_DEFAULT_WIDTH_SECONDARY,
@@ -1611,7 +1616,7 @@ pub struct UiState {
     /// which only records that a newer release *exists*.
     pub self_update: SelfUpdateStatus,
     /// In-app LLM assistant session: neutral conversation history, the turn
-    /// state machine, the in-flight tool batch, and the Chat-tab transcript.
+    /// state machine, the in-flight tool batch, and the Assistant-tab transcript.
     /// Like the editor sessions above it lives across frames; only the
     /// dispatcher and the poll-driven loop mutate it.
     pub agent: crate::frontend::agent::AgentSession,
@@ -2198,7 +2203,7 @@ mod tests {
         use crate::backend::config::{DockAreaLayout, DockLayoutConfig};
         let config = DockLayoutConfig {
             bottom: DockAreaLayout {
-                // Console duplicated, an unknown token, and Chat/Output/Monitor
+                // Console duplicated, an unknown token, and Assistant/Output/Monitor
                 // missing entirely.
                 tabs: vec!["console".into(), "console".into(), "mystery".into()],
                 active: Some("console".into()),
@@ -2221,26 +2226,26 @@ mod tests {
                 .count();
             assert_eq!(holders, 1, "{view:?} must appear in exactly one area");
         }
-        // Chat is restored to its home (right) area.
+        // Assistant is restored to its home (right) area.
         assert!(
             model
                 .right
                 .tabs
-                .contains(&DockTab::Static(StaticView::Chat))
+                .contains(&DockTab::Static(StaticView::Assistant))
         );
     }
 
     #[test]
     fn insert_tab_dedups_across_areas_and_focuses() {
         let mut dock = DockModel::default();
-        // Chat lives in the right area by default; moving it to the bottom must
+        // Assistant lives in the right area by default; moving it to the bottom must
         // remove it from the right (a tab lives in exactly one place), make it
         // active in the bottom, and reveal the bottom.
-        let chat = DockTab::Static(StaticView::Chat);
-        dock.insert_tab(DockArea::Bottom, chat, Some(0));
-        assert!(!dock.right.tabs.contains(&chat));
-        assert_eq!(dock.bottom.tabs.first(), Some(&chat));
-        assert_eq!(dock.bottom.active, Some(chat));
+        let assistant = DockTab::Static(StaticView::Assistant);
+        dock.insert_tab(DockArea::Bottom, assistant, Some(0));
+        assert!(!dock.right.tabs.contains(&assistant));
+        assert_eq!(dock.bottom.tabs.first(), Some(&assistant));
+        assert_eq!(dock.bottom.active, Some(assistant));
         assert!(!dock.bottom.collapsed);
     }
 
@@ -2290,16 +2295,23 @@ mod tests {
         dock.add_task(7); // -> right, active
         dock.clear_task_tabs();
         assert!(dock.area_of(DockTab::Task(7)).is_none());
-        // The fixed Chat view remains and is the right area's active tab again.
-        assert!(dock.right.tabs.contains(&DockTab::Static(StaticView::Chat)));
-        assert_eq!(dock.right.active, Some(DockTab::Static(StaticView::Chat)));
+        // The fixed Assistant view remains and is the right area's active tab again.
+        assert!(
+            dock.right
+                .tabs
+                .contains(&DockTab::Static(StaticView::Assistant))
+        );
+        assert_eq!(
+            dock.right.active,
+            Some(DockTab::Static(StaticView::Assistant))
+        );
     }
 
     #[test]
     fn is_visible_combines_emptiness_and_collapse() {
         let mut dock = DockModel::default();
         assert!(dock.is_visible(DockArea::Bottom)); // has tabs, not collapsed
-        assert!(dock.is_visible(DockArea::Right)); // has Chat, not collapsed by default
+        assert!(dock.is_visible(DockArea::Right)); // has Assistant, not collapsed by default
         dock.right.collapsed = true;
         assert!(!dock.is_visible(DockArea::Right)); // explicitly collapsed -> hidden
         dock.bottom.tabs.clear();
