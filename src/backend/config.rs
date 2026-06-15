@@ -138,7 +138,7 @@ pub struct RemoteHost {
 /// SSH already follows.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssistantConfig {
-    /// Whether the assistant is usable (the Chat tab still renders a hint when a
+    /// Whether the assistant is usable (the Assistant tab still renders a hint when a
     /// key is missing). On by default.
     pub enabled: bool,
     /// Active provider id, keyed into `frontend::agent::registry::PROVIDERS`.
@@ -286,11 +286,11 @@ impl Default for DockLayoutConfig {
                 active: Some("console".to_string()),
                 collapsed: false,
             },
-            // Chat's home is the right sidebar and the area is shown at rest, so
+            // Assistant's home is the right sidebar and the area is shown at rest, so
             // a first run opens straight into the assistant.
             right: DockAreaLayout {
-                tabs: vec!["chat".to_string()],
-                active: Some("chat".to_string()),
+                tabs: vec!["assistant".to_string()],
+                active: Some("assistant".to_string()),
                 collapsed: false,
             },
             // Mirror SIDEBAR_DEFAULT_WIDTH_SECONDARY / PANEL_DEFAULT_HEIGHT

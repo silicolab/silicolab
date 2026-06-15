@@ -1,6 +1,6 @@
 //! The provider-agnostic agent: session state, the poll-driven turn loop, the
 //! tool surface, and the data-driven provider registry. Depends on the neutral
-//! `io/llm` boundary and on `AppState`; the UI (`ui/panel_bodies` Chat tab) and
+//! `io/llm` boundary and on `AppState`; the UI (`ui/panel_bodies` Assistant tab) and
 //! settings (`ui/settings_registry` Assistant) sit above it.
 
 pub mod loop_driver;
@@ -17,4 +17,4 @@ pub use loop_driver::{
     set_assistant_api_key, set_assistant_base_url, set_assistant_effort, set_assistant_enabled,
     switch_provider_model,
 };
-pub use session::{AgentPhase, AgentSession, ModelFetchStatus, TranscriptEntry};
+pub use session::{AgentSession, ModelFetchStatus, TranscriptEntry};

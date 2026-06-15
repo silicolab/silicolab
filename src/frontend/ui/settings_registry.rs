@@ -1040,7 +1040,7 @@ pub fn registry() -> Vec<SettingDescriptor> {
             "claude",
             "anthropic",
             "model",
-            "chat",
+            "assistant",
             "provider",
             "api key",
             "effort",

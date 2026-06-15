@@ -254,7 +254,7 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
                     .fill(crate::frontend::theme::chrome_fill(pal.sidebar, glass))
                     .inner_margin(Margin {
                         left: 10,
-                        right: 2,
+                        right: 10,
                         top: 10,
                         bottom: 10,
                     }),
