@@ -142,9 +142,10 @@ impl LlmProvider for OpenAiCompatProvider {
             .map_err(|error| LlmError::Network(error.to_string()))?;
 
         if status == 200 {
-            let json: Value = serde_json::from_str(&text)
-                .map_err(|error| LlmError::BadRequest(format!("malformed response: {error}")))?;
-            parse_response(&json)
+            match serde_json::from_str::<Value>(&text) {
+                Ok(json) => parse_response(&json),
+                Err(_) => Err(LlmError::BadRequest(non_json_response_message(&text))),
+            }
         } else {
             Err(classify_status(status, &text, retry_after))
         }
@@ -417,6 +418,28 @@ fn truncate(text: &str, max: usize) -> String {
     }
 }
 
+/// A helpful message for an HTTP 200 whose body isn't the expected JSON. The
+/// usual cause is a Base URL pointing at a web page (e.g. a relay's UI or a
+/// landing page) instead of its API root, which answers 200 with HTML — so name
+/// that and point at the Base URL rather than surfacing a raw parser offset like
+/// "expected value at line 1 column 1". Shared with the live model-list fetch
+/// (`frontend::jobs`), which hits the same wrong-Base-URL failure.
+pub(crate) fn non_json_response_message(body: &str) -> String {
+    let trimmed = body.trim_start();
+    if trimmed.is_empty() {
+        "the endpoint returned an empty response, not JSON — check the Base URL".to_string()
+    } else if trimmed.starts_with('<') {
+        "the endpoint returned an HTML page, not JSON — check the Base URL points at the API \
+         root (it usually ends in /v1)"
+            .to_string()
+    } else {
+        format!(
+            "the endpoint returned a non-JSON response — check the Base URL: {}",
+            truncate(trimmed, 200)
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -428,6 +451,39 @@ mod tests {
             supports_prompt_cache: false,
             supports_streaming: false,
         }
+    }
+
+    #[test]
+    fn non_json_200_points_at_the_base_url() {
+        // The duckcoding/"New API" symptom: a base URL missing /v1 hits the web
+        // UI, which answers 200 with an HTML page.
+        let html = non_json_response_message("<!doctype html><html><head><title>New API</title>");
+        assert!(html.contains("HTML"), "should name HTML: {html}");
+        assert!(html.contains("/v1"), "should hint the API root: {html}");
+
+        // An empty 200 body gets its own clear message.
+        let empty = non_json_response_message("   \n");
+        assert!(empty.contains("empty"), "should say empty: {empty}");
+        assert!(
+            empty.contains("Base URL"),
+            "should point at Base URL: {empty}"
+        );
+
+        // Any other non-JSON 200 still points at the Base URL and shows a snippet
+        // instead of a raw parser offset.
+        let other = non_json_response_message("upstream timeout");
+        assert!(
+            other.contains("Base URL"),
+            "should point at Base URL: {other}"
+        );
+        assert!(
+            other.contains("upstream timeout"),
+            "should echo the body: {other}"
+        );
+        assert!(
+            !other.contains("line 1 column 1"),
+            "should not leak the parser offset: {other}"
+        );
     }
 
     #[test]

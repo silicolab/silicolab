@@ -51,17 +51,5 @@ objc2-foundation = "0.3"
 [build-dependencies]
 winresource = "0.1"
 
-# OS keychain for the assistant API key (per platform; env var stays the
-# fallback). Backends are platform-specific, so each target enables its own.
-[target.'cfg(windows)'.dependencies]
-keyring = { version = "3", features = ["windows-native"] }
-
-[target.'cfg(target_os = "macos")'.dependencies.keyring]
-version = "3"
-features = ["apple-native"]
-
-[target.'cfg(target_os = "linux")'.dependencies]
-keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
-
 [dev-dependencies]
 pollster = "0.4"

@@ -9,6 +9,7 @@ use std::{
 };
 
 use eframe::egui;
+use serde_json::Value;
 
 use crate::{
     domain::Structure,
@@ -296,6 +297,119 @@ pub fn spawn_self_update() -> RunningSelfUpdate {
     RunningSelfUpdate { receiver }
 }
 
+/// Model-list fetch tuning. The list is tiny, so a tight cap and a short
+/// timeout keep a slow or wrong endpoint from hanging the Refresh button.
+const MODEL_FETCH_TIMEOUT: Duration = Duration::from_secs(30);
+const MODEL_FETCH_MAX_BYTES: u64 = 4 * 1024 * 1024;
+
+/// An in-flight live model-list fetch for one provider's `/models` endpoint.
+/// Like [`RunningUpdateCheck`] there is no cancel flag: it is a single bounded
+/// HTTP request that answers or times out on its own, and a late result lands on
+/// a closed channel if the handle was dropped. `provider_id` tags which provider
+/// the resulting ids belong to so a stale answer for a since-switched provider
+/// can be ignored.
+pub struct RunningModelFetch {
+    pub provider_id: String,
+    pub receiver: Receiver<Result<Vec<String>, String>>,
+}
+
+/// Spawn a one-off `/models` query on a worker thread and return the polling
+/// handle. The blocking HTTP lives here (network takes a moment); the driver
+/// drains it in `poll_model_fetch`. OpenAI-compatible providers (incl. Gemini)
+/// read `GET {base_url}/models` with a Bearer token; native Anthropic reads
+/// `GET https://api.anthropic.com/v1/models` with `x-api-key` +
+/// `anthropic-version`. Both list ids under `data[].id`.
+pub fn spawn_model_fetch(
+    provider_id: String,
+    kind: crate::frontend::agent::registry::ProviderKind,
+    base_url: String,
+    api_key: String,
+) -> RunningModelFetch {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let handle_id = provider_id.clone();
+    std::thread::spawn(move || {
+        let _ = sender.send(fetch_model_ids(kind, &base_url, &api_key));
+    });
+    RunningModelFetch {
+        provider_id: handle_id,
+        receiver,
+    }
+}
+
+/// Blocking `/models` GET shared by both transports. Returns the parsed ids, or
+/// a short user-facing error string on a transport / HTTP / parse failure.
+fn fetch_model_ids(
+    kind: crate::frontend::agent::registry::ProviderKind,
+    base_url: &str,
+    api_key: &str,
+) -> Result<Vec<String>, String> {
+    use crate::frontend::agent::registry::ProviderKind;
+
+    let config = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .timeout_global(Some(MODEL_FETCH_TIMEOUT))
+        .build();
+    let agent = ureq::Agent::new_with_config(config);
+
+    let response = match kind {
+        ProviderKind::OpenAiCompat => agent
+            .get(format!("{}/models", base_url.trim_end_matches('/')))
+            .header("authorization", &format!("Bearer {api_key}"))
+            .call(),
+        // The Anthropic models list lives at the fixed API root; its version
+        // header matches the completions adapter (`anthropic.rs`).
+        ProviderKind::Native => agent
+            .get("https://api.anthropic.com/v1/models")
+            .header("x-api-key", api_key)
+            .header("anthropic-version", "2023-06-01")
+            .call(),
+    };
+
+    let mut response = response.map_err(|error| error.to_string())?;
+    let status = response.status().as_u16();
+    let text = response
+        .body_mut()
+        .with_config()
+        .limit(MODEL_FETCH_MAX_BYTES)
+        .read_to_string()
+        .map_err(|error| error.to_string())?;
+    interpret_models_response(status, &text)
+}
+
+/// Turn a `/models` HTTP response into model ids, or a readable error. A
+/// non-JSON body (HTML error page, empty, a relay's SPA index) almost always
+/// means the Base URL is wrong, so it gets the same "points at the API root
+/// (… /v1)" hint the completion path gives — regardless of status, since a wrong
+/// URL can 404 to a page as readily as 200 to one. A valid JSON body with a
+/// non-200 status is a real API error, surfaced as the status.
+fn interpret_models_response(status: u16, body: &str) -> Result<Vec<String>, String> {
+    let Ok(json) = serde_json::from_str::<Value>(body) else {
+        return Err(crate::io::llm::openai_compat::non_json_response_message(
+            body,
+        ));
+    };
+    if status != 200 {
+        return Err(format!("provider returned HTTP {status}"));
+    }
+    Ok(parse_model_ids(&json))
+}
+
+/// Extract model ids from a `/models` response. Both the OpenAI-compatible and
+/// Anthropic list endpoints return `{"data":[{"id":"…"}, …]}`; anything that
+/// doesn't match yields an empty list (the caller keeps its static models).
+pub fn parse_model_ids(json: &Value) -> Vec<String> {
+    json.get("data")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| item.get("id").and_then(Value::as_str))
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[derive(Default)]
 pub struct JobManager {
     pub optimizer: Option<RunningOptimization>,
@@ -319,6 +433,9 @@ pub struct JobManager {
     /// In-flight heavy compute job (md/qm) the agent is awaiting before it
     /// continues its turn.
     pub agent_heavy: Option<AgentHeavyJob>,
+    /// In-flight live model-list fetch for the active provider's `/models`
+    /// endpoint, started by the "Refresh models" button in settings.
+    pub model_fetch: Option<RunningModelFetch>,
 }
 
 impl JobManager {
@@ -784,4 +901,70 @@ fn engine_success_from_gromacs_pipeline(results: Vec<StageResult>) -> EngineSucc
 
 pub fn engine_poll_frame() -> Duration {
     OPTIMIZATION_POLL_FRAME
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parse_model_ids_reads_data_id_list() {
+        let json = json!({ "data": [{ "id": "x" }, { "id": "y" }] });
+        assert_eq!(parse_model_ids(&json), vec!["x", "y"]);
+    }
+
+    #[test]
+    fn parse_model_ids_ignores_garbage() {
+        // Wrong shape, missing `data`, or non-object items all yield nothing.
+        assert!(parse_model_ids(&json!({ "models": ["x"] })).is_empty());
+        assert!(parse_model_ids(&json!([1, 2, 3])).is_empty());
+        assert!(parse_model_ids(&json!("nope")).is_empty());
+        // Items without a string `id` are skipped, not faked.
+        assert_eq!(
+            parse_model_ids(&json!({ "data": [{ "id": "ok" }, { "name": "no-id" }] })),
+            vec!["ok"]
+        );
+    }
+
+    #[test]
+    fn interpret_models_response_reads_ids_on_ok() {
+        assert_eq!(
+            interpret_models_response(200, r#"{"data":[{"id":"x"},{"id":"y"}]}"#),
+            Ok(vec!["x".to_string(), "y".to_string()])
+        );
+    }
+
+    #[test]
+    fn interpret_models_response_html_points_at_base_url() {
+        // The exact symptom the user hit: Base URL without `/v1` returns the
+        // relay's web page, not JSON. The error must read like the chat path —
+        // name the HTML page and point at the `/v1` API root, not raw serde.
+        let err = interpret_models_response(200, "<!doctype html><html></html>").unwrap_err();
+        assert!(err.contains("HTML"), "got: {err}");
+        assert!(err.contains("/v1"), "got: {err}");
+        assert!(!err.contains("malformed"), "leaks serde wording: {err}");
+    }
+
+    #[test]
+    fn interpret_models_response_empty_body_flags_base_url() {
+        let err = interpret_models_response(200, "   ").unwrap_err();
+        assert!(err.contains("empty"), "got: {err}");
+    }
+
+    #[test]
+    fn interpret_models_response_non_json_error_page_hints_url_regardless_of_status() {
+        // A wrong Base URL can 404 to an HTML page too; that is still a
+        // wrong-URL signal, so it gets the same hint rather than a bare status.
+        let err = interpret_models_response(404, "<html>not found</html>").unwrap_err();
+        assert!(err.contains("HTML"), "got: {err}");
+    }
+
+    #[test]
+    fn interpret_models_response_json_error_reports_status() {
+        // A valid JSON body with a non-200 status is a real API error, not a
+        // wrong URL — surface the status.
+        let err = interpret_models_response(503, r#"{"error":"nope"}"#).unwrap_err();
+        assert!(err.contains("503"), "got: {err}");
+    }
 }

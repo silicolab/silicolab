@@ -3,7 +3,7 @@
 //! Chat tab. Held as `UiState::agent`; mutated only through the dispatcher and
 //! the poll-driven [`loop_driver`](super::loop_driver).
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use crate::io::llm::types::{ChatMessage, ContentBlock, ToolCall, Usage};
 
@@ -52,6 +52,21 @@ pub enum TranscriptEntry {
     Notice(String),
 }
 
+/// Where a live `/models` fetch stands. Drives the spinner / error note next to
+/// the model picker in settings; the fetched ids themselves live in
+/// [`AgentSession::fetched_models`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum ModelFetchStatus {
+    /// Idle — either never fetched, or a fetch finished (the cached list, if any,
+    /// is in `fetched_models`).
+    #[default]
+    Idle,
+    /// A `/models` request is in flight on a worker thread.
+    Fetching,
+    /// The last fetch failed; the string is a short user-facing reason.
+    Error(String),
+}
+
 #[derive(Default)]
 pub struct AgentSession {
     /// Neutral conversation history replayed to the provider each turn (includes
@@ -80,10 +95,16 @@ pub struct AgentSession {
     /// authoritative final text when the turn completes.
     pub streaming_text: String,
     /// Cached "is an API key available for the active provider" flag. Resolving
-    /// it reads the OS keychain, so the hot render path reads this cache instead;
-    /// it is refreshed on provider/key changes (and once at startup). `None`
-    /// until first computed.
+    /// it reads env + the key store, so the hot render path reads this cache
+    /// instead; it is refreshed on provider/key changes (and once at startup).
+    /// `None` until first computed.
     pub key_available: Option<bool>,
+    /// Live model ids fetched from each provider's `/models` endpoint, keyed by
+    /// provider id. Merged ahead of the static list in the model picker; empty
+    /// until the user refreshes (the static list always shows regardless).
+    pub fetched_models: HashMap<String, Vec<String>>,
+    /// Where the most recent live model fetch stands (for the settings UI).
+    pub model_fetch: ModelFetchStatus,
 }
 
 impl AgentSession {
