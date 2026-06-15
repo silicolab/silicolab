@@ -127,6 +127,34 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         ],
     },
     ProviderSpec {
+        id: "gemini",
+        label: "Google Gemini",
+        kind: ProviderKind::OpenAiCompat,
+        // Google's OpenAI-compatible surface: reuses the shared adapter (base-URL
+        // swap), no native Gemini transport needed. `/models` lives under this
+        // base too, so live fetch works the same as the other compat providers.
+        base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
+        key_env: "GEMINI_API_KEY",
+        reasoning_replay: false,
+        models: &[
+            ModelSpec {
+                id: "gemini-2.5-pro",
+                label: "Gemini 2.5 Pro",
+                supports_effort: false,
+            },
+            ModelSpec {
+                id: "gemini-2.5-flash",
+                label: "Gemini 2.5 Flash",
+                supports_effort: false,
+            },
+            ModelSpec {
+                id: "gemini-2.5-flash-lite",
+                label: "Gemini 2.5 Flash-Lite",
+                supports_effort: false,
+            },
+        ],
+    },
+    ProviderSpec {
         id: "deepseek",
         label: "DeepSeek",
         kind: ProviderKind::OpenAiCompat,
@@ -224,10 +252,6 @@ pub fn effective_base_url(config: &AssistantConfig, spec: &ProviderSpec) -> Stri
         .to_string()
 }
 
-/// The OS-keychain service name under which assistant keys are stored, keyed by
-/// provider id.
-const KEYCHAIN_SERVICE: &str = "silicolab-assistant";
-
 /// Where a resolved API key came from — surfaced in the settings UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeySource {
@@ -235,15 +259,15 @@ pub enum KeySource {
     None,
     /// The provider's environment variable.
     Env,
-    /// The OS keychain.
-    Keychain,
+    /// The app-managed key store file (`~/.silicolab/keys.json`).
+    File,
     /// No key found anywhere.
     Missing,
 }
 
 /// Read the API key for `provider`: its environment variable first (explicit and
-/// robust — the headless/CI path), then the OS keychain. A keyless provider
-/// (empty `key_env`) reports an empty key, which counts as "present".
+/// robust — the headless/CI path), then the app-managed key store. A keyless
+/// provider (empty `key_env`) reports an empty key, which counts as "present".
 pub fn api_key_for(provider: &ProviderSpec) -> Option<String> {
     if provider.key_env.is_empty() {
         return Some(String::new());
@@ -254,51 +278,65 @@ pub fn api_key_for(provider: &ProviderSpec) -> Option<String> {
             return Some(key);
         }
     }
-    keychain_key(provider.id).filter(|key| !key.trim().is_empty())
+    crate::backend::secrets::stored_key(provider.id).filter(|key| !key.trim().is_empty())
 }
 
 /// Where the active key for `provider` resolves from (for display).
 pub fn key_source(provider: &ProviderSpec) -> KeySource {
-    if provider.key_env.is_empty() {
-        return KeySource::None;
-    }
-    if std::env::var(provider.key_env)
-        .ok()
-        .is_some_and(|key| !key.trim().is_empty())
-    {
-        return KeySource::Env;
-    }
-    if keychain_key(provider.id).is_some_and(|key| !key.trim().is_empty()) {
-        return KeySource::Keychain;
-    }
-    KeySource::Missing
+    let env_present = !provider.key_env.is_empty()
+        && std::env::var(provider.key_env)
+            .ok()
+            .is_some_and(|key| !key.trim().is_empty());
+    let file_present =
+        crate::backend::secrets::stored_key(provider.id).is_some_and(|key| !key.trim().is_empty());
+    classify_key_source(provider.key_env.is_empty(), env_present, file_present)
 }
 
-/// Read a stored key from the OS keychain (`None` if absent or the backend is
-/// unavailable — the env-var path remains the robust fallback).
-pub fn keychain_key(provider_id: &str) -> Option<String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, provider_id)
-        .ok()?
-        .get_password()
-        .ok()
-}
-
-/// Store a key in the OS keychain for `provider_id`.
-pub fn set_keychain_key(provider_id: &str, key: &str) -> Result<(), String> {
-    keyring::Entry::new(KEYCHAIN_SERVICE, provider_id)
-        .map_err(|error| error.to_string())?
-        .set_password(key)
-        .map_err(|error| error.to_string())
-}
-
-/// Remove a stored key from the OS keychain (a missing entry is not an error).
-pub fn clear_keychain_key(provider_id: &str) -> Result<(), String> {
-    let entry =
-        keyring::Entry::new(KEYCHAIN_SERVICE, provider_id).map_err(|error| error.to_string())?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(error) => Err(error.to_string()),
+/// Pure precedence rule behind [`key_source`]: keyless ⇒ None; else the env var
+/// wins over the file store; else Missing. Split out so the precedence is
+/// unit-testable without touching the environment or the real key file.
+fn classify_key_source(keyless: bool, env_present: bool, file_present: bool) -> KeySource {
+    if keyless {
+        KeySource::None
+    } else if env_present {
+        KeySource::Env
+    } else if file_present {
+        KeySource::File
+    } else {
+        KeySource::Missing
     }
+}
+
+/// Every provider that currently has a usable key, paired with where it resolves
+/// from (env var or the file store). Backs the "Stored keys" overview in
+/// settings; keyless and key-less providers are omitted.
+pub fn stored_keys() -> Vec<(&'static ProviderSpec, KeySource)> {
+    PROVIDERS
+        .iter()
+        .filter_map(|spec| match key_source(spec) {
+            source @ (KeySource::Env | KeySource::File) => Some((spec, source)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The model ids to offer for `spec`: its built-in models first (id + label),
+/// then any live-fetched ids not already listed (the id used as its own label).
+/// Keeps the curated order/labels while surfacing fresh ids from the provider's
+/// `/models` endpoint; de-duplicates on id.
+pub fn merged_model_ids(spec: &ProviderSpec, fetched: &[String]) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = spec
+        .models
+        .iter()
+        .map(|model| (model.id.to_string(), model.label.to_string()))
+        .collect();
+    for id in fetched {
+        let id = id.trim();
+        if !id.is_empty() && !out.iter().any(|(existing, _)| existing == id) {
+            out.push((id.to_string(), id.to_string()));
+        }
+    }
+    out
 }
 
 /// Build a provider trait object from the assistant config + its env key, or a
@@ -359,5 +397,55 @@ mod tests {
         assert!(!openai.caps_for("gpt-4.1").supports_effort);
         // Unknown / free-typed model defaults to no effort.
         assert!(!openai.caps_for("some-new-model").supports_effort);
+    }
+
+    #[test]
+    fn gemini_provider_is_openai_compatible() {
+        let gemini = provider_spec("gemini").expect("gemini provider exists");
+        assert_eq!(gemini.kind, ProviderKind::OpenAiCompat);
+        assert_eq!(gemini.key_env, "GEMINI_API_KEY");
+        assert!(
+            gemini
+                .base_url
+                .contains("generativelanguage.googleapis.com")
+        );
+        assert!(!gemini.models.is_empty());
+    }
+
+    #[test]
+    fn key_source_precedence_env_over_file() {
+        // Keyless provider needs nothing.
+        assert_eq!(classify_key_source(true, false, false), KeySource::None);
+        // The env var wins even when a file key is also present.
+        assert_eq!(classify_key_source(false, true, true), KeySource::Env);
+        // File store is used when only it has a key.
+        assert_eq!(classify_key_source(false, false, true), KeySource::File);
+        // Nothing anywhere.
+        assert_eq!(classify_key_source(false, false, false), KeySource::Missing);
+    }
+
+    #[test]
+    fn merged_model_ids_keeps_static_first_and_dedups() {
+        let openai = provider_spec("openai").unwrap();
+        let fetched = vec![
+            "gpt-5.1".to_string(), // already a built-in id
+            "gpt-6-future".to_string(),
+            "  ".to_string(), // blank ids are ignored
+        ];
+        let merged = merged_model_ids(openai, &fetched);
+
+        // Built-in ids come first, in their declared order.
+        assert_eq!(merged[0].0, "gpt-5.1");
+        assert_eq!(merged[0].1, "GPT-5.1");
+        // The already-present id is not duplicated.
+        assert_eq!(merged.iter().filter(|(id, _)| id == "gpt-5.1").count(), 1);
+        // A genuinely new id is appended, with the id as its own label.
+        assert!(
+            merged
+                .iter()
+                .any(|(id, label)| id == "gpt-6-future" && label == "gpt-6-future")
+        );
+        // Blank ids are dropped.
+        assert!(!merged.iter().any(|(id, _)| id.trim().is_empty()));
     }
 }
