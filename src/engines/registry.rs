@@ -138,7 +138,7 @@ struct EngineSpec {
 /// Version of the bundled `chemx` quantum-chemistry library. chemx exposes no
 /// version constant, so keep this in sync with the `chemx` dependency in
 /// `Cargo.toml`.
-const CHEMX_VERSION: &str = "0.3.0";
+const CHEMX_VERSION: &str = "0.4.0";
 
 const ENGINE_SPECS: &[EngineSpec] = &[EngineSpec {
     id: EngineId::GROMACS,
@@ -178,7 +178,7 @@ impl EngineRegistry {
         capabilities.push(EngineCapability {
             id: EngineId::CHEMX,
             name: "chemx",
-            description: "Pure-Rust quantum chemistry: HF, DFT, MP2, and coupled cluster.",
+            description: "Pure-Rust quantum chemistry: molecular HF, DFT, MP2, and coupled cluster, plus periodic (crystalline) DFT.",
             launch: None,
             version: Some(CHEMX_VERSION.to_string()),
             built_in: true,

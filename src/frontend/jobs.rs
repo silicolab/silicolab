@@ -19,7 +19,7 @@ use crate::{
             BuildRequest, GromacsProgress, MaterialBuildRequest, StageResult, StageSpec,
             TopologySource, build_material_system, build_system, prepare_system, run_pipeline,
         },
-        qm::{QmOutcome, QmRequest},
+        qm::{QmJob, QmOutcome},
         remote::Compute,
     },
     frontend::md_support::{FrameworkRunMetadata, MD_FRAMEWORK_FILE, write_md_system_context},
@@ -590,10 +590,11 @@ pub fn spawn_disorder_job(request: PackRequest) -> RunningDisorderJob {
     }
 }
 
-/// Spawn a quantum-chemistry calculation on a worker thread and return the live
-/// handle. The worker streams coarse stage updates, then a `Finished` outcome or
-/// `Failed` error. Caller stores the handle in [`JobManager`].
-pub fn spawn_qm_job(request: QmRequest) -> RunningQmJob {
+/// Spawn a quantum-chemistry calculation (molecular or periodic) on a worker
+/// thread and return the live handle. The worker streams coarse stage updates,
+/// then a `Finished` outcome or `Failed` error. Caller stores the handle in
+/// [`JobManager`].
+pub fn spawn_qm_job(job: QmJob) -> RunningQmJob {
     let (sender, receiver) = std::sync::mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_for_worker = Arc::clone(&cancel);
@@ -601,7 +602,7 @@ pub fn spawn_qm_job(request: QmRequest) -> RunningQmJob {
     std::thread::spawn(move || {
         let progress_sender = sender.clone();
         let result = run_qm_calculation(
-            request,
+            job,
             cancel_for_worker,
             move |QmCalculationProgress { stage }| {
                 let _ = progress_sender.send(QmWorkerMessage::Progress { stage });

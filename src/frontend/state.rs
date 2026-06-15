@@ -705,6 +705,41 @@ pub struct QmPrompt {
     pub default_kind: crate::engines::qm::QmKind,
     /// All advanced chemx options (dispersion, solvation, SCF backend, …).
     pub options: crate::engines::qm::QmOptions,
+    /// Whether the panel is in periodic (crystalline) mode. Only selectable when
+    /// the active structure carries a real unit cell; the molecular fields above
+    /// are ignored while this is set.
+    pub periodic: bool,
+    /// Settings for a periodic calculation, used when [`Self::periodic`] is set.
+    pub periodic_form: PeriodicQmForm,
+}
+
+/// Panel form for a periodic (PBC) QM calculation — the periodic counterpart of
+/// the molecular fields on [`QmPrompt`]. Mirrors
+/// [`crate::engines::qm::PeriodicQmRequest`] minus the structure.
+#[derive(Debug, Clone)]
+pub struct PeriodicQmForm {
+    pub functional: crate::engines::qm::PeriodicFunctional,
+    pub basis: String,
+    pub kmesh: [u32; 3],
+    pub e_cut_ry: f64,
+    pub max_iter: u32,
+    pub forces: bool,
+    pub stress: bool,
+}
+
+impl Default for PeriodicQmForm {
+    fn default() -> Self {
+        use crate::engines::qm::periodic;
+        Self {
+            functional: crate::engines::qm::PeriodicFunctional::default(),
+            basis: periodic::DEFAULT_PERIODIC_BASIS.to_string(),
+            kmesh: [1, 1, 1],
+            e_cut_ry: periodic::DEFAULT_E_CUT_RY,
+            max_iter: periodic::DEFAULT_MAX_ITER,
+            forces: false,
+            stress: false,
+        }
+    }
 }
 
 impl QmPrompt {
@@ -720,10 +755,12 @@ impl QmPrompt {
             kind,
             default_kind: kind,
             options: crate::engines::qm::QmOptions::default(),
+            periodic: false,
+            periodic_form: PeriodicQmForm::default(),
         }
     }
 
-    /// Build the engine request from this form against `structure`.
+    /// Build the molecular engine request from this form against `structure`.
     pub fn to_request(&self, structure: crate::domain::Structure) -> crate::engines::qm::QmRequest {
         crate::engines::qm::QmRequest {
             structure,
@@ -733,6 +770,29 @@ impl QmPrompt {
             multiplicity: self.multiplicity,
             kind: self.kind,
             options: self.options.clone(),
+        }
+    }
+
+    /// Build the engine job from this form against `structure`: a periodic job in
+    /// periodic mode, otherwise the molecular request.
+    pub fn to_job(&self, structure: crate::domain::Structure) -> crate::engines::qm::QmJob {
+        use crate::engines::qm::{KMesh, PeriodicQmRequest, QmJob};
+        if self.periodic {
+            let form = &self.periodic_form;
+            QmJob::Periodic(PeriodicQmRequest {
+                structure,
+                functional: form.functional,
+                basis: form.basis.clone(),
+                kmesh: KMesh {
+                    divisions: form.kmesh,
+                },
+                e_cut_ry: form.e_cut_ry,
+                max_iter: form.max_iter,
+                forces: form.forces,
+                stress: form.stress,
+            })
+        } else {
+            QmJob::Molecular(self.to_request(structure))
         }
     }
 }

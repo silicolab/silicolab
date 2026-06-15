@@ -29,6 +29,10 @@ use chemx::{
 use crate::domain::Structure;
 use crate::io::structure_text::to_xyz;
 
+pub mod periodic;
+
+pub use periodic::{KMesh, PeriodicFunctional, PeriodicQmRequest, run_periodic_qm};
+
 /// Bohr → Ångström. chemx stores nuclear positions in bohr.
 const BOHR_TO_ANGSTROM: f64 = 0.529_177_210_903;
 /// Hartree → electron-volt.
@@ -319,6 +323,18 @@ pub struct QmRequest {
     pub options: QmOptions,
 }
 
+/// A quantum-chemistry job: a molecular calculation or a periodic (crystalline)
+/// one. Both produce a [`QmOutcome`], so the worker thread, the workflow entry
+/// point, and the result-polling UI handle the two uniformly — only the input
+/// form differs. Built by the panel/console; run by [`crate::workflows::qm`].
+#[derive(Debug, Clone)]
+pub enum QmJob {
+    /// A molecular (non-periodic) HF/DFT/post-HF calculation.
+    Molecular(QmRequest),
+    /// A periodic (PBC) Kohn–Sham calculation over a unit cell.
+    Periodic(PeriodicQmRequest),
+}
+
 /// The result of a quantum-chemistry calculation.
 ///
 /// Structured fields cover what callers read programmatically (energy, the
@@ -333,6 +349,24 @@ pub struct QmOutcome {
     pub optimized_structure: Option<Structure>,
     /// Pre-formatted, human-readable report of every result.
     pub summary: String,
+}
+
+/// Validate that every atom carries a chemx-recognized element symbol, naming
+/// the offending atom (chemx's own parse error does not). The structure editor
+/// accepts free-text symbols, so an atom may carry a typo, a stray character, or
+/// a blank. Shared by the molecular and periodic engine paths.
+fn ensure_known_elements(structure: &Structure) -> Result<()> {
+    for (index, atom) in structure.atoms.iter().enumerate() {
+        if !is_known_element(&atom.element) {
+            bail!(
+                "atom {} has an invalid element symbol `{}`; set a real element \
+                 (e.g. C, N, O) in the structure editor before running a QM calculation",
+                index + 1,
+                atom.element
+            );
+        }
+    }
+    Ok(())
 }
 
 /// Whether chemx will accept `symbol` as an element. Mirrors `Molecule::from_xyz`,
@@ -357,19 +391,7 @@ fn molecule_from_structure(
     charge: i32,
     multiplicity: u32,
 ) -> Result<Molecule> {
-    // The structure editor accepts free-text element symbols, so an atom may
-    // carry an invalid entry (a typo, a stray character, or a blank). Validate
-    // up front to name the offending atom — chemx's own parse error does not.
-    for (index, atom) in structure.atoms.iter().enumerate() {
-        if !is_known_element(&atom.element) {
-            bail!(
-                "atom {} has an invalid element symbol `{}`; set a real element \
-                 (e.g. C, N, O) in the structure editor before running a QM calculation",
-                index + 1,
-                atom.element
-            );
-        }
-    }
+    ensure_known_elements(structure)?;
 
     let molecule = Molecule::from_xyz(&to_xyz(structure))
         .context("chemx could not parse the molecule geometry")?

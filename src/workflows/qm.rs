@@ -1,16 +1,18 @@
 //! Composed quantum-chemistry calculation.
 //!
-//! A thin wrapper over [`crate::engines::qm::run_qm`] that gives the frontend a
-//! workflow-layer entry point and a progress type, keeping the
-//! frontend → workflows → engines layering intact. chemx runs the whole
-//! calculation in one opaque call, so progress is a coarse stage label rather
-//! than a per-step structure.
+//! A thin wrapper over the [`crate::engines::qm`] engine that gives the frontend
+//! a workflow-layer entry point and a progress type, keeping the
+//! frontend → workflows → engines layering intact. It dispatches a [`QmJob`] to
+//! the molecular or periodic engine path; both return a [`QmOutcome`], so the
+//! caller's plumbing is agnostic to which ran. chemx runs the whole calculation
+//! in one opaque call, so progress is a coarse stage label rather than a
+//! per-step structure.
 
 use std::sync::{Arc, atomic::AtomicBool};
 
 use anyhow::Result;
 
-use crate::engines::qm::{QmOutcome, QmRequest, run_qm};
+use crate::engines::qm::{QmJob, QmOutcome, run_periodic_qm, run_qm};
 
 /// A coarse progress update (`"running scf"`, `"collecting results"`, …).
 pub struct QmCalculationProgress {
@@ -23,15 +25,19 @@ pub struct QmCalculationResult {
 }
 
 pub fn run_qm_calculation(
-    request: QmRequest,
+    job: QmJob,
     cancel: Arc<AtomicBool>,
     mut progress: impl FnMut(QmCalculationProgress),
 ) -> Result<QmCalculationResult> {
-    let outcome = run_qm(request, cancel, |stage| {
+    let report = |stage: &str| {
         progress(QmCalculationProgress {
             stage: stage.to_string(),
         })
-    })?;
+    };
+    let outcome = match job {
+        QmJob::Molecular(request) => run_qm(request, cancel, report)?,
+        QmJob::Periodic(request) => run_periodic_qm(request, cancel, report)?,
+    };
     Ok(QmCalculationResult { outcome })
 }
 
@@ -42,7 +48,7 @@ mod tests {
     use super::run_qm_calculation;
     use crate::{
         domain::{Atom, Structure},
-        engines::qm::{QmKind, QmMethod, QmRequest},
+        engines::qm::{QmJob, QmKind, QmMethod, QmRequest},
     };
 
     #[test]
@@ -65,7 +71,7 @@ mod tests {
 
         let mut stages = Vec::new();
         let result = run_qm_calculation(
-            QmRequest {
+            QmJob::Molecular(QmRequest {
                 structure,
                 method: QmMethod::Rhf,
                 basis: "sto-3g".to_string(),
@@ -76,7 +82,7 @@ mod tests {
                     compute_properties: true,
                     ..Default::default()
                 },
-            },
+            }),
             Default::default(),
             |progress| stages.push(progress.stage),
         )

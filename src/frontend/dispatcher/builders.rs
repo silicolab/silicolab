@@ -234,8 +234,23 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
         state.set_message("open a structure before running a QM calculation".to_string());
         return;
     }
-    let request = prompt.to_request(state.structure().clone());
-    let job = spawn_qm_job(request);
+    // A periodic run needs a real unit cell; reject early with a clear message
+    // rather than letting the worker fail (the panel only offers the periodic
+    // mode when a cell is present, but the prompt can outlive an entry switch).
+    if prompt.periodic
+        && state
+            .structure()
+            .cell
+            .as_ref()
+            .filter(|cell| !cell.is_placeholder())
+            .is_none()
+    {
+        state
+            .set_message("periodic QM needs a real unit cell; this structure has none".to_string());
+        return;
+    }
+    let job = prompt.to_job(state.structure().clone());
+    let job = spawn_qm_job(job);
     state.set_source_path(None);
     state.ui.editor = None;
     state.ui.pending_qm = None;
