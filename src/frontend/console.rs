@@ -1109,6 +1109,7 @@ pub fn command_catalog() -> String {
         "  md build                    Box + capture topology for the active structure.",
         "  md simulate [--time 1ns] [--temperature 300] [--no-relax]",
         "  qm energy|optimize|freq [--method b3lyp] [--basis def2-svp] [--charge 0] [--spin 1]",
+        "  qm periodic [--functional pade] [--basis SZV-GTH] [--kmesh 2x2x2] [--cutoff 280] (needs a cell)",
         "",
         "Tips: render commands target the active entry unless given `--global`. Call `inspect` \
          first when you are unsure what is loaded.",
@@ -1135,6 +1136,7 @@ fn help_text() -> String {
         "md simulate [--time 1ns] [--temperature 300] [--no-relax]   run EM/NVT/NPT/production + analysis",
         "disorder --of <entry> [--count n|--density g/cm3|--conc mol/L] --box X,Y,Z|--sphere R|--cylinder R,L   pack molecules (alias: pack)",
         "qm energy|optimize|freq [--method b3lyp] [--basis def2-svp] [--charge 0] [--spin 1] [--properties]",
+        "qm periodic [--functional pade|lda] [--basis SZV-GTH] [--kmesh 2x2x2] [--cutoff 280] [--forces] [--stress]   periodic (crystal) DFT on the active cell",
         "add --global to render commands to apply them project-wide",
         "script variables: ${name} or ${name:-default}",
     ]

@@ -193,125 +193,35 @@ pub(crate) fn render_qm_task_panel(
     ui: &mut egui::Ui,
     actions: &mut Vec<AppAction>,
 ) {
-    use crate::engines::qm::{QmKind, QmMethod};
+    // A periodic run needs a real unit cell; the placeholder 1×1×1 cell some
+    // tools write for a molecule does not count. Read this before borrowing the
+    // prompt mutably below.
+    let has_real_cell = state
+        .structure()
+        .cell
+        .as_ref()
+        .is_some_and(|cell| !cell.is_placeholder());
 
     if let Some(prompt) = &mut state.ui.pending_qm {
-        let presets = QmMethod::presets();
-        let method_is_composite = matches!(prompt.method, QmMethod::Composite(_));
-
-        egui::Grid::new("sidebar_qm_options")
-            .num_columns(2)
-            .spacing([8.0, 6.0])
-            .show(ui, |ui| {
-                ui.label("Method:");
-                let is_custom = !presets.iter().any(|m| m == &prompt.method);
-                egui::ComboBox::from_id_salt("qm_method")
-                    .selected_text(if is_custom {
-                        format!("Custom: {}", prompt.method.label())
-                    } else {
-                        prompt.method.label()
-                    })
-                    .show_ui(ui, |ui| {
-                        for method in &presets {
-                            let label = method.label();
-                            ui.selectable_value(&mut prompt.method, method.clone(), label);
-                        }
-                        if ui
-                            .selectable_label(is_custom, "Custom functional…")
-                            .clicked()
-                        {
-                            let name = if prompt.custom_functional.trim().is_empty() {
-                                "pbe".to_string()
-                            } else {
-                                prompt.custom_functional.clone()
-                            };
-                            prompt.custom_functional = name.clone();
-                            prompt.method = QmMethod::Dft(name);
-                        }
-                    });
-                ui.end_row();
-
-                // Free-text functional name, shown when the method is a DFT
-                // functional outside the preset list.
-                if !presets.iter().any(|m| m == &prompt.method)
-                    && matches!(prompt.method, QmMethod::Dft(_))
-                {
-                    ui.label("Functional:");
-                    if ui
-                        .text_edit_singleline(&mut prompt.custom_functional)
-                        .changed()
-                    {
-                        prompt.method = QmMethod::Dft(prompt.custom_functional.clone());
-                    }
-                    ui.end_row();
-                }
-
-                ui.label("Basis set:");
-                // A composite carries its own implied basis.
-                if method_is_composite {
-                    ui.label("(implied by composite)");
-                } else {
-                    egui::ComboBox::from_id_salt("qm_basis")
-                        .selected_text(prompt.basis.clone())
-                        .show_ui(ui, |ui| {
-                            // chemx's bundled basis sets, smallest to largest.
-                            for basis in [
-                                "sto-3g",
-                                "6-31g",
-                                "6-311g(d,p)",
-                                "cc-pvdz",
-                                "cc-pvtz",
-                                "cc-pvqz",
-                                "def2-svp",
-                                "def2-tzvp",
-                                "def2-tzvpp",
-                                "def2-qzvp",
-                            ] {
-                                ui.selectable_value(&mut prompt.basis, basis.to_string(), basis);
-                            }
-                        });
-                }
-                ui.end_row();
-
-                ui.label("Charge:");
-                ui.add(egui::DragValue::new(&mut prompt.charge).range(-10..=10));
-                ui.end_row();
-
-                ui.label("Spin (2S+1):");
-                ui.add(egui::DragValue::new(&mut prompt.multiplicity).range(1..=11));
-                ui.end_row();
+        // Offer molecular vs. periodic only when a cell is present; without one,
+        // force the form back to molecular so a stale periodic selection (left
+        // over from a previous entry) can't run against a non-periodic system.
+        if has_real_cell {
+            ui.label("Calculation target:");
+            ui.horizontal(|ui| {
+                ui.selectable_value(&mut prompt.periodic, false, "Molecular");
+                ui.selectable_value(&mut prompt.periodic, true, "Periodic (crystal)");
             });
-
-        ui.separator();
-        ui.label("Calculation:");
-        ui.radio_value(&mut prompt.kind, QmKind::SinglePoint, "Single-point energy");
-        ui.radio_value(&mut prompt.kind, QmKind::Optimize, "Geometry optimization");
-        ui.radio_value(
-            &mut prompt.kind,
-            QmKind::Frequencies,
-            "Vibrational frequencies",
-        );
-
-        // The three calculation kinds above are mutually exclusive (radios). The
-        // property toggle below is an independent on/off, but we draw it with the
-        // same filled-circle indicator so the panel speaks one visual language
-        // ("selected = dot"). It is set apart under its own "Options:" header so
-        // the shared dot style is not misread as "mutually exclusive with the
-        // calculation above". `ui.radio` is purely visual here — the click
-        // handler flips the bool; it does not join the calculation-kind group.
-        ui.separator();
-        ui.label("Options:");
-        if ui
-            .radio(
-                prompt.options.compute_properties,
-                "Compute dipole, charges & bond orders",
-            )
-            .clicked()
-        {
-            prompt.options.compute_properties = !prompt.options.compute_properties;
+            ui.separator();
+        } else {
+            prompt.periodic = false;
         }
 
-        render_qm_advanced(ui, prompt, method_is_composite);
+        if prompt.periodic {
+            render_periodic_qm_form(ui, &mut prompt.periodic_form);
+        } else {
+            render_molecular_qm_form(ui, prompt);
+        }
 
         ui.separator();
         ui.horizontal(|ui| {
@@ -347,6 +257,194 @@ pub(crate) fn render_qm_task_panel(
     }
 }
 
+/// The molecular QM form: method, basis, charge/spin, the calculation kind, the
+/// properties toggle, and the advanced chemx options.
+fn render_molecular_qm_form(ui: &mut egui::Ui, prompt: &mut crate::frontend::state::QmPrompt) {
+    use crate::engines::qm::{QmKind, QmMethod};
+
+    let presets = QmMethod::presets();
+    let method_is_composite = matches!(prompt.method, QmMethod::Composite(_));
+
+    egui::Grid::new("sidebar_qm_options")
+        .num_columns(2)
+        .spacing([8.0, 6.0])
+        .show(ui, |ui| {
+            ui.label("Method:");
+            let is_custom = !presets.iter().any(|m| m == &prompt.method);
+            egui::ComboBox::from_id_salt("qm_method")
+                .selected_text(if is_custom {
+                    format!("Custom: {}", prompt.method.label())
+                } else {
+                    prompt.method.label()
+                })
+                .show_ui(ui, |ui| {
+                    for method in &presets {
+                        let label = method.label();
+                        ui.selectable_value(&mut prompt.method, method.clone(), label);
+                    }
+                    if ui
+                        .selectable_label(is_custom, "Custom functional…")
+                        .clicked()
+                    {
+                        let name = if prompt.custom_functional.trim().is_empty() {
+                            "pbe".to_string()
+                        } else {
+                            prompt.custom_functional.clone()
+                        };
+                        prompt.custom_functional = name.clone();
+                        prompt.method = QmMethod::Dft(name);
+                    }
+                });
+            ui.end_row();
+
+            // Free-text functional name, shown when the method is a DFT
+            // functional outside the preset list.
+            if !presets.iter().any(|m| m == &prompt.method)
+                && matches!(prompt.method, QmMethod::Dft(_))
+            {
+                ui.label("Functional:");
+                if ui
+                    .text_edit_singleline(&mut prompt.custom_functional)
+                    .changed()
+                {
+                    prompt.method = QmMethod::Dft(prompt.custom_functional.clone());
+                }
+                ui.end_row();
+            }
+
+            ui.label("Basis set:");
+            // A composite carries its own implied basis.
+            if method_is_composite {
+                ui.label("(implied by composite)");
+            } else {
+                egui::ComboBox::from_id_salt("qm_basis")
+                    .selected_text(prompt.basis.clone())
+                    .show_ui(ui, |ui| {
+                        // chemx's bundled basis sets, smallest to largest.
+                        for basis in [
+                            "sto-3g",
+                            "6-31g",
+                            "6-311g(d,p)",
+                            "cc-pvdz",
+                            "cc-pvtz",
+                            "cc-pvqz",
+                            "def2-svp",
+                            "def2-tzvp",
+                            "def2-tzvpp",
+                            "def2-qzvp",
+                        ] {
+                            ui.selectable_value(&mut prompt.basis, basis.to_string(), basis);
+                        }
+                    });
+            }
+            ui.end_row();
+
+            ui.label("Charge:");
+            ui.add(egui::DragValue::new(&mut prompt.charge).range(-10..=10));
+            ui.end_row();
+
+            ui.label("Spin (2S+1):");
+            ui.add(egui::DragValue::new(&mut prompt.multiplicity).range(1..=11));
+            ui.end_row();
+        });
+
+    ui.separator();
+    ui.label("Calculation:");
+    ui.radio_value(&mut prompt.kind, QmKind::SinglePoint, "Single-point energy");
+    ui.radio_value(&mut prompt.kind, QmKind::Optimize, "Geometry optimization");
+    ui.radio_value(
+        &mut prompt.kind,
+        QmKind::Frequencies,
+        "Vibrational frequencies",
+    );
+
+    // The three calculation kinds above are mutually exclusive (radios). The
+    // property toggle below is an independent on/off, but we draw it with the
+    // same filled-circle indicator so the panel speaks one visual language
+    // ("selected = dot"). It is set apart under its own "Options:" header so
+    // the shared dot style is not misread as "mutually exclusive with the
+    // calculation above". `ui.radio` is purely visual here — the click
+    // handler flips the bool; it does not join the calculation-kind group.
+    ui.separator();
+    ui.label("Options:");
+    if ui
+        .radio(
+            prompt.options.compute_properties,
+            "Compute dipole, charges & bond orders",
+        )
+        .clicked()
+    {
+        prompt.options.compute_properties = !prompt.options.compute_properties;
+    }
+
+    render_qm_advanced(ui, prompt, method_is_composite);
+}
+
+/// The periodic (crystalline) QM form: the LDA functional, GTH basis, k-point
+/// mesh, grid cutoff, SCF iteration cap, and the optional force/stress outputs.
+/// Shown only when the active structure carries a real unit cell.
+fn render_periodic_qm_form(ui: &mut egui::Ui, form: &mut crate::frontend::state::PeriodicQmForm) {
+    use crate::engines::qm::{PeriodicFunctional, periodic};
+
+    egui::Grid::new("sidebar_periodic_qm_options")
+        .num_columns(2)
+        .spacing([8.0, 6.0])
+        .show(ui, |ui| {
+            ui.label("Functional:");
+            egui::ComboBox::from_id_salt("periodic_functional")
+                .selected_text(form.functional.label())
+                .show_ui(ui, |ui| {
+                    for functional in PeriodicFunctional::all() {
+                        ui.selectable_value(&mut form.functional, functional, functional.label());
+                    }
+                });
+            ui.end_row();
+
+            ui.label("Basis (GTH):");
+            egui::ComboBox::from_id_salt("periodic_basis")
+                .selected_text(form.basis.clone())
+                .show_ui(ui, |ui| {
+                    for basis in periodic::PERIODIC_BASES {
+                        ui.selectable_value(&mut form.basis, basis.to_string(), *basis);
+                    }
+                });
+            ui.end_row();
+
+            ui.label("k-point mesh:");
+            ui.horizontal(|ui| {
+                for division in &mut form.kmesh {
+                    ui.add(egui::DragValue::new(division).range(1..=12));
+                }
+            });
+            ui.end_row();
+
+            ui.label("Grid cutoff (Ry):");
+            // Floor at 100 Ry: below that a GPW real-space grid is too coarse to
+            // give a meaningful energy (chemx's own default is 280 Ry).
+            ui.add(
+                egui::DragValue::new(&mut form.e_cut_ry)
+                    .range(100.0..=1200.0)
+                    .speed(10.0),
+            );
+            ui.end_row();
+
+            ui.label("Max SCF iters:");
+            ui.add(egui::DragValue::new(&mut form.max_iter).range(10..=500));
+            ui.end_row();
+        });
+
+    ui.separator();
+    ui.label("Outputs:");
+    ui.checkbox(&mut form.forces, "Forces on atoms");
+    ui.checkbox(&mut form.stress, "Cell stress tensor");
+
+    ui.add_space(4.0);
+    ui.small(
+        "Periodic GPW uses GTH pseudopotentials (closed-shell LDA); net charge \
+         and spin are not modeled.",
+    );
+}
+
 /// Common implicit-solvation solvent names offered in the panel dropdown. chemx
 /// accepts more (especially for SMD); the console `qm` command takes any name.
 const QM_SOLVENTS: &[&str] = &[
@@ -363,7 +461,7 @@ const QM_SOLVENTS: &[&str] = &[
     "chloroform",
 ];
 
-/// The "Advanced (chemx 0.3)" collapsing section of the QM panel: dispersion,
+/// The "Advanced (chemx 0.4)" collapsing section of the QM panel: dispersion,
 /// solvation, SCF backend, relativity, smearing, FOD, and thermochemistry knobs.
 /// Options that do not apply to the chosen method are hidden rather than shown
 /// disabled.
@@ -380,7 +478,7 @@ fn render_qm_advanced(
     );
     let method_is_mp2 = matches!(prompt.method, QmMethod::Mp2);
 
-    egui::CollapsingHeader::new("Advanced (chemx 0.3)")
+    egui::CollapsingHeader::new("Advanced (chemx 0.4)")
         .default_open(false)
         .show(ui, |ui| {
             // Dispersion — composites carry their own; post-HF has none.

@@ -16,8 +16,8 @@ use anyhow::{Result, anyhow, bail};
 
 use crate::{
     engines::qm::{
-        CpcmDielectric, QmDispersion, QmKind, QmMethod, QmOptions, QmRequest, QmScfBackend,
-        QmSolvation,
+        CpcmDielectric, KMesh, PeriodicFunctional, PeriodicQmRequest, QmDispersion, QmJob, QmKind,
+        QmMethod, QmOptions, QmRequest, QmScfBackend, QmSolvation, periodic,
     },
     frontend::state::AppState,
     io::structure_paths::default_structure_save_path,
@@ -28,7 +28,7 @@ use crate::{
 pub fn qm_command(state: &mut AppState, args: &[String]) -> Result<String> {
     let Some(sub) = args.first().map(String::as_str) else {
         bail!(
-            "usage: qm <energy|optimize|freq> [options]\n\
+            "usage: qm <energy|optimize|freq|periodic> [options]\n\
              \n\
              core:     --method <m>   hf|rhf|uhf|rohf|mp2|ccsd|ccsd(t), a functional \
              (pbe, b3lyp, r2scan, wb97m-v, b2plyp, …) with an optional -d3/-d4 suffix, \
@@ -38,7 +38,9 @@ pub fn qm_command(state: &mut AppState, args: &[String]) -> Result<String> {
              dispersion: --dispersion d3|d4   (or use a -d3/-d4 method suffix)\n\
              solvation:  --solvent <name> | --eps <ε> | --smd <name> | --alpb <name> | --gbsa <name>\n\
              backend:    --direct | --ri | --cosx   --ri-mp2   --x2c   --all-electron   --grid <0..4>\n\
-             advanced:   --smear <K>   --fod   --sph   --symmetry-number <int>   --qrrho-w0 <cm-1>"
+             advanced:   --smear <K>   --fod   --sph   --symmetry-number <int>   --qrrho-w0 <cm-1>\n\
+             periodic:   qm periodic (needs a unit cell)  --functional pade|lda  --basis <gth-set>\n\
+             \x20         --kmesh <n|nxnxn>   --cutoff <Ry>   --max-iter <n>   --forces   --stress"
         );
     };
     // `qm recommend <task>` prints chemx's recommended level of theory for a
@@ -46,12 +48,20 @@ pub fn qm_command(state: &mut AppState, args: &[String]) -> Result<String> {
     if sub == "recommend" {
         return qm_recommend(&args[1..]);
     }
+    // `qm periodic` runs a periodic (crystalline) single point on the active
+    // unit cell — a distinct option set from the molecular subcommands.
+    if sub == "periodic" {
+        return run_periodic_command(state, &args[1..]);
+    }
     let kind = match sub {
         "energy" | "sp" | "single-point" => QmKind::SinglePoint,
         "optimize" | "opt" => QmKind::Optimize,
         "freq" | "frequencies" => QmKind::Frequencies,
         other => {
-            bail!("unknown qm subcommand `{other}` (expected energy, optimize, freq, or recommend)")
+            bail!(
+                "unknown qm subcommand `{other}` \
+                 (expected energy, optimize, freq, periodic, or recommend)"
+            )
         }
     };
     run(state, kind, &args[1..])
@@ -127,7 +137,7 @@ fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
 
     // Synchronous: a throwaway cancel flag and a no-op progress sink.
     let cancel = Arc::new(AtomicBool::new(false));
-    let result = run_qm_calculation(request, cancel, |_| {})?;
+    let result = run_qm_calculation(QmJob::Molecular(request), cancel, |_| {})?;
     let outcome = result.outcome;
 
     // A QM run is a heavy calculation; surface its optimized geometry as a new
@@ -139,6 +149,73 @@ fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
     }
 
     Ok(outcome.summary)
+}
+
+/// `qm periodic [options]`: a periodic (crystalline) single point on the active
+/// unit cell. Runs synchronously, like the molecular subcommands; periodic v1
+/// has no geometry relaxation, so it never creates a new entry.
+fn run_periodic_command(state: &mut AppState, args: &[String]) -> Result<String> {
+    let request = assemble_periodic_request(state, args)?;
+    let cancel = Arc::new(AtomicBool::new(false));
+    let result = run_qm_calculation(QmJob::Periodic(request), cancel, |_| {})?;
+    Ok(result.outcome.summary)
+}
+
+/// Assemble a [`PeriodicQmRequest`] from the active structure and `--flags`.
+fn assemble_periodic_request(state: &AppState, args: &[String]) -> Result<PeriodicQmRequest> {
+    if state.structure().atoms.is_empty() {
+        bail!("no active structure; open a crystal before `qm periodic`");
+    }
+    let flags = QmFlags::parse(args)?;
+    let functional = flags
+        .str("functional")
+        .map(PeriodicFunctional::parse)
+        .transpose()?
+        .unwrap_or_default();
+    let basis = flags
+        .str("basis")
+        .unwrap_or(periodic::DEFAULT_PERIODIC_BASIS)
+        .to_string();
+    let kmesh = parse_kmesh(&flags)?;
+    let e_cut_ry = flags.float("cutoff")?.unwrap_or(periodic::DEFAULT_E_CUT_RY);
+    let max_iter = flags
+        .uint("max-iter")?
+        .unwrap_or(periodic::DEFAULT_MAX_ITER);
+    Ok(PeriodicQmRequest {
+        structure: state.structure().clone(),
+        functional,
+        basis,
+        kmesh,
+        e_cut_ry,
+        max_iter,
+        forces: flags.flag("forces"),
+        stress: flags.flag("stress"),
+    })
+}
+
+/// Parse `--kmesh`: a single integer `n` (uniform `n×n×n`) or three separated by
+/// `x` or `,` (e.g. `4x4x2`). Absent means the Γ point.
+fn parse_kmesh(flags: &QmFlags) -> Result<KMesh> {
+    let Some(spec) = flags.str("kmesh") else {
+        return Ok(KMesh::gamma());
+    };
+    let nums = spec
+        .split(['x', 'X', ','])
+        .map(|p| {
+            p.trim()
+                .parse::<u32>()
+                .map_err(|_| anyhow!("--kmesh expects integers like 4 or 4x4x4, got `{spec}`"))
+        })
+        .collect::<Result<Vec<u32>>>()?;
+    let divisions = match nums.as_slice() {
+        [n] => [*n, *n, *n],
+        [a, b, c] => [*a, *b, *c],
+        _ => bail!("--kmesh expects one or three integers (e.g. 4 or 4x4x4), got `{spec}`"),
+    };
+    if divisions.contains(&0) {
+        bail!("--kmesh divisions must each be ≥ 1");
+    }
+    Ok(KMesh { divisions })
 }
 
 /// Minimal `--key value` / `--flag` parser for the `qm` command.
@@ -436,7 +513,7 @@ mod tests {
 
         // Spawn the same job the agent's heavy path uses and poll it to
         // completion, exactly as `poll_heavy_qm` does (minus the agent loop).
-        let job = spawn_qm_job(request);
+        let job = spawn_qm_job(crate::engines::qm::QmJob::Molecular(request));
         let deadline = Instant::now() + Duration::from_secs(120);
         let mut summary = None;
         while Instant::now() < deadline {
