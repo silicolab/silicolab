@@ -250,6 +250,7 @@ pub(super) fn render_assistant_panel(
                                 render_transcript_entry(
                                     ui,
                                     &pal,
+                                    &mut state.ui.markdown_cache,
                                     entry,
                                     transcript_content_width,
                                     show_agent_header,
@@ -262,16 +263,11 @@ pub(super) fn render_assistant_panel(
                                 } else {
                                     agent_message_header(ui, &pal);
                                 }
-                                ui.add(
-                                    egui::Label::new(
-                                        RichText::new(format!(
-                                            "{}...",
-                                            state.ui.agent.streaming_text
-                                        ))
-                                        .font(assistant_body_font_id())
-                                        .color(pal.text_primary),
-                                    )
-                                    .wrap_mode(egui::TextWrapMode::Wrap),
+                                render_markdown(
+                                    ui,
+                                    &pal,
+                                    &mut state.ui.markdown_cache,
+                                    &format!("{}...", state.ui.agent.streaming_text),
                                 );
                             }
                             if state.ui.agent.phase == AgentPhase::Done
@@ -753,6 +749,7 @@ fn agent_message_header(ui: &mut egui::Ui, pal: &crate::frontend::theme::Palette
 fn render_transcript_entry(
     ui: &mut egui::Ui,
     pal: &crate::frontend::theme::Palette,
+    markdown_cache: &mut egui_commonmark::CommonMarkCache,
     entry: &crate::frontend::agent::TranscriptEntry,
     content_width: f32,
     show_agent_header: bool,
@@ -785,10 +782,7 @@ fn render_transcript_entry(
             } else {
                 ui.add_space(6.0);
             }
-            ui.add(
-                egui::Label::new(assistant_text(text).color(pal.text_primary))
-                    .wrap_mode(egui::TextWrapMode::Wrap),
-            );
+            render_markdown(ui, pal, markdown_cache, text);
         }
         TranscriptEntry::Tool {
             summary,
@@ -814,6 +808,42 @@ fn render_transcript_entry(
             );
         }
     }
+}
+
+/// Render an assistant reply as formatted Markdown via `egui_commonmark`.
+///
+/// The viewer has no font/color setters of its own — it lays everything out
+/// from the ambient `ui` style — so we scope the body, monospace, and heading
+/// text styles to the Assistant tab's own fonts (keeping the CJK fallback and
+/// 13px body sizing identical to the surrounding prose) and set the prose text
+/// color before showing it. Without this it would fall back to egui's default
+/// 14px proportional face.
+fn render_markdown(
+    ui: &mut egui::Ui,
+    pal: &crate::frontend::theme::Palette,
+    cache: &mut egui_commonmark::CommonMarkCache,
+    text: &str,
+) {
+    ui.scope(|ui| {
+        let style = ui.style_mut();
+        style
+            .text_styles
+            .insert(egui::TextStyle::Body, assistant_body_font_id());
+        style
+            .text_styles
+            .insert(egui::TextStyle::Monospace, console_font_id());
+        style
+            .text_styles
+            .insert(egui::TextStyle::Heading, assistant_font_id(18.0));
+        // Color prose through the *default* text color, not `override_text_color`:
+        // an override bakes its color into every glyph, including links — whose
+        // accent `hyperlink_color` only paints over un-colored (placeholder)
+        // glyphs — so links would render indistinguishable from body text. The
+        // noninteractive stroke sets only the prose color; links and code keep
+        // the colors the theme assigns them.
+        style.visuals.widgets.noninteractive.fg_stroke.color = pal.text_primary;
+        egui_commonmark::CommonMarkViewer::new().show(ui, cache, text);
+    });
 }
 
 fn render_tool_block(
