@@ -8,6 +8,7 @@ use crate::{
     frontend::{
         actions::AppAction,
         agent::AssistantConversationId,
+        app::{ASSISTANT_CJK_FONT, CONSOLE_CJK_MONO_FONT},
         state::{AppState, PrimaryView},
         status_text,
     },
@@ -141,8 +142,6 @@ pub(super) fn weak_panel_hairline(ui: &mut egui::Ui, alpha: u8) {
 const COMPOSER_BOTTOM_PAD: f32 = 8.0;
 const ASSISTANT_SIDE_PAD: f32 = 8.0;
 const ASSISTANT_COMPOSER_HEIGHT: f32 = 58.0;
-const ASSISTANT_CJK_FONT: &str = "assistant-cjk";
-const CONSOLE_CJK_MONO_FONT: &str = "console-cjk-mono";
 const ASSISTANT_SCROLLBAR_RESERVE: f32 = 12.0;
 const ASSISTANT_TOOLBAR_BUTTON_WIDTH: f32 = 26.0;
 const ASSISTANT_TOOLBAR_BUTTON_HEIGHT: f32 = 24.0;
