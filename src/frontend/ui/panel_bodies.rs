@@ -140,7 +140,9 @@ pub(super) fn render_assistant_panel(
     ui: &mut egui::Ui,
     actions: &mut Vec<AppAction>,
 ) {
+    use crate::frontend::agent::TranscriptEntry;
     use crate::frontend::agent::registry;
+    use crate::frontend::agent::session::AgentPhase;
     use crate::frontend::theme::radius;
 
     let pal = crate::frontend::theme::palette(ui);
@@ -188,18 +190,30 @@ pub(super) fn render_assistant_panel(
                             if state.ui.agent.transcript.is_empty() {
                                 render_assistant_empty_state(ui, &pal, key_present, provider);
                             }
+                            let mut agent_header_shown = false;
                             for entry in &state.ui.agent.transcript {
-                                render_transcript_entry(ui, &pal, entry);
+                                let show_agent_header = match entry {
+                                    TranscriptEntry::User(_) => {
+                                        agent_header_shown = false;
+                                        false
+                                    }
+                                    TranscriptEntry::Assistant(_)
+                                    | TranscriptEntry::Tool { .. } => {
+                                        let show = !agent_header_shown;
+                                        agent_header_shown = true;
+                                        show
+                                    }
+                                    TranscriptEntry::Notice(_) => false,
+                                };
+                                render_transcript_entry(ui, &pal, entry, show_agent_header);
                             }
                             // Live streaming preview of the in-flight assistant text.
                             if !state.ui.agent.streaming_text.is_empty() {
-                                message_role(
-                                    ui,
-                                    egui_phosphor::regular::SPARKLE,
-                                    "SilicoLab Agent",
-                                    pal.accent,
-                                );
-                                ui.add_space(2.0);
+                                if agent_header_shown {
+                                    ui.add_space(6.0);
+                                } else {
+                                    agent_message_header(ui, &pal);
+                                }
                                 ui.add(
                                     egui::Label::new(
                                         RichText::new(format!(
@@ -210,6 +224,15 @@ pub(super) fn render_assistant_panel(
                                     )
                                     .wrap_mode(egui::TextWrapMode::Wrap),
                                 );
+                            }
+                            if state.ui.agent.phase == AgentPhase::Done
+                                && !matches!(
+                                    state.ui.agent.transcript.last(),
+                                    None | Some(TranscriptEntry::Notice(_))
+                                )
+                            {
+                                ui.add_space(3.0);
+                                completed_badge(ui, &pal);
                             }
                         });
                 },
@@ -494,10 +517,22 @@ fn message_role(ui: &mut egui::Ui, icon: &str, label: &str, color: Color32) {
     });
 }
 
+fn agent_message_header(ui: &mut egui::Ui, pal: &crate::frontend::theme::Palette) {
+    ui.add_space(10.0);
+    message_role(
+        ui,
+        egui_phosphor::regular::SPARKLE,
+        "SilicoLab Agent",
+        pal.accent,
+    );
+    ui.add_space(2.0);
+}
+
 fn render_transcript_entry(
     ui: &mut egui::Ui,
     pal: &crate::frontend::theme::Palette,
     entry: &crate::frontend::agent::TranscriptEntry,
+    show_agent_header: bool,
 ) {
     use crate::frontend::agent::TranscriptEntry;
     use crate::frontend::theme::radius;
@@ -520,39 +555,27 @@ fn render_transcript_entry(
                 });
         }
         TranscriptEntry::Assistant(text) => {
-            ui.add_space(10.0);
-            message_role(
-                ui,
-                egui_phosphor::regular::SPARKLE,
-                "SilicoLab Agent",
-                pal.accent,
-            );
-            ui.add_space(2.0);
+            if show_agent_header {
+                agent_message_header(ui, pal);
+            } else {
+                ui.add_space(6.0);
+            }
             ui.add(
                 egui::Label::new(RichText::new(text).color(pal.text_primary))
                     .wrap_mode(egui::TextWrapMode::Wrap),
             );
-            ui.add_space(3.0);
-            completed_badge(ui, pal);
         }
-        TranscriptEntry::ToolCall { summary } => {
-            ui.add_space(4.0);
-            render_tool_chip(
-                ui,
-                pal,
-                egui_phosphor::regular::TERMINAL,
-                summary,
-                pal.text_tertiary,
-            );
-        }
-        TranscriptEntry::ToolResult { summary, is_error } => {
-            let (icon, color) = if *is_error {
-                (egui_phosphor::regular::X_CIRCLE, pal.status_red)
+        TranscriptEntry::Tool {
+            summary,
+            result,
+            is_error,
+        } => {
+            if show_agent_header {
+                agent_message_header(ui, pal);
             } else {
-                (egui_phosphor::regular::CHECK_CIRCLE, pal.text_tertiary)
-            };
-            ui.add_space(2.0);
-            render_tool_chip(ui, pal, icon, summary, color);
+                ui.add_space(4.0);
+            }
+            render_tool_block(ui, pal, summary, result.as_deref(), *is_error);
         }
         TranscriptEntry::Notice(text) => {
             ui.add_space(6.0);
@@ -566,33 +589,77 @@ fn render_transcript_entry(
     }
 }
 
-/// A subdued rounded chip for tool calls and their results — monospace detail on
-/// a faint fill so machine chatter recedes behind the conversation.
-fn render_tool_chip(
+fn render_tool_block(
     ui: &mut egui::Ui,
     pal: &crate::frontend::theme::Palette,
-    icon: &str,
-    summary: &str,
-    color: Color32,
+    command: &str,
+    result: Option<&str>,
+    is_error: bool,
 ) {
     use crate::frontend::theme::radius;
     let frame_inner_width = (ui.available_width() - 16.0).max(48.0);
     Frame::default()
         .fill(pal.neutral_overlay(12))
         .corner_radius(CornerRadius::same(radius::CONTROL))
-        .inner_margin(Margin::symmetric(8, 4))
+        .inner_margin(Margin::symmetric(8, 6))
         .show(ui, |ui| {
             ui.set_width(frame_inner_width);
             ui.vertical(|ui| {
                 ui.set_width(frame_inner_width);
-                ui.horizontal(|ui| {
+                ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing.x = 6.0;
-                    ui.label(RichText::new(icon).small().color(color));
-                });
-                ui.add(
-                    egui::Label::new(RichText::new(summary).small().monospace().color(color))
+                    ui.label(
+                        RichText::new(egui_phosphor::regular::TERMINAL)
+                            .small()
+                            .color(pal.text_tertiary),
+                    );
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new(command)
+                                .small()
+                                .monospace()
+                                .color(pal.text_muted),
+                        )
                         .wrap_mode(egui::TextWrapMode::Wrap),
+                    );
+                });
+
+                ui.add_space(5.0);
+                let (line_rect, _) = ui
+                    .allocate_exact_size(egui::vec2(frame_inner_width, 1.0), egui::Sense::hover());
+                ui.painter().hline(
+                    line_rect.left()..=line_rect.right(),
+                    line_rect.center().y,
+                    Stroke::new(1.0, pal.neutral_overlay(18)),
                 );
+                ui.add_space(5.0);
+
+                match result {
+                    Some(result) => {
+                        let (icon, color) = if is_error {
+                            (egui_phosphor::regular::X_CIRCLE, pal.status_red)
+                        } else {
+                            (egui_phosphor::regular::CHECK_CIRCLE, pal.text_tertiary)
+                        };
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.label(RichText::new(icon).small().color(color));
+                            ui.add(
+                                egui::Label::new(
+                                    RichText::new(result).small().monospace().color(color),
+                                )
+                                .wrap_mode(egui::TextWrapMode::Wrap),
+                            );
+                        });
+                    }
+                    None => {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 6.0;
+                            ui.add(egui::Spinner::new().size(12.0));
+                            ui.label(RichText::new("Running…").small().color(pal.text_tertiary));
+                        });
+                    }
+                }
             });
         });
 }

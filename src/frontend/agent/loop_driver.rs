@@ -321,18 +321,15 @@ fn dispatch_call(state: &mut AppState, call: &ToolCall, ctx: &egui::Context) -> 
 }
 
 fn push_tool_call_entry(state: &mut AppState, call: &ToolCall) {
-    state.ui.agent.transcript.push(TranscriptEntry::ToolCall {
+    state.ui.agent.transcript.push(TranscriptEntry::Tool {
         summary: describe_call(call),
+        result: None,
+        is_error: false,
     });
 }
 
-/// Record a tool result: a display transcript line and the neutral `tool_result`
-/// block replayed to the model.
 fn record_result(state: &mut AppState, call: &ToolCall, content: String, is_error: bool) {
-    state.ui.agent.transcript.push(TranscriptEntry::ToolResult {
-        summary: clamp_display(&content),
-        is_error,
-    });
+    fill_pending_tool_entry(state, &content, is_error);
     state
         .ui
         .agent
@@ -342,6 +339,24 @@ fn record_result(state: &mut AppState, call: &ToolCall, content: String, is_erro
             content: tools::clamp_result(&content),
             is_error,
         });
+}
+
+fn fill_pending_tool_entry(state: &mut AppState, content: &str, is_error: bool) {
+    if let Some(TranscriptEntry::Tool {
+        result,
+        is_error: result_is_error,
+        ..
+    }) = state
+        .ui
+        .agent
+        .transcript
+        .iter_mut()
+        .rev()
+        .find(|entry| matches!(entry, TranscriptEntry::Tool { result: None, .. }))
+    {
+        *result = Some(clamp_display(content));
+        *result_is_error = is_error;
+    }
 }
 
 /// Build the request and spawn a heavy job into the agent-owned slot. On a build
@@ -433,6 +448,7 @@ pub fn reject_tool_call(state: &mut AppState, id: &str, ctx: &egui::Context) {
     if front.id != id {
         return;
     }
+    push_tool_call_entry(state, &front);
     record_result(
         state,
         &front,
@@ -452,6 +468,7 @@ pub fn poll_agent_heavy(state: &mut AppState, ctx: &egui::Context) {
     };
     if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
         job.cancel();
+        fill_pending_tool_entry(state, "Cancelled.", true);
         state.ui.agent.pending_calls.clear();
         state.ui.agent.collected_results.clear();
         notice(state, "Cancelled.");
@@ -558,6 +575,7 @@ pub fn cancel_agent(state: &mut AppState, ctx: &egui::Context) {
     if let Some(job) = state.jobs.agent_heavy.take() {
         job.cancel();
     }
+    fill_pending_tool_entry(state, "Cancelled.", true);
     state.ui.agent.pending_calls.clear();
     state.ui.agent.collected_results.clear();
     if state.ui.agent.phase != AgentPhase::Idle {
@@ -895,6 +913,56 @@ mod tests {
             .iter()
             .any(|message| message.role == Role::Tool);
         assert!(has_tool_message);
+    }
+
+    #[test]
+    fn rejecting_shows_a_resolved_tool_entry() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let ctx = egui::Context::default();
+        handle_turn_result(&mut state, Ok(turn_with_tool("delete chain A")), &ctx);
+        reject_tool_call(&mut state, "call_1", &ctx);
+        let resolved = state.ui.agent.transcript.iter().any(|entry| {
+            matches!(
+                entry,
+                TranscriptEntry::Tool {
+                    result: Some(_),
+                    is_error: true,
+                    ..
+                }
+            )
+        });
+        assert!(resolved);
+    }
+
+    #[test]
+    fn cancel_resolves_a_running_tool_entry() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let ctx = egui::Context::default();
+        state.ui.agent.transcript.push(TranscriptEntry::Tool {
+            summary: "md run".to_string(),
+            result: None,
+            is_error: false,
+        });
+        state.ui.agent.phase = AgentPhase::AwaitingHeavyJob;
+        cancel_agent(&mut state, &ctx);
+        let still_running = state
+            .ui
+            .agent
+            .transcript
+            .iter()
+            .any(|entry| matches!(entry, TranscriptEntry::Tool { result: None, .. }));
+        assert!(!still_running);
+        let cancelled = state.ui.agent.transcript.iter().any(|entry| {
+            matches!(
+                entry,
+                TranscriptEntry::Tool {
+                    result: Some(text),
+                    is_error: true,
+                    ..
+                } if text == "Cancelled."
+            )
+        });
+        assert!(cancelled);
     }
 
     #[test]
