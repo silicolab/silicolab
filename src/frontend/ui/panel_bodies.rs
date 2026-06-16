@@ -1,27 +1,30 @@
 use eframe::egui::{
-    self, Align, Button, Color32, CornerRadius, Frame, Layout, Margin, RichText, ScrollArea, Stroke,
+    self, Align, Button, Color32, CornerRadius, FontFamily, FontId, Frame, Layout, Margin,
+    RichText, ScrollArea, Stroke,
 };
 
 use crate::{
     backend::tasks::{TaskPanelKind, TaskStatus},
     frontend::{
         actions::AppAction,
+        agent::AssistantConversationId,
         state::{AppState, PrimaryView},
         status_text,
     },
 };
 pub(super) fn render_output_panel(state: &mut AppState, ui: &mut egui::Ui) {
     ui.set_width(ui.available_width());
+    let log_width = ui.available_width();
+    let log_content_width = (log_width - ASSISTANT_SCROLLBAR_RESERVE).max(48.0);
     ScrollArea::vertical()
+        .max_width(log_width)
         .auto_shrink([false, false])
+        .content_margin(Margin::ZERO)
         .stick_to_bottom(true)
         .show(ui, |ui| {
-            ui.set_width(ui.available_width());
+            ui.set_width(log_content_width);
             for line in &state.output_log {
-                ui.add(
-                    egui::Label::new(RichText::new(line).monospace())
-                        .wrap_mode(egui::TextWrapMode::Wrap),
-                );
+                ui.add(egui::Label::new(console_text(line)).wrap_mode(egui::TextWrapMode::Wrap));
             }
         });
 }
@@ -42,19 +45,23 @@ pub(super) fn render_console_panel(
     // space for the prompt row so the panel cannot grow frame-over-frame.
     let log_height =
         (ui.available_height() - PROMPT_ROW_HEIGHT - DIVIDER_HEIGHT - BOTTOM_PADDING).max(0.0);
+    let log_width = ui.available_width();
+    let log_content_width = (log_width - ASSISTANT_SCROLLBAR_RESERVE).max(48.0);
     let log_text = state.output_log.join("\n");
 
     ui.allocate_ui_with_layout(
-        egui::vec2(ui.available_width(), log_height),
+        egui::vec2(log_width, log_height),
         Layout::top_down(Align::Min),
         |ui| {
             ScrollArea::vertical()
+                .max_width(log_width)
                 .auto_shrink([false, false])
+                .content_margin(Margin::ZERO)
                 .stick_to_bottom(true)
                 .show(ui, |ui| {
-                    ui.set_width(ui.available_width());
+                    ui.set_width(log_content_width);
                     ui.add(
-                        egui::Label::new(RichText::new(log_text).monospace())
+                        egui::Label::new(console_text(log_text))
                             .selectable(true)
                             .wrap_mode(egui::TextWrapMode::Wrap),
                     );
@@ -71,7 +78,7 @@ pub(super) fn render_console_panel(
                 crate::frontend::theme::radius::concentric(crate::frontend::theme::radius::CARD, 2);
             ui.spacing_mut().item_spacing.x = 8.0;
 
-            ui.monospace("sls>");
+            ui.label(console_text("sls>"));
 
             let button_width = 46.0;
             let text_edit_width = (ui.available_width()
@@ -134,6 +141,12 @@ pub(super) fn weak_panel_hairline(ui: &mut egui::Ui, alpha: u8) {
 const COMPOSER_BOTTOM_PAD: f32 = 8.0;
 const ASSISTANT_SIDE_PAD: f32 = 8.0;
 const ASSISTANT_COMPOSER_HEIGHT: f32 = 58.0;
+const ASSISTANT_CJK_FONT: &str = "assistant-cjk";
+const CONSOLE_CJK_MONO_FONT: &str = "console-cjk-mono";
+const ASSISTANT_SCROLLBAR_RESERVE: f32 = 12.0;
+const ASSISTANT_TOOLBAR_BUTTON_WIDTH: f32 = 26.0;
+const ASSISTANT_TOOLBAR_BUTTON_HEIGHT: f32 = 24.0;
+const ASSISTANT_TOOLBAR_GAP: f32 = 6.0;
 
 pub(super) fn render_assistant_panel(
     state: &mut AppState,
@@ -154,6 +167,7 @@ pub(super) fn render_assistant_panel(
     // Cached (the live check reads env + the key store); refreshed off the hot path.
     let key_present = state.ui.agent.key_available.unwrap_or(false);
     let pending_call = state.ui.agent.pending_approval().cloned();
+    let active_id = state.ui.agent.active_conversation;
 
     let panel_rect = ui.available_rect_before_wrap();
     let content_rect = panel_rect.shrink2(egui::vec2(ASSISTANT_SIDE_PAD, 0.0));
@@ -164,31 +178,60 @@ pub(super) fn render_assistant_panel(
         |ui| {
             ui.set_width(content_rect.width());
 
+            let toolbar_height = 32.0;
             let status_height = 28.0
                 + if state.ui.agent.last_usage.is_some() {
                     24.0
                 } else {
                     0.0
                 };
-            let approval_height = if pending_call.is_some() { 98.0 } else { 0.0 };
+            let panel_width = ui.available_width();
+            let approval_height = pending_call
+                .as_ref()
+                .map(|call| {
+                    let command = call
+                        .input
+                        .get("command")
+                        .and_then(|value| value.as_str())
+                        .unwrap_or(&call.name);
+                    approval_row_height(command, panel_width)
+                })
+                .unwrap_or(0.0);
             let footer_height = status_height
                 + approval_height
                 + ASSISTANT_COMPOSER_HEIGHT
+                + toolbar_height
                 + 24.0
                 + COMPOSER_BOTTOM_PAD;
+            let transcript_width = panel_width;
+            let transcript_content_width =
+                (transcript_width - ASSISTANT_SCROLLBAR_RESERVE).max(48.0);
             let transcript_height = (ui.available_height() - footer_height).max(0.0);
 
+            assistant_toolbar(state, ui, actions, active_id, toolbar_height);
+            ui.add_space(4.0);
+            weak_panel_hairline(ui, 10);
+            ui.add_space(2.0);
+
             ui.allocate_ui_with_layout(
-                egui::vec2(ui.available_width(), transcript_height),
+                egui::vec2(transcript_width, transcript_height),
                 Layout::top_down(Align::Min),
                 |ui| {
                     ScrollArea::vertical()
+                        .max_width(transcript_width)
                         .auto_shrink([false, false])
+                        .content_margin(Margin::ZERO)
                         .stick_to_bottom(true)
                         .show(ui, |ui| {
-                            ui.set_width(ui.available_width());
+                            ui.set_width(transcript_content_width);
                             if state.ui.agent.transcript.is_empty() {
-                                render_assistant_empty_state(ui, &pal, key_present, provider);
+                                render_assistant_empty_state(
+                                    ui,
+                                    &pal,
+                                    key_present,
+                                    provider,
+                                    transcript_content_width,
+                                );
                             }
                             let mut agent_header_shown = false;
                             for entry in &state.ui.agent.transcript {
@@ -205,7 +248,13 @@ pub(super) fn render_assistant_panel(
                                     }
                                     TranscriptEntry::Notice(_) => false,
                                 };
-                                render_transcript_entry(ui, &pal, entry, show_agent_header);
+                                render_transcript_entry(
+                                    ui,
+                                    &pal,
+                                    entry,
+                                    transcript_content_width,
+                                    show_agent_header,
+                                );
                             }
                             // Live streaming preview of the in-flight assistant text.
                             if !state.ui.agent.streaming_text.is_empty() {
@@ -220,6 +269,7 @@ pub(super) fn render_assistant_panel(
                                             "{}...",
                                             state.ui.agent.streaming_text
                                         ))
+                                        .font(assistant_body_font_id())
                                         .color(pal.text_primary),
                                     )
                                     .wrap_mode(egui::TextWrapMode::Wrap),
@@ -282,7 +332,7 @@ pub(super) fn render_assistant_panel(
                     .and_then(|value| value.as_str())
                     .unwrap_or(&call.name);
                 assistant_inset_row(ui, approval_height, |ui| {
-                    let frame_inner_width = (ui.available_width() - 20.0).max(48.0);
+                    let frame_inner_width = (panel_width - 20.0).max(48.0);
                     Frame::default()
                         .fill(blend(pal.status_amber, pal.input_fill, 0.86))
                         .stroke(Stroke::new(1.0, blend(pal.status_amber, pal.hairline, 0.4)))
@@ -302,10 +352,8 @@ pub(super) fn render_assistant_panel(
                             });
                             ui.add_space(2.0);
                             ui.add(
-                                egui::Label::new(
-                                    RichText::new(command).monospace().color(pal.text_primary),
-                                )
-                                .wrap_mode(egui::TextWrapMode::Wrap),
+                                egui::Label::new(assistant_text(command).color(pal.text_primary))
+                                    .wrap_mode(egui::TextWrapMode::Wrap),
                             );
                             ui.add_space(6.0);
                             ui.horizontal(|ui| {
@@ -375,7 +423,7 @@ pub(super) fn render_assistant_panel(
                                 egui::TextEdit::multiline(&mut state.ui.agent.input)
                                     .desired_width(text_width)
                                     .desired_rows(2)
-                                    .font(egui::TextStyle::Small)
+                                    .font(assistant_body_font_id())
                                     .frame(Frame::NONE)
                                     .hint_text(hint),
                             );
@@ -445,6 +493,178 @@ pub(super) fn render_assistant_panel(
     ui.advance_cursor_after_rect(panel_rect);
 }
 
+fn assistant_toolbar(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+    active_id: crate::frontend::agent::AssistantConversationId,
+    height: f32,
+) {
+    let can_manage = state.ui.agent.can_manage_conversations();
+    let conversations: Vec<(AssistantConversationId, String)> = state
+        .ui
+        .agent
+        .conversations
+        .iter()
+        .map(|conversation| (conversation.id, conversation.title.clone()))
+        .collect();
+    let active_title = conversations
+        .iter()
+        .find(|(id, _)| *id == active_id)
+        .map(|(_, title)| title.as_str())
+        .unwrap_or("Assistant");
+    let is_renaming = state.ui.agent.renaming_conversation == Some(active_id);
+    assistant_inset_row(ui, height, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = ASSISTANT_TOOLBAR_GAP;
+            let button_size = egui::vec2(
+                ASSISTANT_TOOLBAR_BUTTON_WIDTH,
+                ASSISTANT_TOOLBAR_BUTTON_HEIGHT,
+            );
+
+            if is_renaming {
+                let reserved_width =
+                    2.0 * ASSISTANT_TOOLBAR_BUTTON_WIDTH + 2.0 * ASSISTANT_TOOLBAR_GAP;
+                let edit_width = (ui.available_width() - reserved_width).max(72.0);
+                let response = ui.add_enabled(
+                    can_manage,
+                    egui::TextEdit::singleline(&mut state.ui.agent.rename_buffer)
+                        .desired_width(edit_width),
+                );
+                let submit =
+                    response.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter));
+                if submit {
+                    actions.push(AppAction::RenameAssistantConversation {
+                        id: active_id,
+                        title: state.ui.agent.rename_buffer.clone(),
+                    });
+                }
+                if ui
+                    .add_enabled(
+                        can_manage,
+                        Button::new(RichText::new(egui_phosphor::regular::CHECK))
+                            .min_size(button_size),
+                    )
+                    .on_hover_text("Save name")
+                    .clicked()
+                {
+                    actions.push(AppAction::RenameAssistantConversation {
+                        id: active_id,
+                        title: state.ui.agent.rename_buffer.clone(),
+                    });
+                }
+                if ui
+                    .add_enabled(
+                        can_manage,
+                        Button::new(RichText::new(egui_phosphor::regular::X)).min_size(button_size),
+                    )
+                    .on_hover_text("Cancel rename")
+                    .clicked()
+                {
+                    state.ui.agent.renaming_conversation = None;
+                    state.ui.agent.rename_buffer.clear();
+                }
+            } else {
+                let reserved_width =
+                    3.0 * ASSISTANT_TOOLBAR_BUTTON_WIDTH + 3.0 * ASSISTANT_TOOLBAR_GAP;
+                let combo_width = (ui.available_width() - reserved_width).max(72.0);
+                let combo_response = egui::ComboBox::from_id_salt("assistant.conversation")
+                    .selected_text(assistant_text(active_title))
+                    .width(combo_width)
+                    .truncate()
+                    .show_ui(ui, |ui| {
+                        ui.set_width(combo_width);
+                        for (id, title) in &conversations {
+                            let response = ui
+                                .add_enabled_ui(can_manage, |ui| {
+                                    ui.add_sized(
+                                        [combo_width, ASSISTANT_TOOLBAR_BUTTON_HEIGHT],
+                                        egui::Button::selectable(
+                                            *id == active_id,
+                                            assistant_text(title),
+                                        )
+                                        .truncate(),
+                                    )
+                                })
+                                .inner
+                                .on_hover_text(title);
+                            if response.clicked() {
+                                actions.push(AppAction::SwitchAssistantConversation(*id));
+                            }
+                        }
+                    });
+                combo_response.response.on_hover_text(active_title);
+
+                if ui
+                    .add_enabled(
+                        can_manage,
+                        Button::new(RichText::new(egui_phosphor::regular::PLUS))
+                            .min_size(button_size),
+                    )
+                    .on_hover_text("New conversation")
+                    .clicked()
+                {
+                    actions.push(AppAction::NewAssistantConversation);
+                }
+                if ui
+                    .add_enabled(
+                        can_manage,
+                        Button::new(RichText::new(egui_phosphor::regular::PENCIL_SIMPLE))
+                            .min_size(button_size),
+                    )
+                    .on_hover_text("Rename conversation")
+                    .clicked()
+                {
+                    state.ui.agent.renaming_conversation = Some(active_id);
+                    state.ui.agent.rename_buffer = active_title.to_string();
+                }
+                if ui
+                    .add_enabled(
+                        can_manage,
+                        Button::new(RichText::new(egui_phosphor::regular::TRASH))
+                            .min_size(button_size),
+                    )
+                    .on_hover_text("Delete conversation")
+                    .clicked()
+                {
+                    actions.push(AppAction::DeleteAssistantConversation(active_id));
+                }
+            }
+        });
+    });
+}
+
+fn assistant_font_id(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name(ASSISTANT_CJK_FONT.into()))
+}
+
+fn assistant_body_font_id() -> FontId {
+    assistant_font_id(13.0)
+}
+
+fn assistant_text(text: impl Into<String>) -> RichText {
+    RichText::new(text).font(assistant_body_font_id())
+}
+
+fn assistant_small_text(text: impl Into<String>) -> RichText {
+    RichText::new(text).font(assistant_font_id(11.0))
+}
+
+fn console_font_id() -> FontId {
+    FontId::new(13.0, FontFamily::Name(CONSOLE_CJK_MONO_FONT.into()))
+}
+
+fn console_text(text: impl Into<String>) -> RichText {
+    RichText::new(text).font(console_font_id())
+}
+
+fn approval_row_height(command: &str, panel_width: f32) -> f32 {
+    let text_width = (panel_width - 40.0).max(48.0);
+    let chars_per_line = (text_width / 7.0).max(8.0);
+    let command_lines = (command.chars().count() as f32 / chars_per_line).ceil();
+    74.0 + command_lines.max(1.0) * 22.0
+}
+
 fn assistant_inset_row<R>(
     ui: &mut egui::Ui,
     height: f32,
@@ -468,9 +688,12 @@ fn render_assistant_empty_state(
     pal: &crate::frontend::theme::Palette,
     key_present: bool,
     provider: &crate::frontend::agent::registry::ProviderSpec,
+    width: f32,
 ) {
+    ui.set_width(width);
     ui.add_space(12.0);
     ui.vertical_centered(|ui| {
+        ui.set_width(width);
         ui.label(
             RichText::new(egui_phosphor::regular::SPARKLE)
                 .size(28.0)
@@ -532,16 +755,18 @@ fn render_transcript_entry(
     ui: &mut egui::Ui,
     pal: &crate::frontend::theme::Palette,
     entry: &crate::frontend::agent::TranscriptEntry,
+    content_width: f32,
     show_agent_header: bool,
 ) {
     use crate::frontend::agent::TranscriptEntry;
     use crate::frontend::theme::radius;
     match entry {
         TranscriptEntry::User(text) => {
+            ui.set_width(content_width);
             ui.add_space(10.0);
             // The user's turn reads as a soft bubble so it stands apart from the
             // assistant's flush-left prose.
-            let frame_inner_width = (ui.available_width() - 20.0).max(48.0);
+            let frame_inner_width = (content_width - 20.0).max(48.0);
             Frame::default()
                 .fill(pal.neutral_overlay(20))
                 .corner_radius(CornerRadius::same(radius::CARD))
@@ -549,19 +774,20 @@ fn render_transcript_entry(
                 .show(ui, |ui| {
                     ui.set_width(frame_inner_width);
                     ui.add(
-                        egui::Label::new(RichText::new(text).color(pal.text_primary))
+                        egui::Label::new(assistant_text(text).color(pal.text_primary))
                             .wrap_mode(egui::TextWrapMode::Wrap),
                     );
                 });
         }
         TranscriptEntry::Assistant(text) => {
+            ui.set_width(content_width);
             if show_agent_header {
                 agent_message_header(ui, pal);
             } else {
                 ui.add_space(6.0);
             }
             ui.add(
-                egui::Label::new(RichText::new(text).color(pal.text_primary))
+                egui::Label::new(assistant_text(text).color(pal.text_primary))
                     .wrap_mode(egui::TextWrapMode::Wrap),
             );
         }
@@ -570,6 +796,7 @@ fn render_transcript_entry(
             result,
             is_error,
         } => {
+            ui.set_width(content_width);
             if show_agent_header {
                 agent_message_header(ui, pal);
             } else {
@@ -578,9 +805,10 @@ fn render_transcript_entry(
             render_tool_block(ui, pal, summary, result.as_deref(), *is_error);
         }
         TranscriptEntry::Notice(text) => {
+            ui.set_width(content_width);
             ui.add_space(6.0);
             ui.label(
-                RichText::new(text)
+                assistant_small_text(text)
                     .small()
                     .italics()
                     .color(pal.text_tertiary),
@@ -614,13 +842,8 @@ fn render_tool_block(
                             .color(pal.text_tertiary),
                     );
                     ui.add(
-                        egui::Label::new(
-                            RichText::new(command)
-                                .small()
-                                .monospace()
-                                .color(pal.text_muted),
-                        )
-                        .wrap_mode(egui::TextWrapMode::Wrap),
+                        egui::Label::new(assistant_small_text(command).color(pal.text_muted))
+                            .wrap_mode(egui::TextWrapMode::Wrap),
                     );
                 });
 

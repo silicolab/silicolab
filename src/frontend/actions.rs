@@ -228,6 +228,17 @@ pub enum AppAction {
     RunConsoleCommand(String),
     /// Send a message to the in-app assistant, kicking off an agent turn.
     SendAgentMessage(String),
+    /// Create and switch to a new in-memory assistant conversation.
+    NewAssistantConversation,
+    /// Switch the Assistant panel to another in-memory conversation.
+    SwitchAssistantConversation(crate::frontend::agent::AssistantConversationId),
+    /// Rename one in-memory assistant conversation.
+    RenameAssistantConversation {
+        id: crate::frontend::agent::AssistantConversationId,
+        title: String,
+    },
+    /// Delete one in-memory assistant conversation.
+    DeleteAssistantConversation(crate::frontend::agent::AssistantConversationId),
     /// Cancel the in-flight assistant turn and any pending tool batch.
     CancelAgent,
     /// Approve the gated (destructive/expensive) tool call with this id.
