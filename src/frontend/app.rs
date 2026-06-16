@@ -161,14 +161,32 @@ fn low_power_wgpu_options() -> egui_wgpu::WgpuConfiguration {
     options
 }
 
+/// Named egui font families the UI references via `FontFamily::Name`. Each must
+/// resolve to at least one loaded font on every platform — epaint panics at
+/// layout time when a referenced family is unbound or empty.
+/// `install_system_fonts` enforces this for every entry; the
+/// `ui_named_font_families_are_bound` test is the cross-platform regression guard.
+pub(crate) const ASSISTANT_CJK_FONT: &str = "assistant-cjk";
+pub(crate) const CONSOLE_CJK_MONO_FONT: &str = "console-cjk-mono";
+
+/// Single source of truth: every named family the UI uses, paired with the base
+/// family to fall back to when it would otherwise be unbound. The installer's
+/// fallback loop and the regression test both read this, so a newly added family
+/// cannot silently drift out of sync with its registration.
+const UI_NAMED_FONT_FAMILIES: &[(&str, egui::FontFamily)] = &[
+    (ASSISTANT_CJK_FONT, egui::FontFamily::Proportional),
+    (CONSOLE_CJK_MONO_FONT, egui::FontFamily::Monospace),
+];
+
 /// On macOS, prefer the system font (SF Pro for UI text, SF Mono for code) and
 /// keep system CJK faces as fallbacks so mixed English/Chinese assistant output
-/// does not render as missing-glyph boxes.
+/// does not render as missing-glyph boxes. On every platform, the tail loop
+/// guarantees the named families above resolve to real fonts.
 fn install_system_fonts(fonts: &mut egui::FontDefinitions) {
     #[cfg(target_os = "macos")]
     {
-        let assistant_cjk = egui::FontFamily::Name("assistant-cjk".into());
-        let console_cjk_mono = egui::FontFamily::Name("console-cjk-mono".into());
+        let assistant_cjk = egui::FontFamily::Name(ASSISTANT_CJK_FONT.into());
+        let console_cjk_mono = egui::FontFamily::Name(CONSOLE_CJK_MONO_FONT.into());
         fonts.families.insert(assistant_cjk.clone(), Vec::new());
         fonts.families.insert(console_cjk_mono.clone(), Vec::new());
         let mut install = |name: &str, path: &str, family: egui::FontFamily, prepend: bool| {
@@ -259,8 +277,23 @@ fn install_system_fonts(fonts: &mut egui::FontDefinitions) {
             false,
         );
     }
-    #[cfg(not(target_os = "macos"))]
-    let _ = fonts;
+    // epaint panics when a `FontFamily::Name` resolves to no fonts. The macOS
+    // block above binds the named families to system CJK faces; everywhere else
+    // they are still missing here (and a failed macOS font read could leave one
+    // empty). Alias every unbound or empty named family to its default stack so
+    // layout always has real fonts and the app starts. CJK coverage off macOS is
+    // then whatever the bundled fonts provide.
+    for (name, base) in UI_NAMED_FONT_FAMILIES {
+        let family = egui::FontFamily::Name((*name).into());
+        if fonts
+            .families
+            .get(&family)
+            .is_none_or(|list| list.is_empty())
+        {
+            let fallback = fonts.families.get(base).cloned().unwrap_or_default();
+            fonts.families.insert(family, fallback);
+        }
+    }
 }
 
 pub struct SilicoLabApp {
@@ -510,7 +543,9 @@ impl eframe::App for SilicoLabApp {
 
 #[cfg(test)]
 mod tests {
-    use super::app_icon;
+    use eframe::egui;
+
+    use super::{UI_NAMED_FONT_FAMILIES, app_icon, install_system_fonts};
 
     #[test]
     fn embedded_window_icon_is_256_rgba() {
@@ -518,5 +553,34 @@ mod tests {
         assert_eq!(icon.width, 256);
         assert_eq!(icon.height, 256);
         assert_eq!(icon.rgba.len(), 256 * 256 * 4);
+    }
+
+    /// Regression for #35: the Assistant panel renders text with
+    /// `FontFamily::Name("assistant-cjk")`, but the family was bound only on
+    /// macOS — so Windows and Linux passed every logic-only test yet panicked at
+    /// the first rendered frame. Build the font set exactly as `run()` does and
+    /// assert every UI-referenced named family resolves to real, loaded fonts on
+    /// this host. Guards the whole "unbound named family" class, not just the two
+    /// families that exist today.
+    #[test]
+    fn ui_named_font_families_are_bound() {
+        let mut fonts = egui::FontDefinitions::default();
+        egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+        install_system_fonts(&mut fonts);
+
+        for (name, _base) in UI_NAMED_FONT_FAMILIES {
+            let family = egui::FontFamily::Name((*name).into());
+            let list = fonts
+                .families
+                .get(&family)
+                .unwrap_or_else(|| panic!("named font family {name:?} is not registered"));
+            assert!(!list.is_empty(), "named font family {name:?} has no fonts");
+            for font in list {
+                assert!(
+                    fonts.font_data.contains_key(font),
+                    "named family {name:?} references {font:?} missing from font_data",
+                );
+            }
+        }
     }
 }
