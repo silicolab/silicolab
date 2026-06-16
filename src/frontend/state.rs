@@ -497,17 +497,36 @@ pub const SIDEBAR_DEFAULT_WIDTH_SECONDARY: f32 = 320.0;
 pub const PANEL_MIN_HEIGHT: f32 = 120.0;
 pub const PANEL_DEFAULT_HEIGHT: f32 = 180.0;
 
+/// Width the central workspace (the 3D viewport and its content column) is always
+/// guaranteed to keep. Instead of capping a sidebar at a fixed pixel width, the
+/// window is treated as a split between the sidebars and the workspace: a sidebar
+/// may be dragged as wide as the user likes until the workspace would shrink past
+/// this floor. On a wide display this lets a sidebar grow far beyond any fixed
+/// cap; on a small window the viewport is still protected.
+pub const WORKSPACE_MIN_WIDTH: f32 = 360.0;
+
+/// Width of the slim reveal strip that stands in for the right sidebar while it is
+/// collapsed — the horizontal space it still occupies when reserving room for the
+/// opposite sidebar's growth.
+pub const SECONDARY_HANDLE_WIDTH: f32 = 30.0;
+
 /// Debounce before a changed workbench layout is written to `settings.json`.
 /// Long enough to coalesce a divider drag or a burst of tab clicks into one save
 /// once the user pauses; short enough that an isolated change persists promptly.
 const LAYOUT_SAVE_DEBOUNCE_SECS: f64 = 0.6;
 
-/// Maximum allowed width for either sidebar: half the window, capped at 480 px,
-/// but never below `SIDEBAR_MIN_WIDTH_SECONDARY` so `clamp(min, max_w)` is always
-/// valid (std clamp requires `min <= max`). Shared by the UI rendering pass and the
-/// resize dispatcher.
-pub fn sidebar_max_width(viewport_width: f32) -> f32 {
-    (viewport_width * 0.5).clamp(SIDEBAR_MIN_WIDTH_SECONDARY, 480.0)
+/// Maximum width one sidebar may take, given the window width and the horizontal
+/// space the *opposite* sidebar currently occupies (`0` when it is hidden). The
+/// sidebar may expand until the central workspace would fall below
+/// [`WORKSPACE_MIN_WIDTH`]; the result is floored at the sidebar's own minimum so
+/// `clamp(min, max)` stays valid (std `clamp` requires `min <= max`) even in a
+/// window too narrow to honor the reservation. Subtracting the opposite sidebar's
+/// footprint means the two sidebars can never jointly squeeze the workspace below
+/// its minimum. Shared by the UI rendering pass and the resize dispatcher; callers
+/// usually reach it through [`LayoutState::primary_sidebar_max_width`] /
+/// [`LayoutState::secondary_sidebar_max_width`].
+pub fn sidebar_max_width(viewport_width: f32, opposite_occupied: f32, own_min: f32) -> f32 {
+    (viewport_width - opposite_occupied - WORKSPACE_MIN_WIDTH).max(own_min)
 }
 
 impl Default for LayoutState {
@@ -520,6 +539,53 @@ impl Default for LayoutState {
             primary_sidebar_width: SIDEBAR_DEFAULT_WIDTH_PRIMARY,
             dock: DockModel::default(),
         }
+    }
+}
+
+impl LayoutState {
+    /// Horizontal space the primary (left) sidebar lays claim to right now: its
+    /// configured width when shown, nothing when hidden. This is the opposite-side
+    /// footprint that bounds how wide the secondary sidebar may grow.
+    fn primary_occupied_width(&self) -> f32 {
+        if self.show_primary_sidebar {
+            self.primary_sidebar_width
+        } else {
+            0.0
+        }
+    }
+
+    /// Horizontal space the secondary (right) sidebar lays claim to right now: its
+    /// configured width when docked, the reveal strip when collapsed, nothing when
+    /// empty. This is the opposite-side footprint that bounds how wide the primary
+    /// sidebar may grow.
+    fn secondary_occupied_width(&self) -> f32 {
+        if self.dock.is_visible(DockArea::Right) {
+            self.dock.right_width
+        } else if self.dock.is_collapsed(DockArea::Right) {
+            SECONDARY_HANDLE_WIDTH
+        } else {
+            0.0
+        }
+    }
+
+    /// Largest width the primary sidebar may take in a window this wide, leaving
+    /// room for the secondary sidebar's footprint and the workspace minimum.
+    pub fn primary_sidebar_max_width(&self, viewport_width: f32) -> f32 {
+        sidebar_max_width(
+            viewport_width,
+            self.secondary_occupied_width(),
+            SIDEBAR_MIN_WIDTH_PRIMARY,
+        )
+    }
+
+    /// Largest width the secondary sidebar may take in a window this wide, leaving
+    /// room for the primary sidebar's footprint and the workspace minimum.
+    pub fn secondary_sidebar_max_width(&self, viewport_width: f32) -> f32 {
+        sidebar_max_width(
+            viewport_width,
+            self.primary_occupied_width(),
+            SIDEBAR_MIN_WIDTH_SECONDARY,
+        )
     }
 }
 
@@ -2201,6 +2267,62 @@ mod tests {
         assert_eq!(from_model.right.collapsed, literal.right.collapsed);
         assert_eq!(from_model.right_width, literal.right_width);
         assert_eq!(from_model.bottom_height, literal.bottom_height);
+    }
+
+    /// A sidebar is no longer pinned to a fixed pixel cap: on a wide window it may
+    /// grow far past the old limit, bounded only by the opposite sidebar's
+    /// footprint and the reserved workspace minimum. The two sidebars can never
+    /// jointly shrink the workspace below that minimum, and a window too narrow to
+    /// honor the reservation still floors the max at the sidebar's own minimum so
+    /// `clamp(min, max)` stays valid.
+    #[test]
+    fn sidebar_max_width_reserves_workspace_not_a_fixed_cap() {
+        use super::{
+            LayoutState, SIDEBAR_MIN_WIDTH_PRIMARY, SIDEBAR_MIN_WIDTH_SECONDARY,
+            WORKSPACE_MIN_WIDTH, sidebar_max_width,
+        };
+
+        // Wide window, opposite sidebar hidden: the sidebar may claim everything
+        // past the reserved workspace — well beyond the old fixed 480 px cap.
+        let wide = 2560.0;
+        let lone_max = sidebar_max_width(wide, 0.0, SIDEBAR_MIN_WIDTH_PRIMARY);
+        assert_eq!(lone_max, wide - WORKSPACE_MIN_WIDTH);
+        assert!(lone_max > 480.0);
+
+        // A window too narrow to honor the reservation floors the max at the
+        // sidebar's own minimum.
+        assert_eq!(
+            sidebar_max_width(200.0, 0.0, SIDEBAR_MIN_WIDTH_SECONDARY),
+            SIDEBAR_MIN_WIDTH_SECONDARY
+        );
+
+        // Two visible sidebars at their per-side maxima never overlap: combined
+        // with the workspace minimum they always fit the window, for stored widths
+        // from narrow to far wider than the window itself.
+        for &primary_stored in &[240.0_f32, 600.0, 1800.0] {
+            for &secondary_stored in &[240.0_f32, 600.0, 1800.0] {
+                let layout = LayoutState {
+                    primary_sidebar_width: primary_stored,
+                    dock: DockModel {
+                        right_width: secondary_stored,
+                        ..DockModel::default()
+                    },
+                    ..LayoutState::default()
+                };
+                let primary_rendered = primary_stored.clamp(
+                    SIDEBAR_MIN_WIDTH_PRIMARY,
+                    layout.primary_sidebar_max_width(wide),
+                );
+                let secondary_rendered = secondary_stored.clamp(
+                    SIDEBAR_MIN_WIDTH_SECONDARY,
+                    layout.secondary_sidebar_max_width(wide),
+                );
+                assert!(
+                    primary_rendered + secondary_rendered + WORKSPACE_MIN_WIDTH <= wide + 0.5,
+                    "sidebars overlap at primary={primary_stored} secondary={secondary_stored}"
+                );
+            }
+        }
     }
 
     /// A saved layout missing a view, duplicating one, or naming an unknown token

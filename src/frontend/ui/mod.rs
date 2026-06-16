@@ -12,9 +12,8 @@ use crate::{
         actions::AppAction,
         services::entry_details,
         state::{
-            AppState, DockArea, EngineDraft, PANEL_MIN_HEIGHT, PrimaryView,
+            AppState, DockArea, EngineDraft, PANEL_MIN_HEIGHT, PrimaryView, SECONDARY_HANDLE_WIDTH,
             SIDEBAR_MIN_WIDTH_PRIMARY, SIDEBAR_MIN_WIDTH_SECONDARY, SelectionItem,
-            sidebar_max_width,
         },
     },
 };
@@ -184,7 +183,10 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
     // sidebar's header strip — see `render_primary_sidebar` — and the title bar
     // carries the show/hide toggle.)
     if sidebar_visible {
-        let max_w = sidebar_max_width(ctx.viewport_rect().width());
+        let max_w = state
+            .ui
+            .layout
+            .primary_sidebar_max_width(ctx.viewport_rect().width());
         // Clamp to the displayable range for this frame; the stored value is
         // intentionally NOT written back so the user's desired width is
         // preserved when the window is later widened again.
@@ -238,7 +240,10 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
         .show_inside(ui, |ui| render_status_bar(state, ui));
 
     if state.ui.layout.dock.is_visible(DockArea::Right) {
-        let max_w = sidebar_max_width(ctx.viewport_rect().width());
+        let max_w = state
+            .ui
+            .layout
+            .secondary_sidebar_max_width(ctx.viewport_rect().width());
         let width = state
             .ui
             .layout
@@ -271,7 +276,7 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
         // only-native) View menu.
         egui::Panel::right("secondary_sidebar_handle")
             .resizable(false)
-            .exact_size(30.0)
+            .exact_size(SECONDARY_HANDLE_WIDTH)
             .show_separator_line(false)
             .frame(
                 Frame::default()
@@ -356,7 +361,10 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
         // so its resize divider runs the whole way down to the status bar rather
         // than stopping at the bottom panel's top edge.
         let divider_bottom = content_bottom;
-        let max_w = sidebar_max_width(vp.width());
+        // Each sidebar's ceiling reserves room for the *other* sidebar plus the
+        // workspace minimum, so the maxima differ between the two dividers.
+        let primary_max_w = state.ui.layout.primary_sidebar_max_width(vp.width());
+        let secondary_max_w = state.ui.layout.secondary_sidebar_max_width(vp.width());
         // Keyed off the same frame-start snapshot as the panel itself: the title
         // bar's toggle (rendered in between) can flip the live flag mid-frame,
         // and the divider must match the sidebar actually drawn this frame.
@@ -380,7 +388,7 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
                 DividerConfig {
                     sign: 1.0,
                     min: SIDEBAR_MIN_WIDTH_PRIMARY,
-                    max: max_w,
+                    max: primary_max_w,
                 },
                 &pal,
             ) {
@@ -403,7 +411,7 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
                 DividerConfig {
                     sign: -1.0,
                     min: SIDEBAR_MIN_WIDTH_SECONDARY,
-                    max: max_w,
+                    max: secondary_max_w,
                 },
                 &pal,
             ) {

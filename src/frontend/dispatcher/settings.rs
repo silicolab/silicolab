@@ -269,13 +269,19 @@ pub(crate) fn open_remote_hosts_settings(state: &mut AppState) {
 /// Resize the primary (left) sidebar. The right sidebar and bottom panel are
 /// dock areas now and resize via `dock::resize_area`.
 pub(crate) fn resize_sidebar(state: &mut AppState, delta: f32, ctx: &egui::Context) {
-    let max_w = sidebar_max_width(ctx.viewport_rect().width());
+    let max_w = state
+        .ui
+        .layout
+        .primary_sidebar_max_width(ctx.viewport_rect().width());
     let width = &mut state.ui.layout.primary_sidebar_width;
     *width = (*width + delta).clamp(SIDEBAR_MIN_WIDTH_PRIMARY, max_w);
 }
 
 pub(crate) fn reset_sidebar(state: &mut AppState, ctx: &egui::Context) {
-    let max_w = sidebar_max_width(ctx.viewport_rect().width());
+    let max_w = state
+        .ui
+        .layout
+        .primary_sidebar_max_width(ctx.viewport_rect().width());
     state.ui.layout.primary_sidebar_width =
         SIDEBAR_DEFAULT_WIDTH_PRIMARY.clamp(SIDEBAR_MIN_WIDTH_PRIMARY, max_w);
 }

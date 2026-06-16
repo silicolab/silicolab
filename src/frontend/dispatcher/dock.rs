@@ -51,7 +51,10 @@ pub(crate) fn toggle_dock_area(state: &mut AppState, area: DockArea, ctx: &egui:
 pub(crate) fn resize_area(state: &mut AppState, area: DockArea, delta: f32, ctx: &egui::Context) {
     match area {
         DockArea::Right => {
-            let max_w = sidebar_max_width(ctx.viewport_rect().width());
+            let max_w = state
+                .ui
+                .layout
+                .secondary_sidebar_max_width(ctx.viewport_rect().width());
             let width = &mut state.ui.layout.dock.right_width;
             *width = (*width + delta).clamp(SIDEBAR_MIN_WIDTH_SECONDARY, max_w);
         }
@@ -67,7 +70,10 @@ pub(crate) fn resize_area(state: &mut AppState, area: DockArea, delta: f32, ctx:
 pub(crate) fn reset_area(state: &mut AppState, area: DockArea, ctx: &egui::Context) {
     match area {
         DockArea::Right => {
-            let max_w = sidebar_max_width(ctx.viewport_rect().width());
+            let max_w = state
+                .ui
+                .layout
+                .secondary_sidebar_max_width(ctx.viewport_rect().width());
             state.ui.layout.dock.right_width =
                 SIDEBAR_DEFAULT_WIDTH_SECONDARY.clamp(SIDEBAR_MIN_WIDTH_SECONDARY, max_w);
         }

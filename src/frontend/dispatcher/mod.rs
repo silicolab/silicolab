@@ -42,7 +42,7 @@ use crate::{
         state::{
             AppState, PANEL_DEFAULT_HEIGHT, PANEL_MIN_HEIGHT, SIDEBAR_DEFAULT_WIDTH_PRIMARY,
             SIDEBAR_DEFAULT_WIDTH_SECONDARY, SIDEBAR_MIN_WIDTH_PRIMARY,
-            SIDEBAR_MIN_WIDTH_SECONDARY, SelfUpdateStatus, sidebar_max_width,
+            SIDEBAR_MIN_WIDTH_SECONDARY, SelfUpdateStatus,
         },
         structure_import::{import_document, load_document},
         task_executor::task_executor,
