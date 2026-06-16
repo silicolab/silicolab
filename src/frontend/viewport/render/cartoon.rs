@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::f32::consts::TAU;
 
 use eframe::egui::{Color32, Pos2, Rect};
@@ -6,7 +7,7 @@ use nalgebra::{Point3, Rotation3, Unit, Vector3};
 use crate::{
     domain::{
         Biopolymer, ChainRecord, ResidueRecord, SecondaryStructureKind, SecondaryStructureSpan,
-        Structure,
+        Structure, assign_secondary_structure,
     },
     frontend::{LightPreset, ViewportCartoonState},
 };
@@ -169,6 +170,9 @@ fn cartoon_chain_sweeps(
     biopolymer: &Biopolymer,
     visual_state: &ViewportVisualState,
 ) -> Vec<Vec<CartoonSweepSample>> {
+    let secondary = resolve_secondary_structures(structure, biopolymer);
+    let secondary = secondary.as_ref();
+
     let mut sweeps = Vec::new();
     for (chain_index, chain) in biopolymer.chains.iter().enumerate() {
         let chain_color = visual_state
@@ -192,7 +196,7 @@ fn cartoon_chain_sweeps(
                 .enumerate()
                 .map(|(fragment_index, entry)| {
                     let residue = &biopolymer.residues[entry.residue_index];
-                    let kind = residue_cartoon_kind(residue, biopolymer, chain.id);
+                    let kind = residue_cartoon_kind(residue, secondary, chain.id);
                     CartoonControlPoint {
                         position: entry.position,
                         style: cartoon_style(kind, &visual_state.cartoon),
@@ -328,12 +332,26 @@ fn cartoon_orientation_hint(
     (normal.norm_squared() > 0.0001).then(|| normalize_vector3(normal, Vector3::new(0.0, 1.0, 0.0)))
 }
 
+/// Secondary-structure spans for the cartoon: the biopolymer's own when present,
+/// otherwise derived from the Cα trace so coordinates without HELIX/SHEET records
+/// (e.g. a GRO file from an MD run) still render helices and strands.
+fn resolve_secondary_structures<'a>(
+    structure: &Structure,
+    biopolymer: &'a Biopolymer,
+) -> Cow<'a, [SecondaryStructureSpan]> {
+    if biopolymer.secondary_structures.is_empty() {
+        Cow::Owned(assign_secondary_structure(&structure.atoms, biopolymer))
+    } else {
+        Cow::Borrowed(&biopolymer.secondary_structures)
+    }
+}
+
 fn residue_cartoon_kind(
     residue: &ResidueRecord,
-    biopolymer: &Biopolymer,
+    secondary_structures: &[SecondaryStructureSpan],
     chain_id: char,
 ) -> CartoonSegmentKind {
-    match residue_secondary_structure_kind(residue, biopolymer, chain_id) {
+    match residue_secondary_structure_kind(residue, secondary_structures, chain_id) {
         Some(SecondaryStructureKind::Helix) => CartoonSegmentKind::Helix,
         Some(SecondaryStructureKind::Sheet) => CartoonSegmentKind::Sheet,
         None => CartoonSegmentKind::Coil,
@@ -342,11 +360,10 @@ fn residue_cartoon_kind(
 
 fn residue_secondary_structure_kind(
     residue: &ResidueRecord,
-    biopolymer: &Biopolymer,
+    secondary_structures: &[SecondaryStructureSpan],
     chain_id: char,
 ) -> Option<SecondaryStructureKind> {
-    biopolymer
-        .secondary_structures
+    secondary_structures
         .iter()
         .find(|span| {
             span.start.chain_id == chain_id
@@ -936,4 +953,79 @@ fn transport_frame_vector(
     }
 
     Rotation3::from_axis_angle(&Unit::new_normalize(axis), angle) * vector
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{Atom, PdbAtomAnnotation, ResidueId, build_biopolymer};
+    use std::f32::consts::PI;
+
+    /// Single-chain structure with one ALA Cα per residue along an ideal α-helix
+    /// trace (1.5 Å rise, 100° turn, 2.3 Å radius) and no HELIX/SHEET records.
+    fn helix_structure(residues: usize) -> Structure {
+        let mut atoms = Vec::with_capacity(residues);
+        let mut annotations = Vec::with_capacity(residues);
+        for i in 0..residues {
+            let angle = 100.0 * PI / 180.0 * i as f32;
+            atoms.push(Atom {
+                element: "C".to_string(),
+                position: Point3::new(2.3 * angle.cos(), 2.3 * angle.sin(), 1.5 * i as f32),
+                charge: 0.0,
+            });
+            annotations.push(PdbAtomAnnotation {
+                atom_name: "CA".to_string(),
+                residue_name: "ALA".to_string(),
+                chain_id: 'A',
+                residue_seq: i as i32 + 1,
+                insertion_code: ' ',
+            });
+        }
+        let mut structure = Structure::with_bonds("helix", atoms, Vec::new());
+        structure.biopolymer = build_biopolymer(&annotations, Vec::new());
+        structure
+    }
+
+    #[test]
+    fn cartoon_derives_secondary_structure_when_records_absent() {
+        let structure = helix_structure(12);
+        let biopolymer = structure.biopolymer.as_ref().expect("biopolymer");
+        assert!(biopolymer.secondary_structures.is_empty());
+
+        let resolved = resolve_secondary_structures(&structure, biopolymer);
+        let chain_id = biopolymer.chains[0].id;
+        let helix_residues = biopolymer
+            .residues
+            .iter()
+            .filter(|residue| {
+                residue_cartoon_kind(residue, resolved.as_ref(), chain_id)
+                    == CartoonSegmentKind::Helix
+            })
+            .count();
+        assert!(
+            helix_residues >= 8,
+            "expected the helix to be drawn as helix ribbon"
+        );
+    }
+
+    #[test]
+    fn cartoon_prefers_explicit_secondary_structure() {
+        let mut structure = helix_structure(12);
+        let biopolymer = structure.biopolymer.as_mut().expect("biopolymer");
+        biopolymer.secondary_structures = vec![SecondaryStructureSpan {
+            kind: SecondaryStructureKind::Sheet,
+            start: ResidueId::new('A', 1, ' '),
+            end: ResidueId::new('A', 12, ' '),
+        }];
+
+        let biopolymer = structure.biopolymer.as_ref().expect("biopolymer");
+        let resolved = resolve_secondary_structures(&structure, biopolymer);
+        // Helical geometry, but the explicit sheet record is used verbatim.
+        assert!(matches!(resolved, Cow::Borrowed(_)));
+        assert!(
+            resolved
+                .iter()
+                .all(|span| span.kind == SecondaryStructureKind::Sheet)
+        );
+    }
 }
