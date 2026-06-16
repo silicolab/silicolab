@@ -41,9 +41,10 @@ The GUI uses an Elm-style flow.
 * Preserve the shared launch model where WSL-hosted engines use a `command_prefix` such as `["wsl.exe", "-e"]` and native engines use an empty prefix.
 * When changing engine launch behavior, test or reason separately about native Windows execution and WSL-prefixed execution.
 
-# Commit hygiene
+# Commit and PR hygiene
 
 * Use Conventional Commits for commit messages, matching the existing project style.
+* Before opening a PR, make CI's checks pass locally with `RUSTFLAGS=-D warnings`: `cargo fmt --all --check`, `cargo clippy --all-targets --all-features`, `cargo test --all-features`.
 
 # Rules hygiene
 
