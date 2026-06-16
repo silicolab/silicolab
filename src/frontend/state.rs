@@ -1620,6 +1620,12 @@ pub struct UiState {
     /// Like the editor sessions above it lives across frames; only the
     /// dispatcher and the poll-driven loop mutate it.
     pub agent: crate::frontend::agent::AgentSession,
+    /// Parse/image cache backing the `egui_commonmark` viewer that formats the
+    /// assistant's Markdown replies. Transient render state (egui texture
+    /// handles, per-frame layout): never persisted, lives across frames, and is
+    /// a sibling of `agent` so the transcript can be read while the cache is
+    /// mutated during rendering.
+    pub markdown_cache: egui_commonmark::CommonMarkCache,
 }
 
 /// Lifecycle of a user-initiated in-place update: idle until the user clicks
@@ -1685,6 +1691,7 @@ impl Default for UiState {
             text_viewer: None,
             self_update: SelfUpdateStatus::default(),
             agent: crate::frontend::agent::AgentSession::default(),
+            markdown_cache: egui_commonmark::CommonMarkCache::default(),
         }
     }
 }
