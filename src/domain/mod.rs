@@ -1,6 +1,7 @@
 pub mod biopolymer;
 pub mod chemistry;
 pub mod nonbonded;
+pub mod secondary_structure;
 pub mod sketch;
 pub mod smiles;
 pub mod structure;
@@ -11,5 +12,6 @@ pub use biopolymer::{
     ResidueRecord, SecondaryStructureKind, SecondaryStructureSpan, build_biopolymer,
     extend_biopolymer_coverage,
 };
+pub use secondary_structure::assign_secondary_structure;
 pub use structure::{Atom, Bond, BondType, Structure, UnitCell};
 pub use trajectory::Trajectory;
