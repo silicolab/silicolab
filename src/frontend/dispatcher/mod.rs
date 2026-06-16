@@ -283,6 +283,18 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SendAgentMessage(text) => {
             crate::frontend::agent::send_agent_message(state, &text, ctx)
         }
+        AppAction::NewAssistantConversation => {
+            crate::frontend::agent::new_assistant_conversation(state)
+        }
+        AppAction::SwitchAssistantConversation(id) => {
+            crate::frontend::agent::switch_assistant_conversation(state, id)
+        }
+        AppAction::RenameAssistantConversation { id, title } => {
+            crate::frontend::agent::rename_assistant_conversation(state, id, &title)
+        }
+        AppAction::DeleteAssistantConversation(id) => {
+            crate::frontend::agent::delete_assistant_conversation(state, id)
+        }
         AppAction::CancelAgent => crate::frontend::agent::cancel_agent(state, ctx),
         AppAction::ApproveToolCall(id) => {
             crate::frontend::agent::approve_tool_call(state, &id, ctx)

@@ -215,6 +215,19 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         ],
     },
     ProviderSpec {
+        id: "custom_openai",
+        label: "Custom OpenAI-compatible",
+        kind: ProviderKind::OpenAiCompat,
+        base_url: "https://llm.ducksoft.site/v1",
+        key_env: "SILICOLAB_CUSTOM_OPENAI_API_KEY",
+        reasoning_replay: false,
+        models: &[ModelSpec {
+            id: "gpt-5.1",
+            label: "gpt-5.1 (edit to your model)",
+            supports_effort: false,
+        }],
+    },
+    ProviderSpec {
         id: "local",
         label: "Local (Ollama / vLLM)",
         kind: ProviderKind::OpenAiCompat,
@@ -397,6 +410,16 @@ mod tests {
         assert!(!openai.caps_for("gpt-4.1").supports_effort);
         // Unknown / free-typed model defaults to no effort.
         assert!(!openai.caps_for("some-new-model").supports_effort);
+    }
+
+    #[test]
+    fn custom_openai_provider_is_compatibility_first() {
+        let custom = provider_spec("custom_openai").expect("custom provider exists");
+        assert_eq!(custom.kind, ProviderKind::OpenAiCompat);
+        assert_eq!(custom.key_env, "SILICOLAB_CUSTOM_OPENAI_API_KEY");
+        assert_eq!(custom.base_url, "https://llm.ducksoft.site/v1");
+        assert!(!custom.caps_for("gpt-5.1").supports_effort);
+        assert!(!custom.caps_for("some-free-typed-model").supports_effort);
     }
 
     #[test]

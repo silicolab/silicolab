@@ -389,7 +389,11 @@ fn interpret_models_response(status: u16, body: &str) -> Result<Vec<String>, Str
         ));
     };
     if status != 200 {
-        return Err(format!("provider returned HTTP {status}"));
+        let message = crate::io::llm::openai_compat::extract_error_message(body);
+        if message.trim().is_empty() {
+            return Err(format!("provider returned HTTP {status}"));
+        }
+        return Err(format!("provider returned HTTP {status}: {message}"));
     }
     Ok(parse_model_ids(&json))
 }
@@ -967,5 +971,16 @@ mod tests {
         // wrong URL — surface the status.
         let err = interpret_models_response(503, r#"{"error":"nope"}"#).unwrap_err();
         assert!(err.contains("503"), "got: {err}");
+    }
+
+    #[test]
+    fn interpret_models_response_json_error_reports_message() {
+        let err = interpret_models_response(
+            401,
+            r#"{"code":"API_KEY_REQUIRED","message":"API key is required"}"#,
+        )
+        .unwrap_err();
+        assert!(err.contains("401"), "got: {err}");
+        assert!(err.contains("API key is required"), "got: {err}");
     }
 }

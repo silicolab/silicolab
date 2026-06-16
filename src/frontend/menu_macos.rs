@@ -125,6 +125,7 @@ impl MacMenu {
         // --- Application menu (must be the first submenu: muda promotes it to
         // the macOS app menu) ---
         let app_menu = Submenu::new("SilicoLab", true);
+        app_menu.set_text("SilicoLab");
         let about = MenuItem::with_id("app.about", "About SilicoLab", true, None);
         let settings = MenuItem::with_id(
             "app.settings",
@@ -321,6 +322,7 @@ impl MacMenu {
         ])
         .expect("assemble menu bar");
         menu.init_for_nsapp();
+        app_menu.set_text("SilicoLab");
 
         Self {
             _menu: menu,

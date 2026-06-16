@@ -14,7 +14,9 @@ use eframe::egui;
 use crate::backend::config::save_config;
 use crate::backend::entries::EntryOrigin;
 use crate::frontend::agent::registry;
-use crate::frontend::agent::session::{AgentPhase, ModelFetchStatus, TranscriptEntry};
+use crate::frontend::agent::session::{
+    AgentPhase, AssistantConversationId, ModelFetchStatus, TranscriptEntry,
+};
 use crate::frontend::agent::tools;
 use crate::frontend::jobs::{
     AgentHeavyJob, AgentTurnEvent, EngineWorkerMessage, QmWorkerMessage, RunningEngineJob,
@@ -99,6 +101,7 @@ pub fn send_agent_message(state: &mut AppState, text: &str, ctx: &egui::Context)
 
     // Keep the replayed history valid if a prior exchange was interrupted.
     state.ui.agent.truncate_to_resumable();
+    state.ui.agent.maybe_title_from_first_user_message(text);
     state.ui.agent.history.push(ChatMessage::user_text(text));
     state
         .ui
@@ -585,6 +588,26 @@ pub fn cancel_agent(state: &mut AppState, ctx: &egui::Context) {
     ctx.request_repaint();
 }
 
+pub fn new_assistant_conversation(state: &mut AppState) {
+    state.ui.agent.start_new_conversation();
+}
+
+pub fn switch_assistant_conversation(state: &mut AppState, id: AssistantConversationId) {
+    state.ui.agent.switch_conversation(id);
+}
+
+pub fn rename_assistant_conversation(
+    state: &mut AppState,
+    id: AssistantConversationId,
+    title: &str,
+) {
+    state.ui.agent.rename_conversation(id, title);
+}
+
+pub fn delete_assistant_conversation(state: &mut AppState, id: AssistantConversationId) {
+    state.ui.agent.delete_conversation(id);
+}
+
 /// Switch the active provider + model and persist. Strips prior-provider
 /// reasoning blobs from the replayed history (ignored-but-billed, or
 /// shape-incompatible, on a different provider/model) and clears a stale base-URL
@@ -596,7 +619,9 @@ pub fn switch_provider_model(state: &mut AppState, provider: &str, model: &str) 
     }
     state.config.assistant.provider = provider.to_string();
     state.config.assistant.model = model.to_string();
-    strip_reasoning(&mut state.ui.agent.history);
+    for conversation in &mut state.ui.agent.conversations {
+        strip_reasoning(&mut conversation.history);
+    }
     // The fetch status is global; clear it so a prior provider's spinner or
     // error note doesn't bleed onto the newly selected one. The fetched model
     // ids are keyed per provider, so they survive the switch.
@@ -626,6 +651,7 @@ pub fn set_assistant_base_url(state: &mut AppState, base_url: &str) {
     } else {
         Some(trimmed.to_string())
     };
+    state.ui.agent.model_fetch = ModelFetchStatus::Idle;
     persist(state);
 }
 
@@ -1070,5 +1096,19 @@ mod tests {
         });
         assert!(!still_has_reasoning);
         assert_eq!(state.config.assistant.model, "claude-opus-4-8");
+    }
+
+    #[test]
+    fn changing_base_url_clears_stale_model_fetch_error() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        state.ui.agent.model_fetch = ModelFetchStatus::Error("io: No route to host".to_string());
+
+        set_assistant_base_url(&mut state, "https://llm.ducksoft.site/v1");
+
+        assert_eq!(
+            state.config.assistant.base_url.as_deref(),
+            Some("https://llm.ducksoft.site/v1")
+        );
+        assert_eq!(state.ui.agent.model_fetch, ModelFetchStatus::Idle);
     }
 }

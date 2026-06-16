@@ -161,20 +161,28 @@ fn low_power_wgpu_options() -> egui_wgpu::WgpuConfiguration {
     options
 }
 
-/// On macOS, prefer the system font (SF Pro for UI text, SF Mono for code) so
-/// the interface reads as native. Falls back silently to egui's bundled fonts
-/// on other platforms or if the system files are unavailable.
+/// On macOS, prefer the system font (SF Pro for UI text, SF Mono for code) and
+/// keep system CJK faces as fallbacks so mixed English/Chinese assistant output
+/// does not render as missing-glyph boxes.
 fn install_system_fonts(fonts: &mut egui::FontDefinitions) {
     #[cfg(target_os = "macos")]
     {
-        let mut install = |name: &str, path: &str, family: egui::FontFamily| {
+        let assistant_cjk = egui::FontFamily::Name("assistant-cjk".into());
+        let console_cjk_mono = egui::FontFamily::Name("console-cjk-mono".into());
+        fonts.families.insert(assistant_cjk.clone(), Vec::new());
+        fonts.families.insert(console_cjk_mono.clone(), Vec::new());
+        let mut install = |name: &str, path: &str, family: egui::FontFamily, prepend: bool| {
             if let Ok(bytes) = std::fs::read(path) {
                 fonts.font_data.insert(
                     name.to_owned(),
                     std::sync::Arc::new(egui::FontData::from_owned(bytes)),
                 );
                 if let Some(list) = fonts.families.get_mut(&family) {
-                    list.insert(0, name.to_owned());
+                    if prepend {
+                        list.insert(0, name.to_owned());
+                    } else {
+                        list.push(name.to_owned());
+                    }
                 }
             }
         };
@@ -182,11 +190,73 @@ fn install_system_fonts(fonts: &mut egui::FontDefinitions) {
             "SF Pro",
             "/System/Library/Fonts/SFNS.ttf",
             egui::FontFamily::Proportional,
+            true,
         );
         install(
             "SF Mono",
             "/System/Library/Fonts/SFNSMono.ttf",
             egui::FontFamily::Monospace,
+            true,
+        );
+        install(
+            "Hiragino Sans GB Assistant",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            assistant_cjk.clone(),
+            false,
+        );
+        install(
+            "STHeiti Medium Assistant",
+            "/System/Library/Fonts/STHeiti Medium.ttc",
+            assistant_cjk.clone(),
+            false,
+        );
+        install(
+            "SF Pro Assistant Fallback",
+            "/System/Library/Fonts/SFNS.ttf",
+            assistant_cjk,
+            false,
+        );
+        install(
+            "Hiragino Sans GB Console",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            console_cjk_mono.clone(),
+            false,
+        );
+        install(
+            "STHeiti Medium Console",
+            "/System/Library/Fonts/STHeiti Medium.ttc",
+            console_cjk_mono.clone(),
+            false,
+        );
+        install(
+            "Menlo Console Fallback",
+            "/System/Library/Fonts/Menlo.ttc",
+            console_cjk_mono,
+            false,
+        );
+        install(
+            "Hiragino Sans GB",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            egui::FontFamily::Proportional,
+            false,
+        );
+        install(
+            "STHeiti Medium",
+            "/System/Library/Fonts/STHeiti Medium.ttc",
+            egui::FontFamily::Proportional,
+            false,
+        );
+        install(
+            "Hiragino Sans GB Mono Fallback",
+            "/System/Library/Fonts/Hiragino Sans GB.ttc",
+            egui::FontFamily::Monospace,
+            false,
+        );
+        install(
+            "STHeiti Medium Mono Fallback",
+            "/System/Library/Fonts/STHeiti Medium.ttc",
+            egui::FontFamily::Monospace,
+            false,
         );
     }
     #[cfg(not(target_os = "macos"))]

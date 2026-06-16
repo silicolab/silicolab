@@ -398,13 +398,18 @@ fn classify_status(status: u16, body: &str, retry_after: Option<Duration>) -> Ll
     }
 }
 
-fn extract_error_message(body: &str) -> String {
+pub(crate) fn extract_error_message(body: &str) -> String {
     serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|json| {
             json.get("error")
-                .and_then(|error| error.get("message"))
-                .and_then(Value::as_str)
+                .and_then(|error| {
+                    error
+                        .get("message")
+                        .and_then(Value::as_str)
+                        .or_else(|| error.as_str())
+                })
+                .or_else(|| json.get("message").and_then(Value::as_str))
                 .map(str::to_string)
         })
         .unwrap_or_else(|| truncate(body, 400))
