@@ -39,16 +39,11 @@ pub enum AgentPhase {
 pub enum TranscriptEntry {
     User(String),
     Assistant(String),
-    /// A tool the assistant invoked, with a one-line description.
-    ToolCall {
+    Tool {
         summary: String,
-    },
-    /// The tool's (possibly truncated) result.
-    ToolResult {
-        summary: String,
+        result: Option<String>,
         is_error: bool,
     },
-    /// Status / error / loop-bound notices.
     Notice(String),
 }
 
