@@ -6,6 +6,7 @@ Keep these rules short, practical, and focused on the invariants that are expens
 
 * Avoid comments that merely restate code. Use comments for non-obvious invariants, design constraints, edge cases, or why a straightforward-looking alternative is wrong.
 * Do not create shallow one-function modules just to look organized. Add a new file or module when it represents a real domain concept, layer boundary, or reusable component.
+* Keep source files under 600 *code* lines (soft target ~400); blank lines, comments, and the trailing `#[cfg(test)]` module do not count.
 * Avoid panics in production paths that handle user data, external files, subprocess output, or network responses. Return useful errors instead.
 * Do not silently discard fallible errors. Propagate them, handle them, or make the deliberate ignore visible.
 * Do not introduce global state for convenience unless the existing architecture already has an ownership point for that state.
