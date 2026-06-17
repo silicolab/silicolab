@@ -346,6 +346,7 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::MoveDockTab { tab, to, index } => move_dock_tab(state, tab, to, index, ctx),
         AppAction::ToggleDockArea(area) => toggle_dock_area(state, area, ctx),
         AppAction::ResetWorkbenchLayout => reset_workbench_layout(state),
+        AppAction::DismissNotification => state.ui.notification = None,
     }
     if let Some(before) = fingerprint_before
         && state.entries_fingerprint() != before

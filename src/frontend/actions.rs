@@ -351,6 +351,73 @@ pub enum AppAction {
     ToggleDockArea(crate::frontend::state::DockArea),
     /// Reset the entire workbench layout to defaults (and persist).
     ResetWorkbenchLayout,
+    /// Dismiss the active [`Notification`] without taking any of its actions.
+    DismissNotification,
+}
+
+/// A non-modal notification surfaced over the workspace: a short message that,
+/// unlike [`crate::frontend::state::AppState::set_message`]'s plain status-bar
+/// text, can offer the user a choice through action buttons. One notification is
+/// shown at a time; posting a new one replaces any current one. Clicking a button
+/// dismisses the notification and then dispatches the button's action, so a
+/// button may itself post a follow-up notification.
+///
+// Infrastructure with no producer yet: the first notification (a heavy-structure
+// render suggestion) lands in a follow-up change. Only the renderer and tests
+// exercise the type until then, so the construction is "unused" in the meantime.
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct Notification {
+    pub severity: NotificationSeverity,
+    pub title: String,
+    pub body: String,
+    /// Buttons drawn left-to-right. Empty means the only way out is the dismiss
+    /// affordance (the "×").
+    pub buttons: Vec<NotificationButton>,
+}
+
+/// Accent/intent of a [`Notification`], driving only its color — not behaviour.
+#[allow(dead_code)] // see `Notification`: no producer yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotificationSeverity {
+    Info,
+    Warning,
+}
+
+/// One [`Notification`] button: a label plus the action it dispatches.
+#[allow(dead_code)] // see `Notification`: no producer yet.
+#[derive(Debug, Clone)]
+pub struct NotificationButton {
+    pub label: String,
+    pub action: AppAction,
+    /// The recommended choice is drawn as the filled, primary-styled button.
+    pub primary: bool,
+}
+
+#[allow(dead_code)] // see `Notification`: no producer yet.
+impl Notification {
+    pub fn new(
+        severity: NotificationSeverity,
+        title: impl Into<String>,
+        body: impl Into<String>,
+    ) -> Self {
+        Self {
+            severity,
+            title: title.into(),
+            body: body.into(),
+            buttons: Vec::new(),
+        }
+    }
+
+    /// Append a button. `primary` marks the recommended choice (filled style).
+    pub fn button(mut self, label: impl Into<String>, primary: bool, action: AppAction) -> Self {
+        self.buttons.push(NotificationButton {
+            label: label.into(),
+            action,
+            primary,
+        });
+        self
+    }
 }
 
 /// A visibility change applied to the Style panel's current scope.
