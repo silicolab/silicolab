@@ -175,6 +175,26 @@ pub(crate) fn overlay_state_for_scope(state: &AppState) -> (bool, bool) {
     (cartoon, surface)
 }
 
+/// The base [`AtomStyle`] shared across the active scope (the selection, or all
+/// atoms when none is selected), or `None` when the scope mixes base styles.
+pub(crate) fn scope_base_style(state: &AppState) -> Option<crate::frontend::state::AtomStyle> {
+    let structure = state.structure();
+    let atom_count = structure.atoms.len();
+    if atom_count == 0 {
+        return None;
+    }
+    let indices: Vec<usize> = if state.ui.selection.is_empty() {
+        (0..atom_count).collect()
+    } else {
+        state.ui.selection.ordered_indices()
+    };
+    let (first, rest) = indices.split_first()?;
+    let base = state.ui.viewport.resolved_base_style(structure, *first);
+    rest.iter()
+        .all(|&index| state.ui.viewport.resolved_base_style(structure, index) == base)
+        .then_some(base)
+}
+
 /// A small rounded status pill drawn inline (e.g. "Built-in"). Mirrors the
 /// entry-row origin chip: a CHIP-radius filled rect sized snugly to its label.
 pub(crate) fn status_pill(

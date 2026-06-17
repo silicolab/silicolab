@@ -6,14 +6,13 @@ use crate::frontend::{
     state::{AppState, AtomStyle},
 };
 
-use super::{cartoon_section_controls, docked_sidebar_scroll_area, overlay_state_for_scope};
+use super::{
+    cartoon_section_controls, configure_core_button_visuals, core_button_text_color,
+    docked_sidebar_scroll_area, overlay_state_for_scope, scope_base_style, toggle_switch,
+};
 
-/// The Style primary view: per-structure appearance for the *selected* atoms.
-///
-/// Scope rule (mirrored by the dispatcher): every action here applies to the
-/// current selection; when nothing is selected the structure is treated as if
-/// all atoms were temporarily selected, so a style applies to everything.
-/// Filtering is driven by the shared sidebar search button.
+/// The Style primary view. Every action applies to the current selection; with
+/// nothing selected the whole structure is the scope (mirrored by the dispatcher).
 pub(super) fn render_style_panel(
     state: &mut AppState,
     ui: &mut egui::Ui,
@@ -33,24 +32,26 @@ pub(super) fn render_style_panel(
                 "Quick",
                 &search,
                 &[
+                    "representation",
+                    "style",
+                    "atom",
+                    "bond",
+                    "cartoon",
+                    "surface",
+                    "overlay",
                     "visibility",
                     "show",
                     "hide",
+                    "isolate",
                     "hydrogen",
-                    "atom",
-                    "bond",
-                    "label",
-                    "scene",
-                    "background",
-                    "unit cell",
-                    "light",
                 ],
                 true,
                 |ui| {
+                    representation_section(state, ui, actions, &pal);
+                    ui.add_space(6.0);
+                    overlays_section(state, ui, actions, &pal);
+                    ui.add_space(6.0);
                     visibility_section(ui, actions, &pal);
-                    representation_section(ui, actions);
-                    labels_section(state, ui);
-                    scene_quick_section(state, ui);
                 },
             );
 
@@ -66,19 +67,28 @@ pub(super) fn render_style_panel(
                     "coil",
                     "surface",
                     "transparency",
+                    "scene",
+                    "background",
+                    "unit cell",
+                    "cell",
+                    "atom labels",
+                    "light",
                     "silhouette",
                 ],
                 false,
                 |ui| {
-                    cartoon_section(state, ui, actions, &pal);
-                    surface_section(state, ui, actions);
-                    scene_advanced_section(state, ui);
+                    cartoon_section(state, ui, &pal);
+                    ui.add_space(6.0);
+                    surface_section(state, ui, &pal);
+                    ui.add_space(6.0);
+                    scene_section(state, ui, &pal);
+                    ui.add_space(6.0);
+                    scene_advanced_section(state, ui, &pal);
                 },
             );
         });
 }
 
-/// The banner explaining what the controls below act on.
 fn scope_banner(ui: &mut egui::Ui, pal: &crate::frontend::theme::Palette, selection_len: usize) {
     if selection_len == 0 {
         ui.label(
@@ -93,24 +103,106 @@ fn scope_banner(ui: &mut egui::Ui, pal: &crate::frontend::theme::Palette, select
     ui.add_space(2.0);
 }
 
-/// Show/hide, show-only, and per-element hydrogen visibility — all independent
-/// of the drawing style (visibility is its own per-atom attribute).
+/// Mutually-exclusive base representations as a wrapping row of icon buttons; the
+/// one applied uniformly across the scope reads as selected.
+fn representation_section(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+    pal: &crate::frontend::theme::Palette,
+) {
+    let scope_base = scope_base_style(state);
+
+    style_group_label(ui, "Representation", pal);
+    ui.horizontal_wrapped(|ui| {
+        // Cartoon/Surface are overlay switches below; Hidden is the Visibility section.
+        for style in AtomStyle::all()
+            .iter()
+            .filter(|style| !matches!(style, AtomStyle::Cartoon | AtomStyle::Hidden))
+        {
+            let selected = scope_base == Some(*style);
+            if icon_action_button(ui, atom_style_icon(*style), style.label(), selected, pal)
+                .clicked()
+            {
+                actions.push(AppAction::SetSelectionStyle(*style));
+            }
+        }
+
+        ui.add_space(8.0);
+        if icon_action_button(
+            ui,
+            egui_phosphor::regular::ARROW_COUNTER_CLOCKWISE,
+            "Reset to default style",
+            false,
+            pal,
+        )
+        .clicked()
+        {
+            actions.push(AppAction::ResetSelectionStyle);
+        }
+    });
+}
+
+/// Additive overlays as sliding switches. Enabling Surface builds it the first
+/// time; geometry/style/transparency are tuned under Advanced.
+fn overlays_section(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+    pal: &crate::frontend::theme::Palette,
+) {
+    let (cartoon_on, surface_on) = overlay_state_for_scope(state);
+    let surface_exists = !state.ui.viewport.surface_overlay.is_empty();
+
+    style_group_label(ui, "Overlays", pal);
+    ui.horizontal(|ui| {
+        let mut on = cartoon_on;
+        if toggle_switch(ui, &mut on, "Cartoon ribbon", pal)
+            .on_hover_text("Backbone ribbon for protein / nucleic-acid chains in the scope")
+            .changed()
+        {
+            actions.push(AppAction::SetCartoonOverlay(on));
+        }
+    });
+    ui.horizontal(|ui| {
+        let mut on = surface_on;
+        let hint = if surface_exists {
+            "Show the molecular surface for the scope"
+        } else {
+            "Generate a molecular surface for the scope (first enable builds it)"
+        };
+        if toggle_switch(ui, &mut on, "Surface", pal)
+            .on_hover_text(hint)
+            .changed()
+        {
+            actions.push(AppAction::SetSurfaceOverlay(on));
+        }
+    });
+}
+
 fn visibility_section(
     ui: &mut egui::Ui,
     actions: &mut Vec<AppAction>,
     pal: &crate::frontend::theme::Palette,
 ) {
+    use egui_phosphor::regular;
+
     style_group_label(ui, "Visibility", pal);
     ui.horizontal_wrapped(|ui| {
-        if style_pill_button(ui, "Show").clicked() {
+        if icon_action_button(ui, regular::EYE, "Show", false, pal).clicked() {
             actions.push(AppAction::SetSelectionVisibility(VisibilityCommand::Show));
         }
-        if style_pill_button(ui, "Hide").clicked() {
+        if icon_action_button(ui, regular::EYE_SLASH, "Hide", false, pal).clicked() {
             actions.push(AppAction::SetSelectionVisibility(VisibilityCommand::Hide));
         }
-        if style_pill_button(ui, "Show only")
-            .on_hover_text("Show the scope atoms and hide everything else")
-            .clicked()
+        if icon_action_button(
+            ui,
+            regular::TARGET,
+            "Isolate (show only the scope, hide the rest)",
+            false,
+            pal,
+        )
+        .clicked()
         {
             actions.push(AppAction::SetSelectionVisibility(
                 VisibilityCommand::ShowOnly,
@@ -118,124 +210,35 @@ fn visibility_section(
         }
     });
 
-    ui.add_space(5.0);
-    style_group_label(ui, "Hydrogen atoms", pal);
     ui.horizontal_wrapped(|ui| {
-        if style_pill_button(ui, "Show all H").clicked() {
+        ui.label(RichText::new("Hydrogens").size(12.0).color(pal.text_muted));
+        ui.add_space(2.0);
+        if icon_action_button(ui, regular::EYE, "Show all hydrogens", false, pal).clicked() {
             actions.push(AppAction::SetHydrogenDisplay(HydrogenDisplay::All));
         }
-        if style_pill_button(ui, "Hide all H").clicked() {
+        if icon_action_button(ui, regular::EYE_SLASH, "Hide all hydrogens", false, pal).clicked() {
             actions.push(AppAction::SetHydrogenDisplay(HydrogenDisplay::None));
         }
     });
 }
 
-/// One-click atom/bond representation modes for the scope.
-fn representation_section(ui: &mut egui::Ui, actions: &mut Vec<AppAction>) {
-    let pal = crate::frontend::theme::palette(ui);
-    style_group_label(ui, "Atom style", &pal);
-    ui.horizontal_wrapped(|ui| {
-        // Cartoon is an additive overlay (its own section); Hidden is driven
-        // by the Visibility section. The rest are mutually-exclusive base
-        // representations applied to the scope in one click.
-        for style in AtomStyle::all()
-            .iter()
-            .filter(|style| !matches!(style, AtomStyle::Cartoon | AtomStyle::Hidden))
-        {
-            if style_pill_button(ui, style.label()).clicked() {
-                actions.push(AppAction::SetSelectionStyle(*style));
-            }
-        }
-        if style_pill_button(ui, "Reset").clicked() {
-            actions.push(AppAction::ResetSelectionStyle);
-        }
-    });
-}
-
-/// Labels / tags. Today only the auto-generated atom-type + serial labels exist,
-/// toggled globally; custom tags are reserved.
-fn labels_section(state: &mut AppState, ui: &mut egui::Ui) {
-    let pal = crate::frontend::theme::palette(ui);
-    style_group_label(ui, "Labels", &pal);
-    ui.checkbox(
-        &mut state.ui.viewport.show_atom_labels,
-        "Show atom-type & serial labels",
-    );
-}
-
-/// Cartoon ribbon: add/remove the overlay for the scope, plus the ribbon
-/// geometry. Color / transparency / associated-atom visibility are reserved.
-fn cartoon_section(
-    state: &mut AppState,
-    ui: &mut egui::Ui,
-    actions: &mut Vec<AppAction>,
-    pal: &crate::frontend::theme::Palette,
-) {
-    let (cartoon_on, _surface_on) = overlay_state_for_scope(state);
-    style_group_label(ui, "Cartoon overlay", pal);
-    let mut on = cartoon_on;
-    if ui.checkbox(&mut on, "Cartoon ribbon for scope").changed() {
-        actions.push(AppAction::SetCartoonOverlay(on));
-    }
-
-    ui.add_space(5.0);
-    style_group_label(ui, "Ribbon geometry", pal);
-    cartoon_section_controls(ui, "Helix", &mut state.ui.viewport.cartoon.helix);
-    cartoon_section_controls(ui, "Sheet", &mut state.ui.viewport.cartoon.sheet);
-    cartoon_section_controls(ui, "Coil", &mut state.ui.viewport.cartoon.coil);
-    ui.add(egui::Slider::new(&mut state.ui.viewport.cartoon.smoothing, 1..=32).text("Smoothing"));
-    ui.add(
-        egui::Slider::new(&mut state.ui.viewport.cartoon.profile_segments, 6..=48).text("Profile"),
-    );
-}
-
-/// Surface: first enable generates the molecular surface (the dispatcher seeds
-/// its appearance); afterwards the checkbox just shows/hides it. Style and
-/// transparency tune the generated surface.
-fn surface_section(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec<AppAction>) {
-    let pal = crate::frontend::theme::palette(ui);
-    let (_cartoon_on, surface_on) = overlay_state_for_scope(state);
-    let surface_exists = !state.ui.viewport.surface_overlay.is_empty();
-    style_group_label(ui, "Surface", &pal);
-    if !surface_exists {
-        if style_pill_button(ui, "Generate surface")
-            .on_hover_text("Create a molecular surface for the scope")
-            .clicked()
-        {
-            actions.push(AppAction::SetSurfaceOverlay(true));
-        }
-    } else {
-        let mut on = surface_on;
-        if ui.checkbox(&mut on, "Show surface for scope").changed() {
-            actions.push(AppAction::SetSurfaceOverlay(on));
-        }
-    }
-
-    ui.add_space(5.0);
-    egui::ComboBox::from_label("Surface style")
-        .selected_text(state.ui.viewport.surface.style.label())
-        .show_ui(ui, |ui| {
-            for style in SurfaceStyle::all() {
-                ui.selectable_value(&mut state.ui.viewport.surface.style, *style, style.label());
-            }
-        });
-    ui.add(
-        egui::Slider::new(&mut state.ui.viewport.surface.transparency, 0.0..=1.0)
-            .text("Transparency"),
-    );
-}
-
-/// Global scene properties that aren't selection-scoped (background, cell, and
-/// lighting). Retained from the former Display panel — handy to keep alongside
-/// the per-selection style controls.
-fn scene_quick_section(state: &mut AppState, ui: &mut egui::Ui) {
-    let pal = crate::frontend::theme::palette(ui);
-    style_group_label(ui, "Scene", &pal);
+fn scene_section(state: &mut AppState, ui: &mut egui::Ui, pal: &crate::frontend::theme::Palette) {
+    style_group_label(ui, "Scene", pal);
     ui.horizontal(|ui| {
         ui.label("Background");
         ui.color_edit_button_srgba(&mut state.ui.viewport.background_color);
     });
-    ui.checkbox(&mut state.ui.viewport.show_cell, "Show unit cell");
+    ui.horizontal(|ui| {
+        toggle_switch(ui, &mut state.ui.viewport.show_cell, "Unit cell", pal);
+    });
+    ui.horizontal(|ui| {
+        toggle_switch(
+            ui,
+            &mut state.ui.viewport.show_atom_labels,
+            "Atom labels",
+            pal,
+        );
+    });
     egui::ComboBox::from_label("Light")
         .selected_text(state.ui.viewport.lighting.preset.label())
         .show_ui(ui, |ui| {
@@ -249,10 +252,46 @@ fn scene_quick_section(state: &mut AppState, ui: &mut egui::Ui) {
         });
 }
 
-fn scene_advanced_section(state: &mut AppState, ui: &mut egui::Ui) {
-    let pal = crate::frontend::theme::palette(ui);
-    style_group_label(ui, "Silhouettes", &pal);
-    ui.checkbox(&mut state.ui.viewport.lighting.silhouettes, "Silhouettes");
+fn cartoon_section(state: &mut AppState, ui: &mut egui::Ui, pal: &crate::frontend::theme::Palette) {
+    style_group_label(ui, "Cartoon ribbon", pal);
+    cartoon_section_controls(ui, "Helix", &mut state.ui.viewport.cartoon.helix);
+    cartoon_section_controls(ui, "Sheet", &mut state.ui.viewport.cartoon.sheet);
+    cartoon_section_controls(ui, "Coil", &mut state.ui.viewport.cartoon.coil);
+    ui.add(egui::Slider::new(&mut state.ui.viewport.cartoon.smoothing, 1..=32).text("Smoothing"));
+    ui.add(
+        egui::Slider::new(&mut state.ui.viewport.cartoon.profile_segments, 6..=48).text("Profile"),
+    );
+}
+
+fn surface_section(state: &mut AppState, ui: &mut egui::Ui, pal: &crate::frontend::theme::Palette) {
+    style_group_label(ui, "Surface", pal);
+    egui::ComboBox::from_label("Surface style")
+        .selected_text(state.ui.viewport.surface.style.label())
+        .show_ui(ui, |ui| {
+            for style in SurfaceStyle::all() {
+                ui.selectable_value(&mut state.ui.viewport.surface.style, *style, style.label());
+            }
+        });
+    ui.add(
+        egui::Slider::new(&mut state.ui.viewport.surface.transparency, 0.0..=1.0)
+            .text("Transparency"),
+    );
+}
+
+fn scene_advanced_section(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    pal: &crate::frontend::theme::Palette,
+) {
+    style_group_label(ui, "Silhouettes", pal);
+    ui.horizontal(|ui| {
+        toggle_switch(
+            ui,
+            &mut state.ui.viewport.lighting.silhouettes,
+            "Silhouettes",
+            pal,
+        );
+    });
     ui.add(
         egui::Slider::new(&mut state.ui.viewport.lighting.silhouette_width, 0.0..=6.0)
             .text("Silhouette width"),
@@ -343,12 +382,43 @@ fn style_group_label(ui: &mut egui::Ui, label: &str, pal: &crate::frontend::them
     ui.label(RichText::new(label).size(12.0).color(pal.text_muted));
 }
 
-fn style_pill_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
-    ui.add(
-        egui::Button::new(RichText::new(label).size(12.5))
-            .corner_radius(egui::CornerRadius::same(
-                crate::frontend::theme::radius::CONTROL,
-            ))
-            .min_size(egui::vec2(0.0, 24.0)),
-    )
+/// The `Cartoon | Hidden` arm is never reached (those are filtered out of the
+/// row); it only keeps the match exhaustive.
+fn atom_style_icon(style: AtomStyle) -> &'static str {
+    use egui_phosphor::regular;
+    match style {
+        AtomStyle::BallAndStick => regular::POLYGON,
+        AtomStyle::Stick => regular::CYLINDER,
+        AtomStyle::Wireframe => regular::HEXAGON,
+        AtomStyle::Sphere => regular::SPHERE,
+        AtomStyle::Point => regular::DOTS_NINE,
+        AtomStyle::Cartoon | AtomStyle::Hidden => regular::CIRCLE,
+    }
+}
+
+/// Configures the core-button visuals on the current `ui` (then restores) rather
+/// than via `with_core_button_style`'s child scope: a scoped child is placed
+/// without a wrap check, so in a `horizontal_wrapped` row it would overflow and
+/// clip a narrow panel instead of wrapping.
+fn icon_action_button(
+    ui: &mut egui::Ui,
+    icon: &str,
+    tooltip: &str,
+    selected: bool,
+    pal: &crate::frontend::theme::Palette,
+) -> egui::Response {
+    let prev_widgets = ui.style().visuals.widgets.clone();
+    configure_core_button_visuals(ui, selected);
+    let response = ui
+        .add(
+            egui::Button::new(
+                RichText::new(icon)
+                    .size(17.0)
+                    .color(core_button_text_color(pal, selected)),
+            )
+            .min_size(egui::vec2(36.0, 28.0)),
+        )
+        .on_hover_text(tooltip);
+    ui.style_mut().visuals.widgets = prev_widgets;
+    response
 }
