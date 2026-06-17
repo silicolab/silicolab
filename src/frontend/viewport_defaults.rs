@@ -24,10 +24,10 @@ pub fn apply_entry_render_defaults(
     structure: &Structure,
     prefs: &RepresentationPrefs,
 ) {
-    // Any periodic structure shows its box by default. This matters most for MD
-    // systems (built or run output), where the simulation cell is essential
-    // context; crystals/materials get it too.
-    viewport.show_cell = structure.cell.is_some();
+    // Periodic structures show their box by default, but biopolymers hide it: a
+    // protein's crystallographic cell is usually noise, whereas an MD/crystal box
+    // is essential context.
+    viewport.show_cell = structure.cell.is_some() && structure.biopolymer.is_none();
 
     // Seed the global base-style default for non-polymer categories. Biopolymer
     // chains (Protein/NucleicAcid) are intentionally untouched so they keep their
@@ -244,5 +244,33 @@ mod tests {
         };
         apply_entry_render_defaults(&mut viewport, &structure, &RepresentationPrefs::default());
         assert!(viewport.show_cell);
+    }
+
+    #[test]
+    fn biopolymer_with_cell_hides_cell_by_default() {
+        use crate::domain::UnitCell;
+
+        // A protein anchor (so the structure carries a biopolymer) plus a cell:
+        // the crystallographic box is hidden by default to keep the molecule clear.
+        let annotations = vec![annotation("CA", "ALA", 1)];
+        let biopolymer = build_biopolymer(&annotations, Vec::new()).expect("biopolymer");
+        let cell = UnitCell::from_parameters(10.0, 10.0, 10.0, 90.0, 90.0, 90.0);
+        let structure = Structure {
+            title: "protein".to_string(),
+            atoms: vec![atom("C")],
+            bonds: Vec::new(),
+            cell: Some(cell),
+            biopolymer: Some(biopolymer),
+        };
+
+        let mut viewport = ViewportVisualState {
+            show_cell: true,
+            ..Default::default()
+        };
+        apply_entry_render_defaults(&mut viewport, &structure, &RepresentationPrefs::default());
+        assert!(
+            !viewport.show_cell,
+            "a biopolymer's crystallographic cell should be hidden by default"
+        );
     }
 }
