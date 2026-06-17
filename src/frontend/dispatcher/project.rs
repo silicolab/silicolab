@@ -243,6 +243,9 @@ pub(crate) fn load_active_entry(state: &mut AppState) {
     if let Some(task_run_id) = state.tasks.active_panel {
         ensure_panel_form(state, task_run_id);
     }
+    // Decide whether the freshly shown structure is heavy enough to suggest a
+    // wireframe (and gate its full-detail render) instead of rendering blindly.
+    maybe_gate_heavy_render(state);
 }
 
 pub(crate) fn require_active_entry(state: &mut AppState, action_label: &str) -> bool {

@@ -91,6 +91,23 @@ pub fn apply_solvent_render_default(viewport: &mut ViewportVisualState, structur
     }
 }
 
+/// Past this many non-cheap atoms, a structure is heavy enough that a full-detail
+/// render may be slow, so the user is offered a wireframe instead of the render
+/// being silently simplified. Only atoms whose resolved *base* style tessellates
+/// solid geometry (spheres/cylinders) and that aren't hidden count; wireframe,
+/// dots, and cartoon-only atoms are cheap, so a wireframed solvent box or a
+/// cartoon-only protein is not "heavy".
+pub const HEAVY_RENDER_ATOM_THRESHOLD: usize = 6000;
+
+/// Count the atoms of `structure` that render as heavy solid geometry under
+/// `viewport`. See [`HEAVY_RENDER_ATOM_THRESHOLD`].
+pub fn heavy_render_atom_count(structure: &Structure, viewport: &ViewportVisualState) -> usize {
+    (0..structure.atoms.len())
+        .filter(|&index| !viewport.atom_is_hidden(index))
+        .filter(|&index| viewport.resolved_base_style(structure, index).is_heavy())
+        .count()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +240,26 @@ mod tests {
             viewport.resolved_atom_style(&structure, 1),
             AtomStyle::BallAndStick
         );
+    }
+
+    #[test]
+    fn heavy_render_count_ignores_wireframe_and_hidden_atoms() {
+        // Three non-polymer carbons default to ball-and-stick (heavy).
+        let structure = Structure {
+            title: "t".to_string(),
+            atoms: vec![atom("C"), atom("C"), atom("C")],
+            bonds: Vec::new(),
+            cell: None,
+            biopolymer: None,
+        };
+        let mut viewport = ViewportVisualState::default();
+        assert_eq!(heavy_render_atom_count(&structure, &viewport), 3);
+
+        // A wireframe atom is cheap, and a hidden atom draws nothing — both drop
+        // out of the heavy count, leaving the one remaining ball-and-stick atom.
+        viewport.atom_styles.insert(0, AtomStyle::Wireframe);
+        viewport.atom_hidden.insert(1);
+        assert_eq!(heavy_render_atom_count(&structure, &viewport), 1);
     }
 
     #[test]

@@ -105,6 +105,15 @@ pub struct UiState {
     /// The single active non-modal notification (a message plus optional action
     /// buttons), or `None`. Posting a new one replaces any current one.
     pub notification: Option<crate::frontend::actions::Notification>,
+    /// The active entry whose full-detail render is held pending the user's
+    /// answer to the heavy-structure wireframe suggestion, or `None` when nothing
+    /// is gated. While set (and equal to the active entry) the viewport shows the
+    /// prompt instead of the molecule, rather than silently simplifying it.
+    pub pending_heavy_gate: Option<u64>,
+    /// Entries for which the user has already answered the heavy-structure
+    /// suggestion this session (accepted wireframe or chose full detail), so the
+    /// prompt is not raised again on every re-activation. Transient.
+    pub heavy_render_decided: std::collections::BTreeSet<u64>,
     /// Cached solvation count preview for the System Builder panel. Recomputed
     /// (which opens the force-field DB and grid-fills the box) only when
     /// `md_solvation_preview_key` changes, so the panel stays responsive.
@@ -195,6 +204,8 @@ impl Default for UiState {
             pending_disorder: None,
             pending_pdb_fetch: None,
             notification: None,
+            pending_heavy_gate: None,
+            heavy_render_decided: std::collections::BTreeSet::new(),
             md_solvation_preview: None,
             md_solvation_preview_key: 0,
             trajectory: None,

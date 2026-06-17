@@ -353,6 +353,12 @@ pub enum AppAction {
     ResetWorkbenchLayout,
     /// Dismiss the active [`Notification`] without taking any of its actions.
     DismissNotification,
+    /// Accept the heavy-structure suggestion for an entry: switch all of its
+    /// atoms to wireframe, then render it.
+    UseWireframeForHeavyEntry(u64),
+    /// Decline the heavy-structure suggestion for an entry and render it at full
+    /// detail (no silent simplification).
+    RenderHeavyEntryAtFull(u64),
 }
 
 /// A non-modal notification surfaced over the workspace: a short message that,
@@ -361,11 +367,6 @@ pub enum AppAction {
 /// shown at a time; posting a new one replaces any current one. Clicking a button
 /// dismisses the notification and then dispatches the button's action, so a
 /// button may itself post a follow-up notification.
-///
-// Infrastructure with no producer yet: the first notification (a heavy-structure
-// render suggestion) lands in a follow-up change. Only the renderer and tests
-// exercise the type until then, so the construction is "unused" in the meantime.
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct Notification {
     pub severity: NotificationSeverity,
@@ -377,15 +378,16 @@ pub struct Notification {
 }
 
 /// Accent/intent of a [`Notification`], driving only its color — not behaviour.
-#[allow(dead_code)] // see `Notification`: no producer yet.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotificationSeverity {
+    /// Reserved — no producer posts an informational notification yet (the
+    /// renderer still handles it, so a future caller needs no UI changes).
+    #[allow(dead_code)]
     Info,
     Warning,
 }
 
 /// One [`Notification`] button: a label plus the action it dispatches.
-#[allow(dead_code)] // see `Notification`: no producer yet.
 #[derive(Debug, Clone)]
 pub struct NotificationButton {
     pub label: String,
@@ -394,7 +396,6 @@ pub struct NotificationButton {
     pub primary: bool,
 }
 
-#[allow(dead_code)] // see `Notification`: no producer yet.
 impl Notification {
     pub fn new(
         severity: NotificationSeverity,
