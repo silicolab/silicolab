@@ -985,12 +985,10 @@ AR  8
             },
         );
 
-        // PreparedConf -> conf.gro
         assert_eq!(
             resolve_file_ref(&FileRef::PreparedConf, &system, &outputs).unwrap(),
             PathBuf::from("/wd/conf.gro")
         );
-        // NVT checkpoint resolves to the recorded .cpt
         assert_eq!(
             resolve_file_ref(
                 &FileRef::Stage {
@@ -1003,7 +1001,6 @@ AR  8
             .unwrap(),
             PathBuf::from("/wd/nvt.cpt")
         );
-        // NVT output gro resolves correctly
         assert_eq!(
             resolve_file_ref(
                 &FileRef::Stage {

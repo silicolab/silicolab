@@ -178,7 +178,6 @@ fn apply_functional_substitution(
         bail!("selected component is not a functional group");
     }
 
-    // Verify target atom exists and is hydrogen
     if rule.atom_index >= template.atoms.len() {
         bail!("functional substitution target atom does not exist");
     }
@@ -188,7 +187,6 @@ fn apply_functional_substitution(
 
     let h_position = template.atoms[rule.atom_index].position;
 
-    // Find the framework atom that was bonded to H
     let framework_attachment = find_framework_attachment(template, rule.atom_index);
     let Some((framework_atom_idx, _)) = framework_attachment else {
         bail!("hydrogen atom has no parent atom in framework");
@@ -198,22 +196,19 @@ fn apply_functional_substitution(
     // Calculate the direction from framework atom to H (this is where the functional group should point)
     let target_direction = (h_position - framework_atom_pos).normalize();
 
-    // Remove the hydrogen atom
     template.atoms.remove(rule.atom_index);
 
-    // Adjust bond indices and remove bonds involving the removed H
     let old_index = rule.atom_index;
     let mut new_bonds = Vec::new();
     for bond in &template.bonds {
         let mut a = bond.a;
         let mut b = bond.b;
 
-        // Skip bonds involving the removed H
         if a == old_index || b == old_index {
             continue;
         }
 
-        // Adjust indices for atoms after the removed H
+        // Atoms after the removed H shift down by one.
         if a > old_index {
             a -= 1;
         }
@@ -228,7 +223,6 @@ fn apply_functional_substitution(
     }
     template.bonds = new_bonds;
 
-    // Adjust coordination sites
     for site in &mut template.coordination_sites {
         if site.binding_atom > old_index {
             site.binding_atom -= 1;
@@ -242,10 +236,7 @@ fn apply_functional_substitution(
         );
     };
 
-    // Find the binding atom in the functional group (the one that connects to the framework)
     let fg_binding_atom = fg_site.binding_atom;
-
-    // Get the binding atom position and coordination direction
     let fg_binding_pos = functional_group.atoms[fg_binding_atom].position;
 
     // coordination_position is the position of the leaving atom (Du).
@@ -315,7 +306,6 @@ fn apply_functional_substitution(
         core_is_conjugated && fg_is_conjugated,
     );
 
-    // Add functional group atoms with rotation and translation
     let fg_start_idx = template.atoms.len();
 
     for (i, atom) in functional_group.atoms.iter().enumerate() {
@@ -325,7 +315,6 @@ fn apply_functional_substitution(
         });
     }
 
-    // Add bond from framework to functional group binding atom (single bond)
     let fg_binding_new_idx = fg_start_idx + fg_binding_atom;
     template.bonds.push(TemplateBond {
         a: framework_atom_idx,
@@ -333,7 +322,6 @@ fn apply_functional_substitution(
         bond_type: crate::domain::BondType::Single,
     });
 
-    // Add functional group bonds (adjusted for new indices)
     for bond in &functional_group.bonds {
         let new_a = fg_start_idx + bond.a;
         let new_b = fg_start_idx + bond.b;
@@ -344,7 +332,6 @@ fn apply_functional_substitution(
         });
     }
 
-    // Update connectivity - remove the coordination site for this H
     template
         .coordination_sites
         .retain(|s| s.binding_atom != old_index);
