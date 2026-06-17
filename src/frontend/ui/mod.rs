@@ -21,6 +21,7 @@ use crate::{
 mod about;
 mod dock;
 mod modal;
+mod notification;
 mod panel_bodies;
 mod secondary_sidebar;
 mod settings_modal;
@@ -32,6 +33,7 @@ mod style_panel;
 mod workspace;
 
 use dock::{drag_in_flight, render_dock_reveal_targets};
+use notification::render_notification;
 use panel_bodies::render_status_bar;
 use style_panel::render_style_panel;
 use workspace::render_workspace;
@@ -295,6 +297,10 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
                 .inner_margin(Margin::same(0)),
         )
         .show_inside(ui, |ui| render_workspace(state, ui, actions));
+
+    // A floating notification card (if any) layers over the workspace, above the
+    // viewport but below modal dialogs.
+    render_notification(state, ui, actions);
 
     // The bottom panel is fixed-size (see `render_workspace`) to avoid egui's
     // resizable-panel growth bug, so it gets a custom resize handle — a subtle

@@ -102,6 +102,9 @@ pub struct UiState {
     pub pending_md_run: Option<MdRunPrompt>,
     pub pending_disorder: Option<DisorderedSystemPrompt>,
     pub pending_pdb_fetch: Option<String>,
+    /// The single active non-modal notification (a message plus optional action
+    /// buttons), or `None`. Posting a new one replaces any current one.
+    pub notification: Option<crate::frontend::actions::Notification>,
     /// Cached solvation count preview for the System Builder panel. Recomputed
     /// (which opens the force-field DB and grid-fills the box) only when
     /// `md_solvation_preview_key` changes, so the panel stays responsive.
@@ -191,6 +194,7 @@ impl Default for UiState {
             pending_md_run: None,
             pending_disorder: None,
             pending_pdb_fetch: None,
+            notification: None,
             md_solvation_preview: None,
             md_solvation_preview_key: 0,
             trajectory: None,
