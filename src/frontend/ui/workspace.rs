@@ -81,68 +81,75 @@ pub(super) fn render_workspace(
                 }
                 if let Some(entry) = state.entries.active_entry() {
                     let entry_id = entry.id;
-                    let ui_state = &mut state.ui;
-                    // During playback the viewport renders the trajectory's current
-                    // frame (the entry's topology with swapped coordinates) under a
-                    // dedicated structure id so the entry's own geometry cache is
-                    // untouched, with a fixed view so the camera doesn't drift.
-                    let playback = ui_state
-                        .trajectory
-                        .as_ref()
-                        .filter(|playback| playback.entry_id == entry_id);
-                    let (structure, structure_id, structure_revision, view_override) =
-                        if let Some(playback) = playback {
-                            (
-                                &playback.scratch,
-                                PLAYBACK_STRUCTURE_ID,
-                                playback.current_frame as u64,
-                                Some((playback.view_center, playback.view_radius)),
-                            )
-                        } else {
-                            (&entry.structure, entry_id, entry.revision, None)
-                        };
-                    let viewport_interaction = draw_viewport(
-                        ui,
-                        ViewportDrawArgs {
-                            structure,
-                            structure_id,
-                            structure_revision,
-                            camera: &mut ui_state.camera,
-                            selection: &ui_state.selection,
-                            visual_state: &ui_state.viewport,
-                            previous_hovered_atom: ui_state.hovered_atom,
-                            cache: &mut ui_state.viewport_cache,
-                            gpu_ready: ui_state.gpu_ready,
-                            empty_state_hint: None,
-                            view_override,
-                            background_corner_radius: crate::frontend::theme::radius::LARGE,
-                        },
-                    );
-                    if viewport_interaction.hover_changed {
-                        ui_state.hovered_atom = viewport_interaction.hovered_atom;
-                    }
-                    if viewport_interaction.camera_changed || viewport_interaction.active_drag {
-                        ui.ctx().request_repaint_after(STRUCTURE_INTERACTION_FRAME);
-                    } else if viewport_interaction.hover_changed {
-                        ui.ctx().request_repaint_after(HOVER_FRAME);
-                    }
-
-                    let mut assigned_atom = None;
-                    if let Some(index) = viewport_interaction.clicked_atom {
-                        let toggle =
-                            ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
-                        actions.push(AppAction::SelectAtom {
-                            atom_index: index,
-                            toggle,
-                        });
-                        if let Some(editor) = &mut ui_state.block_editor
-                            && editor.apply_picked_atom(index)
-                        {
-                            assigned_atom = Some(index);
+                    if state.ui.pending_heavy_gate == Some(entry_id) {
+                        // A heavy structure is awaiting the wireframe/full-detail
+                        // choice offered by the notification above: hold its
+                        // render rather than draw it (or silently simplify it).
+                        render_heavy_gate_placeholder(ui);
+                    } else {
+                        let ui_state = &mut state.ui;
+                        // During playback the viewport renders the trajectory's current
+                        // frame (the entry's topology with swapped coordinates) under a
+                        // dedicated structure id so the entry's own geometry cache is
+                        // untouched, with a fixed view so the camera doesn't drift.
+                        let playback = ui_state
+                            .trajectory
+                            .as_ref()
+                            .filter(|playback| playback.entry_id == entry_id);
+                        let (structure, structure_id, structure_revision, view_override) =
+                            if let Some(playback) = playback {
+                                (
+                                    &playback.scratch,
+                                    PLAYBACK_STRUCTURE_ID,
+                                    playback.current_frame as u64,
+                                    Some((playback.view_center, playback.view_radius)),
+                                )
+                            } else {
+                                (&entry.structure, entry_id, entry.revision, None)
+                            };
+                        let viewport_interaction = draw_viewport(
+                            ui,
+                            ViewportDrawArgs {
+                                structure,
+                                structure_id,
+                                structure_revision,
+                                camera: &mut ui_state.camera,
+                                selection: &ui_state.selection,
+                                visual_state: &ui_state.viewport,
+                                previous_hovered_atom: ui_state.hovered_atom,
+                                cache: &mut ui_state.viewport_cache,
+                                gpu_ready: ui_state.gpu_ready,
+                                empty_state_hint: None,
+                                view_override,
+                                background_corner_radius: crate::frontend::theme::radius::LARGE,
+                            },
+                        );
+                        if viewport_interaction.hover_changed {
+                            ui_state.hovered_atom = viewport_interaction.hovered_atom;
                         }
-                    }
-                    if let Some(index) = assigned_atom {
-                        state.set_message(format!("Assigned atom {}", index + 1));
+                        if viewport_interaction.camera_changed || viewport_interaction.active_drag {
+                            ui.ctx().request_repaint_after(STRUCTURE_INTERACTION_FRAME);
+                        } else if viewport_interaction.hover_changed {
+                            ui.ctx().request_repaint_after(HOVER_FRAME);
+                        }
+
+                        let mut assigned_atom = None;
+                        if let Some(index) = viewport_interaction.clicked_atom {
+                            let toggle =
+                                ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
+                            actions.push(AppAction::SelectAtom {
+                                atom_index: index,
+                                toggle,
+                            });
+                            if let Some(editor) = &mut ui_state.block_editor
+                                && editor.apply_picked_atom(index)
+                            {
+                                assigned_atom = Some(index);
+                            }
+                        }
+                        if let Some(index) = assigned_atom {
+                            state.set_message(format!("Assigned atom {}", index + 1));
+                        }
                     }
                 } else if !state.workspace.is_project() && state.entries.tabs.is_empty() {
                     render_scratch_workspace(state, ui, actions);
@@ -171,6 +178,22 @@ pub(super) fn render_workspace(
                 }
             });
         });
+}
+
+/// Placeholder drawn in place of the molecule while a heavy structure waits for
+/// the user's wireframe/full-detail choice. The choice itself lives in the
+/// notification banner floating above; filling the viewport area keeps the
+/// layout stable and signals that nothing is being rendered yet.
+fn render_heavy_gate_placeholder(ui: &mut egui::Ui) {
+    let pal = crate::frontend::theme::palette(ui);
+    let (rect, _) = ui.allocate_exact_size(ui.available_size(), Sense::hover());
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        "This structure is large — choose how to render it above.",
+        egui::FontId::proportional(15.0),
+        pal.text_muted,
+    );
 }
 
 fn show_workspace_island(ui: &mut Ui, add: impl FnOnce(&mut Ui)) {

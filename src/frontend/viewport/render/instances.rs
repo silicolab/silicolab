@@ -17,7 +17,8 @@ use super::cartoon::build_biopolymer_cartoon_world_mesh;
 use super::scene::{BondWorldSegment, bond_world_segments};
 use super::{
     AROMATIC_DASH_LENGTH, AROMATIC_DASH_OFFSET, AROMATIC_DASH_RADIUS, AROMATIC_GAP_LENGTH,
-    BALL_RADIUS_SCALE, MULTI_BOND_OFFSET, MULTI_BOND_RADIUS, SINGLE_BOND_RADIUS, atom_ball_radius,
+    MULTI_BOND_OFFSET, MULTI_BOND_RADIUS, SINGLE_BOND_RADIUS, WIREFRAME_BOND_RADIUS,
+    atom_ball_radius, atom_marker_radius,
 };
 
 /// World radius (relative to the full ball-and-stick radius) used to draw atoms
@@ -54,17 +55,18 @@ pub(crate) fn build_molecule_instances(
         if !(start.visible || end.visible) {
             continue;
         }
-        if !(start.style.draws_stick_bonds() || end.style.draws_stick_bonds()) {
-            continue;
+        if start.style.draws_stick_bonds() || end.style.draws_stick_bonds() {
+            append_bond_cylinders(
+                &mut cylinders,
+                structure,
+                &adjacency,
+                &segment,
+                start.color,
+                end.color,
+            );
+        } else if start.style.draws_line_bonds() || end.style.draws_line_bonds() {
+            append_wireframe_bond(&mut cylinders, &segment, start.color, end.color);
         }
-        append_bond_cylinders(
-            &mut cylinders,
-            structure,
-            &adjacency,
-            &segment,
-            start.color,
-            end.color,
-        );
     }
 
     MoleculeInstances {
@@ -82,6 +84,28 @@ fn bond_adjacency(structure: &Structure) -> Vec<Vec<usize>> {
         adjacency[bond.b].push(bond.a);
     }
     adjacency
+}
+
+/// A Wireframe (line) bond on the GPU path. The GPU has no screen-space line
+/// primitive, so the bond becomes one slim split-colored rod from atom to atom,
+/// reusing the cylinder pipeline. Wireframe atoms draw no node, so — like the
+/// CPU line path — bond order and aromatic dashes are ignored; the rod is the
+/// whole bond.
+fn append_wireframe_bond(
+    cylinders: &mut Vec<CylinderInstance>,
+    segment: &BondWorldSegment,
+    color_a: Color32,
+    color_b: Color32,
+) {
+    if let Some(cylinder) = cylinder_instance(
+        segment.start,
+        segment.end,
+        WIREFRAME_BOND_RADIUS,
+        color_a,
+        color_b,
+    ) {
+        cylinders.push(cylinder);
+    }
 }
 
 /// Emit the cylinder(s) for one bond segment: a single stick, two parallel
@@ -227,11 +251,11 @@ fn sphere_radius(
     style: AtomStyle,
     selection: &AtomSelection,
 ) -> Option<f32> {
-    let base = atom_ball_radius(&structure.atoms[index].element);
-    let mut radius = if let Some(scale) = style.sphere_radius_scale() {
-        base * (scale / BALL_RADIUS_SCALE)
+    let element = &structure.atoms[index].element;
+    let mut radius = if let Some(marker) = atom_marker_radius(element, style) {
+        marker
     } else if style.draws_point() {
-        base * POINT_SPHERE_SCALE
+        atom_ball_radius(element) * POINT_SPHERE_SCALE
     } else {
         return None;
     };
@@ -273,4 +297,71 @@ fn perpendicular_basis(axis: Vector3<f32>) -> (Vector3<f32>, Vector3<f32>) {
     let u = axis.cross(&reference).normalize();
     let v = axis.cross(&u);
     (u, v)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{Atom, Bond, BondType, Structure};
+    use nalgebra::Point3;
+
+    /// Two carbons bonded along x, both forced to `style`.
+    fn bonded_pair(style: AtomStyle) -> (Structure, ViewportVisualState) {
+        let structure = Structure::with_bonds(
+            "pair",
+            vec![
+                Atom {
+                    element: "C".to_string(),
+                    position: Point3::new(0.0, 0.0, 0.0),
+                    charge: 0.0,
+                },
+                Atom {
+                    element: "C".to_string(),
+                    position: Point3::new(1.5, 0.0, 0.0),
+                    charge: 0.0,
+                },
+            ],
+            vec![Bond::with_type(0, 1, BondType::Single)],
+        );
+        let mut visual = ViewportVisualState::default();
+        visual.atom_styles.insert(0, style);
+        visual.atom_styles.insert(1, style);
+        (structure, visual)
+    }
+
+    #[test]
+    fn wireframe_bonds_emit_one_thin_rod_and_no_nodes() {
+        // The GPU path has no line primitive, so wireframe used to produce nothing
+        // — atoms vanished. The bond must now come through as a single slim rod,
+        // with no atom node (wireframe is bond-only).
+        let (structure, visual) = bonded_pair(AtomStyle::Wireframe);
+        let instances = build_molecule_instances(&structure, &AtomSelection::default(), &visual);
+        assert!(instances.spheres.is_empty(), "wireframe draws no atom node");
+        assert_eq!(instances.cylinders.len(), 1, "the bond becomes one rod");
+        assert_eq!(instances.cylinders[0].axis_radius[3], WIREFRAME_BOND_RADIUS);
+    }
+
+    #[test]
+    fn stick_joint_matches_its_bond_radius() {
+        // The joint node must be exactly as thick as the bond so a stick chain
+        // reads as one smooth tube, not a string of beads at every atom.
+        let (structure, visual) = bonded_pair(AtomStyle::Stick);
+        let instances = build_molecule_instances(&structure, &AtomSelection::default(), &visual);
+        assert_eq!(instances.spheres.len(), 2, "each atom caps its bond");
+        for sphere in &instances.spheres {
+            assert_eq!(sphere.pos_radius[3], SINGLE_BOND_RADIUS);
+        }
+        assert_eq!(instances.cylinders.len(), 1);
+        assert_eq!(instances.cylinders[0].axis_radius[3], SINGLE_BOND_RADIUS);
+    }
+
+    #[test]
+    fn ball_and_stick_node_stays_fatter_than_the_bond() {
+        // Ball-and-stick is unchanged: its element-sized ball is still distinctly
+        // larger than the bond, so the Stick fix did not flatten it.
+        let (structure, visual) = bonded_pair(AtomStyle::BallAndStick);
+        let instances = build_molecule_instances(&structure, &AtomSelection::default(), &visual);
+        assert_eq!(instances.spheres.len(), 2);
+        assert!(instances.spheres[0].pos_radius[3] > SINGLE_BOND_RADIUS);
+    }
 }

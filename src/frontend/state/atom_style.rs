@@ -77,21 +77,6 @@ impl AtomStyle {
         })
     }
 
-    /// Whether atoms in this style draw a tessellated sphere, and at what
-    /// fraction of the element's display radius. `None` means the atom is drawn
-    /// as a flat point disc, via the cartoon path, or not at all.
-    pub fn sphere_radius_scale(self) -> Option<f32> {
-        match self {
-            Self::Sphere => Some(1.0),
-            Self::BallAndStick => Some(0.78),
-            // A small joint so isolated atoms (lone ions / water O) stay visible.
-            Self::Stick => Some(0.30),
-            // Point is a flat disc; Wireframe draws only its line bonds (no atom
-            // marker); Cartoon/Hidden draw no atom here.
-            Self::Wireframe | Self::Point | Self::Cartoon | Self::Hidden => None,
-        }
-    }
-
     /// Whether visible atoms in this style are drawn as a flat point disc. Only
     /// `Point` (Dots) draws a disc; `Wireframe` shows bonds as lines with no
     /// per-atom marker.
@@ -99,10 +84,12 @@ impl AtomStyle {
         matches!(self, Self::Point)
     }
 
-    /// True for styles whose per-atom geometry is heavy enough that very large
-    /// selections must be downgraded to points to stay within the GPU buffer.
+    /// True for styles whose per-atom geometry is heavy enough — tessellated
+    /// spheres and/or bond cylinders — that very large selections must be
+    /// downgraded to points to stay within the GPU buffer. The cheap line/dot
+    /// styles draw little and are exempt.
     pub fn is_heavy(self) -> bool {
-        self.sphere_radius_scale().is_some()
+        matches!(self, Self::Sphere | Self::BallAndStick | Self::Stick)
     }
 
     /// Whether bonds touching an atom of this style are drawn as solid

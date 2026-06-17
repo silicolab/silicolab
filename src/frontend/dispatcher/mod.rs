@@ -56,6 +56,7 @@ mod builders;
 mod disorder;
 mod dock;
 mod files;
+mod heavy_render;
 mod jobs;
 mod project;
 mod selection;
@@ -68,6 +69,7 @@ pub(crate) use builders::*;
 pub(crate) use disorder::*;
 pub(crate) use dock::*;
 pub(crate) use files::*;
+pub(crate) use heavy_render::*;
 pub(crate) use jobs::*;
 pub(crate) use project::*;
 pub(crate) use selection::*;
@@ -347,6 +349,10 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::ToggleDockArea(area) => toggle_dock_area(state, area, ctx),
         AppAction::ResetWorkbenchLayout => reset_workbench_layout(state),
         AppAction::DismissNotification => state.ui.notification = None,
+        AppAction::UseWireframeForHeavyEntry(entry_id) => {
+            use_wireframe_for_heavy_entry(state, entry_id)
+        }
+        AppAction::RenderHeavyEntryAtFull(entry_id) => render_heavy_entry_at_full(state, entry_id),
     }
     if let Some(before) = fingerprint_before
         && state.entries_fingerprint() != before

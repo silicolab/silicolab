@@ -1,5 +1,4 @@
 use std::f32::consts::TAU;
-use std::sync::LazyLock;
 
 use eframe::egui::Color32;
 use nalgebra::{Point3, Vector3};
@@ -14,39 +13,16 @@ use super::backend::{LineSegmentPrimitive, RenderScene};
 use super::scene::{RenderedAtom, RenderedBondSegment, ViewportGeometry};
 use super::{
     AROMATIC_DASH_LENGTH, AROMATIC_DASH_OFFSET, AROMATIC_DASH_RADIUS, AROMATIC_GAP_LENGTH,
-    BALL_RADIUS_SCALE, BOND_RADIAL_SEGMENTS, MULTI_BOND_OFFSET, MULTI_BOND_RADIUS,
-    POINT_DISC_SEGMENTS, POINT_LOD_ATOM_THRESHOLD, PrimitiveMeshVertex, PrimitiveTriangle,
-    SINGLE_BOND_RADIUS, SPHERE_LATITUDE_SEGMENTS, SPHERE_LONGITUDE_SEGMENTS, ViewportVisualState,
-    atom_ball_radius, atom_render_color_with_settings, atom_visible, darken, desaturate_color,
-    initial_cartoon_side, mix_color, normalize_vector3, orthogonalize_to_tangent,
+    MULTI_BOND_OFFSET, MULTI_BOND_RADIUS, POINT_DISC_SEGMENTS, PrimitiveMeshVertex,
+    PrimitiveTriangle, SINGLE_BOND_RADIUS, ViewportVisualState, atom_marker_radius,
+    atom_render_color_with_settings, atom_visible, bond_trim_radius, darken, initial_cartoon_side,
+    normalize_vector3,
 };
 
-#[derive(Clone, Copy)]
-struct CylinderSpan {
-    start: Point3<f32>,
-    end: Point3<f32>,
-}
-
-#[derive(Clone, Copy)]
-struct CylinderStyle {
-    radius: f32,
-    color: Color32,
-    orientation_hint: Vector3<f32>,
-}
-
-#[derive(Clone, Copy)]
-struct SplitCylinderStyle {
-    radius: f32,
-    start_color: Color32,
-    end_color: Color32,
-    orientation_hint: Vector3<f32>,
-}
-
-#[derive(Clone, Copy)]
-struct CylinderCaps {
-    start: bool,
-    end: bool,
-}
+mod solids;
+use solids::{
+    CylinderCaps, CylinderSpan, SplitCylinderStyle, append_sphere_triangles, append_split_cylinder,
+};
 
 #[derive(Clone, Copy)]
 struct TrimmedBondSegment {
@@ -101,26 +77,6 @@ pub(crate) fn build_ball_and_stick_scene(
         .filter(|atom| atom_draw[atom.index].visible)
         .collect::<Vec<_>>();
 
-    // Large systems (e.g. an explicitly solvated protein, dominated by bulk
-    // water) would tessellate into tens of millions of vertices and overflow
-    // the egui mesh buffer. Count only atoms whose style draws heavy geometry
-    // (spheres/cylinders); cheap dot/wireframe styles never trigger the
-    // fallback, so a user who simplifies the solvent keeps their chosen look.
-    let heavy_atoms = visible_atoms
-        .iter()
-        .filter(|atom| atom_draw[atom.index].style.is_heavy())
-        .count();
-    if heavy_atoms > POINT_LOD_ATOM_THRESHOLD {
-        return build_point_cloud_scene(
-            structure,
-            geometry,
-            &visible_atoms,
-            &atom_draw,
-            viewport,
-            selection,
-        );
-    }
-
     let mut opaque_triangles = Vec::new();
     let mut lines = Vec::new();
 
@@ -133,9 +89,10 @@ pub(crate) fn build_ball_and_stick_scene(
         if a.style.draws_stick_bonds() || b.style.draws_stick_bonds() {
             append_bond_triangles(
                 &mut opaque_triangles,
-                structure,
                 bond,
                 viewport,
+                bond_trim_radius(&structure.atoms[bond.a].element, a.style),
+                bond_trim_radius(&structure.atoms[bond.b].element, b.style),
                 a.color,
                 b.color,
             );
@@ -147,10 +104,9 @@ pub(crate) fn build_ball_and_stick_scene(
     for atom_projection in &visible_atoms {
         let index = atom_projection.index;
         let draw = atom_draw[index];
-        match draw.style.sphere_radius_scale() {
-            Some(scale) => {
-                let atom = &structure.atoms[index];
-                let mut radius = atom_ball_radius(&atom.element) * (scale / BALL_RADIUS_SCALE);
+        let atom = &structure.atoms[index];
+        match atom_marker_radius(&atom.element, draw.style) {
+            Some(mut radius) => {
                 if selection.primary() == Some(index) {
                     radius *= 1.18;
                 } else if selection.contains(index) {
@@ -175,51 +131,6 @@ pub(crate) fn build_ball_and_stick_scene(
             }
             None => {}
         }
-    }
-
-    let mut scene = RenderScene::default();
-    scene.push_lines(lines);
-    scene.push_opaque_meshes(opaque_triangles);
-    scene.sorted()
-}
-
-/// Lightweight "dots" representation for atom counts past
-/// [`POINT_LOD_ATOM_THRESHOLD`]. Atoms are drawn as flat screen-space discs and
-/// bonds as thin line segments — a few triangles per atom instead of hundreds.
-fn build_point_cloud_scene(
-    structure: &Structure,
-    geometry: &ViewportGeometry,
-    visible_atoms: &[&RenderedAtom],
-    atom_draw: &[AtomDraw],
-    viewport: &Projector,
-    selection: &AtomSelection,
-) -> RenderScene {
-    let mut opaque_triangles = Vec::new();
-    let mut lines = Vec::new();
-
-    for bond in &geometry.bonds {
-        let a = atom_draw[bond.a];
-        let b = atom_draw[bond.b];
-        if !(a.visible || b.visible) {
-            continue;
-        }
-        push_split_bond_line(&mut lines, viewport, bond, structure, a.color, b.color);
-    }
-
-    for atom_projection in visible_atoms {
-        let index = atom_projection.index;
-        let mut radius = point_disc_radius(atom_projection.scale);
-        if selection.primary() == Some(index) {
-            radius *= 1.6;
-        } else if selection.contains(index) {
-            radius *= 1.3;
-        }
-        append_atom_point(
-            &mut opaque_triangles,
-            atom_projection,
-            radius,
-            atom_draw[index].color,
-        );
     }
 
     let mut scene = RenderScene::default();
@@ -304,14 +215,14 @@ fn append_atom_point(
 
 fn append_bond_triangles(
     triangles: &mut Vec<PrimitiveTriangle>,
-    structure: &Structure,
     bond: &RenderedBondSegment,
     viewport: &Projector,
+    start_trim: f32,
+    end_trim: f32,
     start_color: Color32,
     end_color: Color32,
 ) {
-    let Some(trimmed) = trimmed_bond_segment(structure, bond.a, bond.b, bond.start, bond.end)
-    else {
+    let Some(trimmed) = trimmed_bond_segment(bond.start, bond.end, start_trim, end_trim) else {
         return;
     };
     let offset_direction =
@@ -435,193 +346,19 @@ fn append_bond_triangles(
     }
 }
 
-fn append_sphere_triangles(
-    triangles: &mut Vec<PrimitiveTriangle>,
-    viewport: &Projector,
-    center: Point3<f32>,
-    radius: f32,
-    color: Color32,
-) {
-    let shade = surface_shade(color);
-    let mut rings = Vec::with_capacity(SPHERE_LATITUDE_SEGMENTS + 1);
-    for latitude in 0..=SPHERE_LATITUDE_SEGMENTS {
-        let polar = std::f32::consts::PI * latitude as f32 / SPHERE_LATITUDE_SEGMENTS as f32;
-        let (sin_polar, cos_polar) = polar.sin_cos();
-        let mut ring = Vec::with_capacity(SPHERE_LONGITUDE_SEGMENTS + 1);
-        for longitude in 0..=SPHERE_LONGITUDE_SEGMENTS {
-            let azimuth = TAU * longitude as f32 / SPHERE_LONGITUDE_SEGMENTS as f32;
-            let (sin_azimuth, cos_azimuth) = azimuth.sin_cos();
-            let normal = Vector3::new(cos_azimuth * sin_polar, cos_polar, sin_azimuth * sin_polar);
-            ring.push(primitive_vertex(
-                viewport,
-                center + normal * radius,
-                normal,
-                shade,
-            ));
-        }
-        rings.push(ring);
-    }
-
-    for latitude in 0..SPHERE_LATITUDE_SEGMENTS {
-        for longitude in 0..SPHERE_LONGITUDE_SEGMENTS {
-            let a = rings[latitude][longitude];
-            let b = rings[latitude + 1][longitude];
-            let c = rings[latitude + 1][longitude + 1];
-            let d = rings[latitude][longitude + 1];
-
-            if latitude == 0 {
-                triangles.push(super::primitive_triangle(a, b, c));
-            } else if latitude + 1 == SPHERE_LATITUDE_SEGMENTS {
-                triangles.push(super::primitive_triangle(a, b, d));
-            } else {
-                triangles.push(super::primitive_triangle(a, b, c));
-                triangles.push(super::primitive_triangle(a, c, d));
-            }
-        }
-    }
-}
-
-fn append_split_cylinder(
-    triangles: &mut Vec<PrimitiveTriangle>,
-    viewport: &Projector,
-    span: CylinderSpan,
-    style: SplitCylinderStyle,
-    caps: CylinderCaps,
-) {
-    let midpoint = Point3::from((span.start.coords + span.end.coords) * 0.5);
-    append_cylinder_triangles(
-        triangles,
-        viewport,
-        CylinderSpan {
-            start: span.start,
-            end: midpoint,
-        },
-        CylinderStyle {
-            radius: style.radius,
-            color: style.start_color,
-            orientation_hint: style.orientation_hint,
-        },
-        CylinderCaps {
-            start: caps.start,
-            end: false,
-        },
-    );
-    append_cylinder_triangles(
-        triangles,
-        viewport,
-        CylinderSpan {
-            start: midpoint,
-            end: span.end,
-        },
-        CylinderStyle {
-            radius: style.radius,
-            color: style.end_color,
-            orientation_hint: style.orientation_hint,
-        },
-        CylinderCaps {
-            start: false,
-            end: caps.end,
-        },
-    );
-}
-
-fn append_cylinder_triangles(
-    triangles: &mut Vec<PrimitiveTriangle>,
-    viewport: &Projector,
-    span: CylinderSpan,
-    style: CylinderStyle,
-    caps: CylinderCaps,
-) {
-    let axis_vector = span.end - span.start;
-    let Some(axis) = axis_vector.try_normalize(0.0001) else {
-        return;
-    };
-    let side = orthogonalize_to_tangent(style.orientation_hint, axis, initial_cartoon_side(axis));
-    let normal = normalize_vector3(axis.cross(&side), Vector3::new(0.0, 1.0, 0.0));
-    let shade = surface_shade(style.color);
-    let mut start_ring = Vec::with_capacity(BOND_RADIAL_SEGMENTS);
-    let mut end_ring = Vec::with_capacity(BOND_RADIAL_SEGMENTS);
-
-    for index in 0..BOND_RADIAL_SEGMENTS {
-        let angle = TAU * index as f32 / BOND_RADIAL_SEGMENTS as f32;
-        let (sin_angle, cos_angle) = angle.sin_cos();
-        let radial = side * cos_angle + normal * sin_angle;
-        start_ring.push(primitive_vertex(
-            viewport,
-            span.start + radial * style.radius,
-            radial,
-            shade,
-        ));
-        end_ring.push(primitive_vertex(
-            viewport,
-            span.end + radial * style.radius,
-            radial,
-            shade,
-        ));
-    }
-
-    for index in 0..BOND_RADIAL_SEGMENTS {
-        let next_index = (index + 1) % BOND_RADIAL_SEGMENTS;
-        triangles.push(super::primitive_triangle(
-            start_ring[index],
-            end_ring[index],
-            end_ring[next_index],
-        ));
-        triangles.push(super::primitive_triangle(
-            start_ring[index],
-            end_ring[next_index],
-            start_ring[next_index],
-        ));
-    }
-
-    if caps.start {
-        append_cylinder_cap(
-            triangles,
-            viewport,
-            span.start,
-            -axis,
-            &start_ring,
-            style.color,
-        );
-    }
-    if caps.end {
-        append_cylinder_cap(triangles, viewport, span.end, axis, &end_ring, style.color);
-    }
-}
-
-fn append_cylinder_cap(
-    triangles: &mut Vec<PrimitiveTriangle>,
-    viewport: &Projector,
-    center: Point3<f32>,
-    normal: Vector3<f32>,
-    ring: &[PrimitiveMeshVertex],
-    color: Color32,
-) {
-    let center_vertex =
-        primitive_vertex(viewport, center, normal, surface_shade(darken(color, 0.06)));
-    for index in 0..ring.len() {
-        let next_index = (index + 1) % ring.len();
-        triangles.push(super::primitive_triangle(
-            center_vertex,
-            ring[next_index],
-            ring[index],
-        ));
-    }
-}
-
 fn trimmed_bond_segment(
-    structure: &Structure,
-    start_index: usize,
-    end_index: usize,
     start: Point3<f32>,
     end: Point3<f32>,
+    start_radius: f32,
+    end_radius: f32,
 ) -> Option<TrimmedBondSegment> {
     let bond_vector = end - start;
     let axis = bond_vector.try_normalize(0.0001)?;
     let bond_length = bond_vector.norm();
-    let start_trim =
-        atom_ball_radius(&structure.atoms[start_index].element).min(bond_length * 0.35);
-    let end_trim = atom_ball_radius(&structure.atoms[end_index].element).min(bond_length * 0.35);
+    // Never eat more than a third of the bond at either end, so a short bond
+    // between two large atoms still shows some cylinder.
+    let start_trim = start_radius.min(bond_length * 0.35);
+    let end_trim = end_radius.min(bond_length * 0.35);
     if bond_length <= start_trim + end_trim + 0.05 {
         return None;
     }
@@ -659,82 +396,6 @@ fn bond_offset_direction(
     } else {
         initial_cartoon_side(axis)
     }
-}
-
-/// Paper/shadow tints used by the hand-drawn shading model. Constant across the
-/// whole frame.
-const PAPER_TINT: Color32 = Color32::from_rgb(246, 243, 236);
-const SHADOW_TINT: Color32 = Color32::from_rgb(120, 129, 144);
-
-/// View-space lighting directions. They are identical for every vertex of a
-/// frame, so they are normalized once on first use rather than per vertex.
-static LIGHT_DIRECTION: LazyLock<Vector3<f32>> = LazyLock::new(|| {
-    normalize_vector3(Vector3::new(-0.35, 0.45, 1.0), Vector3::new(0.0, 0.0, 1.0))
-});
-static HALF_VECTOR: LazyLock<Vector3<f32>> = LazyLock::new(|| {
-    normalize_vector3(
-        *LIGHT_DIRECTION + Vector3::new(0.0, 0.0, 1.0),
-        Vector3::new(0.0, 0.0, 1.0),
-    )
-});
-
-/// The normal-independent half of the surface shading. These color mixes depend
-/// only on a primitive's base color, so they are computed once per
-/// sphere/cylinder and reused across its (hundreds of) surface vertices instead
-/// of being recomputed per vertex.
-#[derive(Clone, Copy)]
-struct SurfaceShade {
-    washed: Color32,
-}
-
-fn surface_shade(base_color: Color32) -> SurfaceShade {
-    let neutral = desaturate_color(base_color, 0.42);
-    let softened = mix_color(base_color, neutral, 0.34);
-    let washed = mix_color(softened, PAPER_TINT, 0.14);
-    SurfaceShade { washed }
-}
-
-fn primitive_vertex(
-    viewport: &Projector,
-    position: Point3<f32>,
-    normal: Vector3<f32>,
-    shade: SurfaceShade,
-) -> PrimitiveMeshVertex {
-    let projected = viewport.project(position);
-    PrimitiveMeshVertex {
-        pos: projected.pos,
-        depth: projected.depth,
-        color: shade_surface_color(viewport, shade, normal),
-    }
-}
-
-fn shade_surface_color(
-    viewport: &Projector,
-    shade: SurfaceShade,
-    surface_normal: Vector3<f32>,
-) -> Color32 {
-    let view_normal = normalize_vector3(
-        viewport.rotate_to_view(surface_normal),
-        Vector3::new(0.0, 0.0, 1.0),
-    );
-    let light_direction = *LIGHT_DIRECTION;
-    let half_vector = *HALF_VECTOR;
-    let diffuse = view_normal.dot(&light_direction).max(0.0);
-    let rim = (1.0 - view_normal.z.abs()).powi(2) * 0.10;
-    let soft_highlight = view_normal.dot(&half_vector).max(0.0).powf(5.5) * 0.07;
-    let washed = shade.washed;
-    let brightness = (0.46 + diffuse * 0.22 + rim * 0.55).clamp(0.0, 1.0);
-    let shaded = if brightness >= 0.5 {
-        super::lighten(washed, (brightness - 0.5) * 0.42)
-    } else {
-        mix_color(
-            super::darken(washed, (0.5 - brightness) * 0.38),
-            SHADOW_TINT,
-            0.18,
-        )
-    };
-
-    mix_color(shaded, PAPER_TINT, soft_highlight)
 }
 
 #[cfg(test)]
@@ -816,16 +477,6 @@ mod tests {
     }
 
     #[test]
-    fn large_systems_fall_back_to_point_dots() {
-        let atom_count = POINT_LOD_ATOM_THRESHOLD + 1;
-        let count = scene_triangle_count(atom_count);
-        // Each atom becomes a flat disc of POINT_DISC_SEGMENTS triangles.
-        assert_eq!(count, atom_count * POINT_DISC_SEGMENTS);
-        // And the simplified scene stays well under the GPU buffer guard.
-        assert!(count < super::super::MAX_RENDER_TRIANGLES);
-    }
-
-    #[test]
     fn hidden_style_draws_nothing() {
         let count = scene_triangle_count_with(40, &all_atoms_styled(40, AtomStyle::Hidden));
         assert_eq!(count, 0);
@@ -845,16 +496,6 @@ mod tests {
         // point is that both draw full spheres and dwarf the dots styles.
         assert_eq!(spheres, balls);
         assert!(spheres > 40 * POINT_DISC_SEGMENTS);
-    }
-
-    #[test]
-    fn cheap_styles_skip_the_large_system_fallback() {
-        // A huge solvent box set to Dots must NOT be forced through the point
-        // fallback by accident — it should already be points, one disc each.
-        let atom_count = POINT_LOD_ATOM_THRESHOLD * 2;
-        let count =
-            scene_triangle_count_with(atom_count, &all_atoms_styled(atom_count, AtomStyle::Point));
-        assert_eq!(count, atom_count * POINT_DISC_SEGMENTS);
     }
 
     #[test]
