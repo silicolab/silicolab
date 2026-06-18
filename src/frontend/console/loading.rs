@@ -19,6 +19,67 @@ pub(crate) fn open_command(
     Ok(format!("opened {}", path.display()))
 }
 
+/// `activate <#id|name>` — make an already-open entry the active one so the
+/// next render/md/qm command targets it. `open`/`fetch`/`sketch` only ever
+/// *create* a new active entry; this is the way to switch back to an existing
+/// one without re-importing it. Entry ids are shown by `inspect` and echoed by
+/// `sketch`/`open` (e.g. "entry #2").
+pub(crate) fn activate_command(state: &mut AppState, args: &[String]) -> Result<String> {
+    let reference = args
+        .first()
+        .ok_or_else(|| anyhow!("usage: activate <#id|name>"))?;
+    let entry_id = resolve_entry_reference(state, reference)?;
+    state.show_entry(entry_id);
+    let name = state
+        .entries
+        .entry(entry_id)
+        .map(|entry| entry.name.clone())
+        .unwrap_or_default();
+    Ok(format!("activated entry #{entry_id} ({name})"))
+}
+
+/// Resolve a user-facing entry reference to an entry id. A `#`-prefixed or bare
+/// integer is treated as an entry id; anything else is matched against entry
+/// names. Name matches must be unambiguous — duplicates (e.g. two `O=O` entries)
+/// report the candidate ids so the caller can disambiguate by id.
+fn resolve_entry_reference(state: &AppState, reference: &str) -> Result<u64> {
+    if state.entries.records.is_empty() {
+        bail!("no entries are open");
+    }
+    let trimmed = reference.trim();
+    let id_token = trimmed.strip_prefix('#').unwrap_or(trimmed);
+    if let Ok(id) = id_token.parse::<u64>() {
+        if state.entries.entry(id).is_some() {
+            return Ok(id);
+        }
+        bail!("no open entry with id #{id}; run `inspect` to list open entries");
+    }
+
+    let matches: Vec<u64> = state
+        .entries
+        .records
+        .iter()
+        .filter(|entry| entry.name == trimmed)
+        .map(|entry| entry.id)
+        .collect();
+    match matches.as_slice() {
+        [] => bail!("no open entry named `{trimmed}`; run `inspect` to list open entries"),
+        [id] => Ok(*id),
+        many => {
+            let ids = many
+                .iter()
+                .map(|id| format!("#{id}"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!(
+                "`{trimmed}` matches {} entries ({ids}); activate by id, e.g. `activate #{}`",
+                many.len(),
+                many[0]
+            )
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ParsedFetchCommand {
     pub(crate) id: String,
