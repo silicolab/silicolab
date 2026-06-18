@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fs,
+    io::Write,
     path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -228,10 +229,10 @@ pub struct AppConfig {
     #[serde(default = "default_auto_install_updates")]
     pub auto_install_updates: bool,
     /// App-wide default visual appearance applied to newly built or loaded
-    /// structures (the Representation settings page). Deliberately **not**
-    /// `#[serde(default)]` (pre-release cleanliness): a `settings.json` written
-    /// before this field existed fails to parse and falls back to
-    /// `AppConfig::default()` once. See [`crate::backend::representation`].
+    /// structures (the Representation settings page). `#[serde(default)]` so a
+    /// missing or reshaped field degrades to its own default instead of failing
+    /// the whole parse and resetting every other setting.
+    #[serde(default)]
     pub representation: RepresentationPrefs,
     /// In-app LLM assistant selection (provider/model/effort). Never stores the
     /// API key. `#[serde(default)]` so an older `settings.json` still parses.
@@ -386,8 +387,47 @@ pub fn recent_projects_path() -> PathBuf {
     config_dir().join("recent_projects.json")
 }
 
-pub fn load_config() -> AppConfig {
-    load_config_from(&settings_path()).unwrap_or_default()
+/// Load the app config. A missing file is a normal first run (silent default). A
+/// file that exists but fails to parse is preserved (see [`back_up_corrupt_file`])
+/// and a warning is returned, rather than silently resetting every setting — the
+/// silent reset is what made an interrupted write look like the app randomly
+/// forgetting the assistant model.
+pub fn load_config() -> (AppConfig, Option<String>) {
+    let path = settings_path();
+    if !path.exists() {
+        return (AppConfig::default(), None);
+    }
+    match load_config_from(&path) {
+        Ok(config) => (config, None),
+        Err(error) => {
+            let warning = match back_up_corrupt_file(&path) {
+                Ok(backup) => format!(
+                    "Settings were unreadable and have been reset to defaults; \
+                     the previous file is kept at {} ({error}).",
+                    backup.display()
+                ),
+                Err(backup_error) => format!(
+                    "Settings were unreadable and have been reset to defaults \
+                     ({error}; could not preserve the old file: {backup_error})."
+                ),
+            };
+            (AppConfig::default(), Some(warning))
+        }
+    }
+}
+
+/// Move a corrupt config file aside to `<name>.corrupt` (numbering on collision)
+/// so the next save can write a fresh file without destroying the bad one.
+fn back_up_corrupt_file(path: &Path) -> Result<PathBuf> {
+    let mut backup = path.with_extension("json.corrupt");
+    let mut n = 1;
+    while backup.exists() {
+        backup = path.with_extension(format!("json.corrupt.{n}"));
+        n += 1;
+    }
+    fs::rename(path, &backup)
+        .with_context(|| format!("failed to move {} aside", path.display()))?;
+    Ok(backup)
 }
 
 pub fn save_config(config: &AppConfig) -> Result<()> {
@@ -430,12 +470,29 @@ pub fn load_config_from(path: &Path) -> Result<AppConfig> {
 /// Serialize an `AppConfig` to an arbitrary path. Used by the settings saver and
 /// by Advanced ▸ Export.
 pub fn save_config_to(path: &Path, config: &AppConfig) -> Result<()> {
+    let source = serde_json::to_string_pretty(config)?;
+    write_atomic(path, source.as_bytes())
+}
+
+/// Write `contents` to `path` atomically: temp file (beside the target so the
+/// rename stays on one volume) → fsync → rename over the target. A plain
+/// `fs::write` truncates before writing, so a crash mid-write leaves a corrupt
+/// file that resets every setting on the next launch.
+fn write_atomic(path: &Path, contents: &[u8]) -> Result<()> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
     }
-    let source = serde_json::to_string_pretty(config)?;
-    fs::write(path, source).with_context(|| format!("failed to write {}", path.display()))
+    let tmp = path.with_extension("tmp");
+    {
+        let mut file = fs::File::create(&tmp)
+            .with_context(|| format!("failed to create {}", tmp.display()))?;
+        file.write_all(contents)
+            .with_context(|| format!("failed to write {}", tmp.display()))?;
+        file.sync_all()
+            .with_context(|| format!("failed to flush {}", tmp.display()))?;
+    }
+    fs::rename(&tmp, path).with_context(|| format!("failed to replace {}", path.display()))
 }
 
 fn load_recent_projects_from(path: &Path) -> Result<Vec<RecentProject>> {
@@ -474,7 +531,7 @@ mod tests {
 
     use super::{
         AppConfig, ColorScheme, ComputeTarget, RecentProject, RemoteHost, ThemeMode,
-        load_config_from, remember_recent_project,
+        back_up_corrupt_file, load_config_from, remember_recent_project, save_config_to,
     };
     use crate::engines::registry::EngineLaunch;
 
@@ -562,6 +619,76 @@ mod tests {
                 .as_os_str()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn save_config_to_round_trips_and_leaves_no_temp() {
+        let dir = std::env::temp_dir().join("silicolab-cfg-roundtrip");
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("settings.json");
+
+        let config = AppConfig {
+            assistant: super::AssistantConfig {
+                provider: "openai".to_string(),
+                model: "gpt-5.1".to_string(),
+                ..super::AssistantConfig::default()
+            },
+            ..AppConfig::default()
+        };
+        save_config_to(&path, &config).expect("atomic save");
+
+        // No temp file left behind after the rename.
+        assert!(!path.with_extension("tmp").exists());
+        let back = load_config_from(&path).expect("load back");
+        assert_eq!(back.assistant.provider, "openai");
+        assert_eq!(back.assistant.model, "gpt-5.1");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupt_file_is_preserved_not_destroyed() {
+        let dir = std::env::temp_dir().join("silicolab-cfg-corrupt");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, b"{ truncated json").expect("write corrupt");
+
+        let backup = back_up_corrupt_file(&path).expect("back up corrupt file");
+
+        // Bad file moved aside, original path freed for a fresh write.
+        assert!(backup.exists());
+        assert!(!path.exists());
+        assert_eq!(
+            std::fs::read(&backup).expect("read backup"),
+            b"{ truncated json"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn config_parses_without_representation_field() {
+        // A file missing `representation` must still parse (field defaults) rather
+        // than failing the whole load and resetting every other setting.
+        let json = r#"{
+            "default_project_dir": "/tmp/p",
+            "last_project_path": null,
+            "closed_to_scratch": false,
+            "assistant": { "enabled": true, "provider": "openai",
+                           "model": "gpt-5.1", "effort": "high", "base_url": null }
+        }"#;
+        let dir = std::env::temp_dir().join("silicolab-cfg-norepr");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("settings.json");
+        std::fs::write(&path, json).expect("write");
+
+        let config = load_config_from(&path).expect("parse despite missing representation");
+        assert_eq!(config.assistant.model, "gpt-5.1");
+        assert_eq!(config.representation, super::RepresentationPrefs::default());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

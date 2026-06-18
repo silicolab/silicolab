@@ -296,6 +296,15 @@ fn install_system_fonts(fonts: &mut egui::FontDefinitions) {
     }
 }
 
+/// Join startup notices into the one-message banner so an earlier warning (e.g.
+/// "settings were reset") is not clobbered by a later one (crash recovery).
+fn append_message(existing: Option<String>, next: &str) -> String {
+    match existing {
+        Some(prev) if !prev.is_empty() => format!("{prev} — {next}"),
+        _ => next.to_string(),
+    }
+}
+
 pub struct SilicoLabApp {
     state: AppState,
     last_viewport_title: String,
@@ -308,9 +317,9 @@ pub struct SilicoLabApp {
 
 impl SilicoLabApp {
     fn new(structure: Structure, source_path: Option<PathBuf>) -> Self {
-        let mut config = load_config();
+        // `load_config` may return a warning (corrupt settings backed up) to show.
+        let (mut config, mut startup_message) = load_config();
         let mut recent_projects = load_recent_projects();
-        let mut startup_message = None;
         let mut state = if !config.closed_to_scratch {
             if let Some(last_project_path) = config.last_project_path.clone() {
                 match open_project(&last_project_path) {
@@ -327,10 +336,10 @@ impl SilicoLabApp {
                             Some(snapshot),
                         );
                         if recovered_from_crash {
-                            startup_message = Some(
-                                "Recovered project: previous session did not close cleanly"
-                                    .to_string(),
-                            );
+                            startup_message = Some(append_message(
+                                startup_message.take(),
+                                "Recovered project: previous session did not close cleanly",
+                            ));
                         }
                         if let Some(message) = startup_message.take() {
                             state.set_message(message);
@@ -343,8 +352,10 @@ impl SilicoLabApp {
                         };
                     }
                     Err(error) => {
-                        startup_message =
-                            Some(format!("Last project unavailable; opened Scratch: {error}"));
+                        startup_message = Some(append_message(
+                            startup_message.take(),
+                            &format!("Last project unavailable; opened Scratch: {error}"),
+                        ));
                         config.last_project_path = None;
                         AppState::scratch(config, recent_projects)
                     }
