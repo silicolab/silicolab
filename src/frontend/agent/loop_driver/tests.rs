@@ -248,11 +248,11 @@ fn changing_base_url_clears_stale_model_fetch_error() {
     let mut state = AppState::scratch(Default::default(), Vec::new());
     state.ui.agent.model_fetch = ModelFetchStatus::Error("io: No route to host".to_string());
 
-    set_assistant_base_url(&mut state, "https://llm.ducksoft.site/v1");
+    set_assistant_base_url(&mut state, "https://api.example.com/v1");
 
     assert_eq!(
         state.config.assistant.base_url.as_deref(),
-        Some("https://llm.ducksoft.site/v1")
+        Some("https://api.example.com/v1")
     );
     assert_eq!(state.ui.agent.model_fetch, ModelFetchStatus::Idle);
 }

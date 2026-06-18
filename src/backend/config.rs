@@ -152,6 +152,14 @@ pub struct AssistantConfig {
     /// the provider's registry default. Non-secret.
     #[serde(default)]
     pub base_url: Option<String>,
+    /// Per-model override for whether the active OpenAI-compatible model accepts
+    /// a reasoning-effort knob. `None` uses the registry heuristic (known model
+    /// → its declared capability; unknown / free-typed id → assume yes); `Some`
+    /// pins it. Lets users point a custom endpoint at a reasoning model the
+    /// built-in table can't know about — or silence the picker for one that
+    /// rejects the knob. Reset when the model or provider changes. Non-secret.
+    #[serde(default)]
+    pub effort_override: Option<bool>,
 }
 
 impl Default for AssistantConfig {
@@ -164,6 +172,7 @@ impl Default for AssistantConfig {
             model: "claude-sonnet-4-6".to_string(),
             effort: crate::io::llm::types::Effort::High,
             base_url: None,
+            effort_override: None,
         }
     }
 }
