@@ -230,6 +230,20 @@ fn view_script_export_roundtrips() {
 }
 
 #[test]
+fn sketch_rejects_invalid_smiles_with_a_hint() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    // `HH` is not valid SMILES (hydrogen must be bracketed); the user hit this
+    // trying to build H2. The error should point at the explicit-atom form.
+    let error = execute_console_line(&mut state, "sketch HH").unwrap_err();
+    let text = error.to_string();
+    assert!(text.contains("could not sketch `HH`"), "error: {text}");
+    assert!(
+        text.contains("[H][H]"),
+        "error should hint the H2 SMILES: {text}"
+    );
+}
+
+#[test]
 fn activate_switches_the_active_entry_by_id() {
     let mut state = AppState::scratch(Default::default(), Vec::new());
     let fixture = write_console_fixture("activate", CONSOLE_TEST_PDB);

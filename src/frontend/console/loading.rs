@@ -167,7 +167,12 @@ pub(crate) fn sketch_command(state: &mut AppState, args: &[String]) -> Result<St
         .first()
         .ok_or_else(|| anyhow!("usage: sketch <SMILES>"))?;
     let structure = crate::workflows::sketch_to_structure::smiles_to_structure(smiles, None)
-        .with_context(|| format!("could not sketch `{smiles}`"))?;
+        .with_context(|| {
+            format!(
+                "could not sketch `{smiles}` — check the SMILES; diatomics need explicit \
+                 atoms (H₂ is `[H][H]`, O₂ is `O=O`, N₂ is `N#N`)"
+            )
+        })?;
     let atom_count = structure.atoms.len();
     let save_path = crate::io::structure_io::default_structure_save_path(&structure, None);
     let entry_id = state.entries.add_entry(structure, None, save_path);
