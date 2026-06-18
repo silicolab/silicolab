@@ -96,8 +96,20 @@ pub(crate) fn maybe_auto_install_update(state: &mut AppState) {
         || state.ui.available_update.is_none()
         || state.jobs.self_update.is_some()
         || !matches!(state.ui.self_update, SelfUpdateStatus::Idle)
-        || !crate::io::self_update::is_self_update_supported()
     {
+        return;
+    }
+    // The user opted into auto-install and an update is waiting, but a read-only
+    // install location can never self-replace. Surface that (this runs at most
+    // once per discovered update) and point at the manual fallback, rather than
+    // returning silently as if nothing were pending.
+    if !crate::io::self_update::is_self_update_supported() {
+        state.set_message(
+            "Auto-install is unavailable here because SilicoLab's install location \
+             is read-only. Use the update link in the title bar to download the new \
+             version manually."
+                .to_string(),
+        );
         return;
     }
     let version = state
