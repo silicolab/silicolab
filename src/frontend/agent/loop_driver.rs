@@ -62,6 +62,22 @@ the right step; explain why briefly.
 - If a command fails, read the error in the tool result and recover or ask the user.
 - When the task is done, stop and say so in one line.
 
+Working with multiple entries:
+- Every command acts on the ACTIVE entry only. `open`/`fetch`/`sketch` each create a NEW \
+active entry; to act on a different open entry, switch to it first with \
+`activate <#id|name>` (ids and the active marker come from `inspect`). Do NOT re-sketch or \
+re-open a structure you already built just to make it active — that leaves duplicates.
+- When a task spans several molecules (e.g. a reaction), build them all, then `activate` \
+each in turn to run its calculation.
+
+Domain notes:
+- Diatomics need explicit SMILES: H₂ is `[H][H]`, O₂ is `O=O` (triplet ground state — set \
+`--spin 3`), N₂ is `N#N`. A bare `O` is water, `C` is methane.
+- A `qm energy` result is the electronic energy near 0 K, not an enthalpy. For reaction, \
+formation, or combustion energies, run `qm freq` on each species to add zero-point and \
+thermal corrections before comparing to an experimental ΔH, and state the method/basis \
+caveats (def2-svp is a small basis) in the result.
+
 The full command catalog follows.";
 
 /// The static, cacheable system prompt: persona + the `.sls` command catalog.
