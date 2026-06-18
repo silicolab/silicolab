@@ -1043,6 +1043,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "docking"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "155d37c662c343070a132c16c9047344bb770be3ffb9c441fa5321bcdb0dfcf5"
+
+[[package]]
 name = "document-features"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5141,6 +5147,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
+ "docking",
  "eframe",
  "egui-phosphor",
  "egui_commonmark",

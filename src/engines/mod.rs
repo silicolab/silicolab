@@ -1,3 +1,4 @@
+pub mod docking;
 pub mod forcefield;
 pub mod gromacs;
 pub mod process;

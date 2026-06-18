@@ -101,6 +101,7 @@ pub struct UiState {
     pub pending_md_system: Option<MdSystemPrompt>,
     pub pending_md_run: Option<MdRunPrompt>,
     pub pending_disorder: Option<DisorderedSystemPrompt>,
+    pub pending_docking: Option<DockingPrompt>,
     pub pending_pdb_fetch: Option<String>,
     /// The single active non-modal notification (a message plus optional action
     /// buttons), or `None`. Posting a new one replaces any current one.
@@ -202,6 +203,7 @@ impl Default for UiState {
             pending_md_system: None,
             pending_md_run: None,
             pending_disorder: None,
+            pending_docking: None,
             pending_pdb_fetch: None,
             notification: None,
             pending_heavy_gate: None,
@@ -604,6 +606,7 @@ impl AppState {
         self.ui.pending_md_system = None;
         self.ui.pending_md_run = None;
         self.ui.pending_disorder = None;
+        self.ui.pending_docking = None;
         self.ui.editor = None;
         self.ui.reticular_builder = None;
         self.ui.nanosheet_builder = None;
@@ -687,6 +690,7 @@ impl AppState {
         self.jobs.cancel_optimization();
         self.jobs.cancel_disorder();
         self.jobs.cancel_qm();
+        self.jobs.cancel_docking();
         self.jobs.cancel_engine();
     }
 

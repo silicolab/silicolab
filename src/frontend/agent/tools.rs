@@ -26,10 +26,11 @@ pub fn tool_defs() -> Vec<ToolDef> {
             name: "run_command".to_string(),
             description: "Run one SilicoLab `.sls` console command (e.g. `open 1abc.pdb`, \
                 `fetch 4hhb`, `sketch CCO`, `view background white`, `color chain A red`, \
-                `representation cartoon`, `hydrogen add`, `md build`, `qm energy`). One \
-                command per call; this is the same command line a user types in the console. \
-                Destructive or expensive commands (delete, save, md, qm, running a script) \
-                require the user to confirm before they run."
+                `representation cartoon`, `hydrogen add`, `md build`, `qm energy`, \
+                `dock --receptor active --ligand 2`). One command per call; this is the same \
+                command line a user types in the console. Destructive or expensive commands \
+                (delete, save, md, qm, dock, score, running a script) require the user to \
+                confirm before they run."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -117,7 +118,10 @@ pub fn needs_confirmation(call: &ToolCall) -> bool {
 /// delete, save/overwrite, md/qm runs, and script execution are gated.
 pub fn command_needs_confirmation(command: &str) -> bool {
     let verb = command.split_whitespace().next().unwrap_or_default();
-    matches!(verb, "delete" | "save" | "md" | "qm" | "run" | "source")
+    matches!(
+        verb,
+        "delete" | "save" | "md" | "qm" | "dock" | "score" | "run" | "source"
+    )
 }
 
 /// Execute one tool call against `AppState`, returning its textual result.
@@ -398,6 +402,12 @@ mod tests {
         assert!(needs_confirmation(&call("save image out.png")));
         assert!(needs_confirmation(&call("md build")));
         assert!(needs_confirmation(&call("qm energy")));
+        assert!(needs_confirmation(&call(
+            "dock --receptor active --ligand 2"
+        )));
+        assert!(needs_confirmation(&call(
+            "score --receptor active --ligand 2"
+        )));
         assert!(needs_confirmation(&call("run setup.sls")));
     }
 

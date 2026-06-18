@@ -6,6 +6,7 @@ mod cli;
 pub(crate) mod console;
 mod disorder_commands;
 mod dispatcher;
+mod docking_commands;
 mod glass;
 mod jobs;
 mod md_commands;

@@ -13,7 +13,8 @@ Keep these rules short, practical, and focused on the invariants that are expens
 
 # Architecture invariants
 
-* Before adding a new command, action, engine setting, or persistence path, search for the existing pattern and extend it instead of creating a parallel path.
+* Before adding a new command, action, engine setting, or persistence path, search for the existing pattern and extend it instead of creating a parallel path. `docs/adding-a-feature.md` maps each feature archetype to the module to mirror and the sites to touch.
+* A new structure IO format touches four sites: `io/structure_format.rs`, `io/structure_codec.rs`, `io/formats/mod.rs`, and `io/structure_paths.rs::READABLE_EXTENSIONS` — the last is a plain array, so the compiler will NOT flag it if you forget it.
 * The GUI and CLI share the same `.sls` command definitions in `src/frontend/console.rs`. Add or change a script command once there; do not create separate GUI-only and CLI-only implementations.
 * Higher layers may depend on lower layers only; lower layers must not import or call higher layers. Layer order, lowest to highest:
 

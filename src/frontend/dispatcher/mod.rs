@@ -55,6 +55,7 @@ use crate::{
 mod builders;
 mod disorder;
 mod dock;
+mod docking;
 mod files;
 mod heavy_render;
 mod jobs;
@@ -68,6 +69,7 @@ mod tasks;
 pub(crate) use builders::*;
 pub(crate) use disorder::*;
 pub(crate) use dock::*;
+pub(crate) use docking::*;
 pub(crate) use files::*;
 pub(crate) use heavy_render::*;
 pub(crate) use jobs::*;
@@ -156,6 +158,8 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::CancelOptimizationPrompt => cancel_pending_optimization_request(state),
         AppAction::StartQmCalculation => start_pending_qm(state),
         AppAction::CancelQmPrompt => cancel_pending_qm_request(state),
+        AppAction::StartDocking => start_pending_docking(state),
+        AppAction::CancelDockingPrompt => cancel_pending_docking_request(state),
         AppAction::ConfirmSupercell => confirm_pending_supercell(state),
         AppAction::CancelSupercellPrompt => cancel_pending_supercell_request(state),
         AppAction::ConfirmProteinPrep => confirm_pending_protein_prep(state),

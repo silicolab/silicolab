@@ -18,6 +18,7 @@ pub enum TaskKind {
     AddHydrogens,
     RecomputeBonds,
     RunMd,
+    RunDocking,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +34,7 @@ pub enum TaskPanelKind {
     MdSystemPrompt,
     DisorderedSystemPrompt,
     MdRunPrompt,
+    DockingPrompt,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -322,6 +324,21 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         panel: TaskPanelKind::MdRunPrompt,
         outcome: TaskOutcome::CreateEntry,
         backend: TaskBackend::ExternalEngine,
+        uses_run_directory: true,
+    },
+    TaskController {
+        id: "dock-ligand",
+        title: "Molecular Docking",
+        short_title: "Dock Ligand",
+        theme: "Molecular Docking",
+        method: "AutoDock Vina Search",
+        application: "Ligand-Receptor Binding",
+        description: "Dock a ligand into a receptor within a search box and rank the binding poses by \
+                      affinity, using the built-in pure-Rust Vina engine. Each pose is added as a new entry.",
+        kind: TaskKind::RunDocking,
+        panel: TaskPanelKind::DockingPrompt,
+        outcome: TaskOutcome::CreateEntry,
+        backend: TaskBackend::BackgroundNative,
         uses_run_directory: true,
     },
 ];

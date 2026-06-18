@@ -14,6 +14,7 @@ use serde_json::Value;
 use crate::{
     domain::Structure,
     engines::{
+        docking::{DockingOutcome, DockingRequest},
         forcefield::{OptimizationOptions, OptimizationReport},
         gromacs::{
             BuildRequest, GromacsProgress, MaterialBuildRequest, StageResult, StageSpec,
@@ -24,6 +25,7 @@ use crate::{
     },
     frontend::md_support::{FrameworkRunMetadata, MD_FRAMEWORK_FILE, write_md_system_context},
     workflows::{
+        docking::{DockingProgress, run_docking_calculation},
         optimization::{
             GeometryOptimizationProgress, GeometryOptimizationRequest, run_geometry_optimization,
         },
@@ -85,6 +87,20 @@ pub struct RunningQmJob {
 pub enum QmWorkerMessage {
     Progress { stage: String },
     Finished(Box<QmOutcome>),
+    Failed(String),
+}
+
+/// A background molecular docking job the UI is polling. Like [`RunningQmJob`] the
+/// Vina search is one opaque blocking call, so progress is a coarse stage label
+/// and the worker delivers the ranked poses on `Finished`.
+pub struct RunningDockingJob {
+    pub cancel: Arc<AtomicBool>,
+    pub receiver: Receiver<DockingWorkerMessage>,
+}
+
+pub enum DockingWorkerMessage {
+    Progress { stage: String },
+    Finished(Box<DockingOutcome>),
     Failed(String),
 }
 
@@ -214,6 +230,7 @@ pub enum AgentTurnEvent {
 pub enum AgentHeavyJob {
     Qm(RunningQmJob),
     Engine(RunningEngineJob),
+    Docking(RunningDockingJob),
 }
 
 impl AgentHeavyJob {
@@ -222,6 +239,7 @@ impl AgentHeavyJob {
         match self {
             AgentHeavyJob::Qm(job) => job.cancel.store(true, Ordering::Relaxed),
             AgentHeavyJob::Engine(job) => job.cancel.store(true, Ordering::Relaxed),
+            AgentHeavyJob::Docking(job) => job.cancel.store(true, Ordering::Relaxed),
         }
     }
 }
@@ -420,6 +438,8 @@ pub struct JobManager {
     /// In-flight Build Disordered System (packing) job.
     pub disorder: Option<RunningDisorderJob>,
     pub qm: Option<RunningQmJob>,
+    /// In-flight molecular docking (Vina) search.
+    pub docking: Option<RunningDockingJob>,
     pub engine: Option<RunningEngineJob>,
     /// In-flight background decode of an entry's trajectory file for playback.
     pub trajectory_load: Option<crate::frontend::trajectory::RunningTrajectoryLoad>,
@@ -493,6 +513,24 @@ impl JobManager {
 
     pub fn cancel_qm(&mut self) {
         if let Some(running) = self.qm.take() {
+            running.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub fn docking_running(&self) -> bool {
+        self.docking.is_some()
+    }
+
+    pub fn take_docking(&mut self) -> Option<RunningDockingJob> {
+        self.docking.take()
+    }
+
+    pub fn set_docking(&mut self, docking: RunningDockingJob) {
+        self.docking = Some(docking);
+    }
+
+    pub fn cancel_docking(&mut self) {
+        if let Some(running) = self.docking.take() {
             running.cancel.store(true, Ordering::Relaxed);
         }
     }
@@ -623,6 +661,38 @@ pub fn spawn_qm_job(job: QmJob) -> RunningQmJob {
     });
 
     RunningQmJob { cancel, receiver }
+}
+
+/// Spawn a molecular docking search on a worker thread and return the live handle.
+/// The worker streams coarse stage updates, then a `Finished` outcome (ranked
+/// poses) or `Failed` error. Caller stores the handle in [`JobManager`]. The Vina
+/// search is one opaque blocking call, so cancel is best-effort (honored before
+/// the search begins; an in-flight search runs to completion and is discarded).
+pub fn spawn_docking_job(request: DockingRequest) -> RunningDockingJob {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_for_worker = Arc::clone(&cancel);
+
+    std::thread::spawn(move || {
+        let progress_sender = sender.clone();
+        let result = run_docking_calculation(
+            request,
+            cancel_for_worker,
+            move |DockingProgress { stage }| {
+                let _ = progress_sender.send(DockingWorkerMessage::Progress { stage });
+            },
+        );
+        match result {
+            Ok(result) => {
+                let _ = sender.send(DockingWorkerMessage::Finished(Box::new(result.outcome)));
+            }
+            Err(error) => {
+                let _ = sender.send(DockingWorkerMessage::Failed(error.to_string()));
+            }
+        }
+    });
+
+    RunningDockingJob { cancel, receiver }
 }
 
 pub fn optimization_finished_message(report: OptimizationReport) -> String {

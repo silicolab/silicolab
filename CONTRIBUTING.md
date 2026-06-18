@@ -2,7 +2,9 @@
 
 How to build, test, and land changes in SilicoLab. Before you start, read
 [ARCHITECTURE.md](ARCHITECTURE.md) — it describes the design invariants you are
-expected to respect while making changes.
+expected to respect while making changes. When you are adding a new feature,
+[docs/adding-a-feature.md](docs/adding-a-feature.md) maps each kind of feature to
+the module to mirror and the exact sites to touch.
 
 ## Building, running, and testing
 

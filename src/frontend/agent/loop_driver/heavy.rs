@@ -5,8 +5,8 @@ use eframe::egui;
 use crate::backend::entries::EntryOrigin;
 use crate::frontend::agent::session::AgentPhase;
 use crate::frontend::jobs::{
-    AgentHeavyJob, EngineWorkerMessage, QmWorkerMessage, RunningEngineJob, RunningQmJob,
-    spawn_gromacs_pipeline_job, spawn_qm_job,
+    AgentHeavyJob, DockingWorkerMessage, EngineWorkerMessage, QmWorkerMessage, RunningDockingJob,
+    RunningEngineJob, RunningQmJob, spawn_docking_job, spawn_gromacs_pipeline_job, spawn_qm_job,
 };
 use crate::frontend::state::AppState;
 use crate::io::llm::types::ToolCall;
@@ -17,10 +17,12 @@ use crate::io::structure_io::default_structure_save_path;
 pub enum HeavyKind {
     Md,
     Qm,
+    Dock,
 }
 
 /// Classify a tool call as a heavy off-thread command (`md run|simulate`, `qm
-/// energy|optimize|freq`), else `None` (runs inline).
+/// energy|optimize|freq`, `dock`), else `None` (runs inline). `score` is a cheap
+/// single-point evaluation, so it stays inline.
 pub fn heavy_kind_of(call: &ToolCall) -> Option<HeavyKind> {
     if call.name != "run_command" {
         return None;
@@ -34,6 +36,7 @@ pub fn heavy_kind_of(call: &ToolCall) -> Option<HeavyKind> {
         )
         .then_some(HeavyKind::Qm),
         "md" => matches!(words.next(), Some("run" | "simulate")).then_some(HeavyKind::Md),
+        "dock" => Some(HeavyKind::Dock),
         _ => None,
     }
 }
@@ -64,6 +67,9 @@ pub fn spawn_heavy(
             .map_err(|error| error.to_string()),
         HeavyKind::Md => crate::frontend::md_commands::build_agent_md_request(state, args)
             .map(|request| AgentHeavyJob::Engine(spawn_gromacs_pipeline_job(request)))
+            .map_err(|error| error.to_string()),
+        HeavyKind::Dock => crate::frontend::docking_commands::build_agent_dock_request(state, args)
+            .map(|request| AgentHeavyJob::Docking(spawn_docking_job(request)))
             .map_err(|error| error.to_string()),
     };
 
@@ -109,6 +115,34 @@ pub fn poll_agent_heavy(state: &mut AppState, ctx: &egui::Context) {
     match job {
         AgentHeavyJob::Qm(running) => poll_heavy_qm(state, running, ctx),
         AgentHeavyJob::Engine(running) => poll_heavy_engine(state, running, ctx),
+        AgentHeavyJob::Docking(running) => poll_heavy_docking(state, running, ctx),
+    }
+}
+
+fn poll_heavy_docking(state: &mut AppState, running: RunningDockingJob, ctx: &egui::Context) {
+    let mut completion: Option<(String, bool)> = None;
+    while let Ok(message) = running.receiver.try_recv() {
+        match message {
+            DockingWorkerMessage::Progress { stage } => {
+                state.set_message(format!("Docking: {stage}; press Esc to stop"));
+            }
+            DockingWorkerMessage::Finished(outcome) => {
+                let outcome = *outcome;
+                crate::frontend::docking_commands::add_pose_entries(state, &outcome);
+                state.set_message(outcome.summary.clone());
+                completion = Some((outcome.summary, false));
+            }
+            DockingWorkerMessage::Failed(error) => {
+                completion = Some((format!("docking failed: {error}"), true));
+            }
+        }
+    }
+    match completion {
+        Some((summary, is_error)) => heavy_complete(state, summary, is_error, ctx),
+        None => {
+            state.jobs.agent_heavy = Some(AgentHeavyJob::Docking(running));
+            ctx.request_repaint_after(AGENT_POLL);
+        }
     }
 }
 

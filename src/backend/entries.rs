@@ -25,6 +25,10 @@ pub enum EntryOrigin {
     /// the run's saved output report (e.g. `runs/qm-optimize-1/output.txt`)
     /// *relative to the project root*; clicking the entry's "QM" badge opens it.
     QmRun { output: Option<PathBuf> },
+    /// Produced by a molecular docking run. `poses`, when present, is the run's
+    /// saved multi-pose `.pdbqt` artifact (e.g. `runs/dock-ligand-1/poses.pdbqt`)
+    /// *relative to the project root*; clicking the entry's "Dock" badge opens it.
+    DockRun { poses: Option<PathBuf> },
 }
 
 impl EntryOrigin {
@@ -34,6 +38,7 @@ impl EntryOrigin {
             Self::User => "user",
             Self::MdRun { .. } => "md",
             Self::QmRun { .. } => "qm",
+            Self::DockRun { .. } => "dock",
         }
     }
 
@@ -53,12 +58,22 @@ impl EntryOrigin {
         }
     }
 
+    /// Project-relative docking poses `.pdbqt` path, when this origin carries one.
+    pub fn dock_poses(&self) -> Option<&Path> {
+        match self {
+            Self::DockRun { poses } => poses.as_deref(),
+            _ => None,
+        }
+    }
+
     /// The path persisted alongside the kind in the `entries.origin_trajectory`
-    /// column: the MD trajectory or the QM output report, depending on the kind.
+    /// column: the MD trajectory, the QM output report, or the docking poses file,
+    /// depending on the kind.
     pub fn stored_path(&self) -> Option<&Path> {
         match self {
             Self::MdRun { trajectory } => trajectory.as_deref(),
             Self::QmRun { output } => output.as_deref(),
+            Self::DockRun { poses } => poses.as_deref(),
             Self::User => None,
         }
     }
@@ -75,13 +90,20 @@ impl EntryOrigin {
         matches!(self, Self::QmRun { .. })
     }
 
+    /// Whether this entry is a docking pose (used for the badge and to open the
+    /// saved poses file).
+    pub fn is_dock_run(&self) -> bool {
+        matches!(self, Self::DockRun { .. })
+    }
+
     /// Rebuild an origin from its persisted `(origin_kind, origin_trajectory)`
-    /// columns (the path column holds the trajectory for MD runs and the output
-    /// report for QM runs).
+    /// columns (the path column holds the trajectory for MD runs, the output
+    /// report for QM runs, and the poses file for docking runs).
     pub fn from_storage(kind: Option<&str>, path: Option<PathBuf>) -> Self {
         match kind {
             Some("md") => Self::MdRun { trajectory: path },
             Some("qm") => Self::QmRun { output: path },
+            Some("dock") => Self::DockRun { poses: path },
             _ => Self::User,
         }
     }
