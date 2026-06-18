@@ -144,10 +144,14 @@ pub(crate) fn auto_install_updates_reset() -> AppAction {
     AppAction::SetAutoInstallUpdates(AppConfig::default().auto_install_updates)
 }
 
-/// The auto-install toggle is meaningful only while update checks run, so it is
-/// disabled (and visually nested) under "Check for updates on launch".
+/// The auto-install toggle can only take effect while update checks run *and*
+/// the install location is writable — a read-only or package-manager install
+/// can never self-replace. Gate the toggle on both so it greys out exactly when
+/// auto-install cannot work, matching the one-click update button in
+/// `title_bar.rs`; otherwise the user could switch it on and have it silently
+/// no-op in `maybe_auto_install_update`.
 pub(crate) fn auto_install_updates_enabled(state: &AppState) -> bool {
-    state.config.check_updates
+    state.config.check_updates && crate::io::self_update::is_self_update_supported()
 }
 
 pub(crate) fn reopen_read(state: &AppState) -> bool {

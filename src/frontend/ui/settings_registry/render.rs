@@ -489,15 +489,24 @@ fn render_descriptor_body(
             // Control first (so it sits flush left, like every other row), then
             // a right-to-left region filling the remainder pins the reset button
             // to the row's right edge without disturbing the control.
+            let enabled = descriptor.enabled.is_none_or(|gate| gate(state));
             ui.horizontal(|ui| {
                 let mut value = read(state);
                 // A setting is a persistent, immediately-applied on/off, so it
                 // gets a sliding toggle switch rather than a checkbox. Centralizing
                 // the toggle render here means every `Control::Toggle` in the
                 // registry picks up the switch from this one site.
-                if crate::frontend::ui::toggle_switch(ui, &mut value, descriptor.title, pal)
-                    .changed()
-                {
+                //
+                // Honour `descriptor.enabled` like the Slider/Value branches:
+                // `toggle_switch` returns a bare `Response`, so gate it through
+                // an `add_enabled_ui` wrapper rather than `add_enabled`.
+                let changed = ui
+                    .add_enabled_ui(enabled, |ui| {
+                        crate::frontend::ui::toggle_switch(ui, &mut value, descriptor.title, pal)
+                            .changed()
+                    })
+                    .inner;
+                if changed {
                     actions.push(on_change(value));
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
