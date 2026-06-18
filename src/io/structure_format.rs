@@ -6,22 +6,25 @@ pub enum StructureFormat {
     Psf,
     Gro,
     Pdb,
+    Pdbqt,
 }
 
-pub const READABLE_FORMATS: [StructureFormat; 6] = [
+pub const READABLE_FORMATS: [StructureFormat; 7] = [
     StructureFormat::Xyz,
     StructureFormat::Cif,
     StructureFormat::Mol2,
     StructureFormat::Psf,
     StructureFormat::Gro,
     StructureFormat::Pdb,
+    StructureFormat::Pdbqt,
 ];
 
-pub const WRITABLE_FORMATS: [StructureFormat; 4] = [
+pub const WRITABLE_FORMATS: [StructureFormat; 5] = [
     StructureFormat::Xyz,
     StructureFormat::Cif,
     StructureFormat::Mol2,
     StructureFormat::Pdb,
+    StructureFormat::Pdbqt,
 ];
 
 impl StructureFormat {
@@ -33,6 +36,7 @@ impl StructureFormat {
             Self::Psf => "SLF",
             Self::Gro => "GRO",
             Self::Pdb => "PDB",
+            Self::Pdbqt => "PDBQT",
         }
     }
 
@@ -44,6 +48,7 @@ impl StructureFormat {
             Self::Psf => "slf",
             Self::Gro => "gro",
             Self::Pdb => "pdb",
+            Self::Pdbqt => "pdbqt",
         }
     }
 
@@ -64,6 +69,8 @@ impl StructureFormat {
             Some(Self::Gro)
         } else if extension.eq_ignore_ascii_case("pdb") {
             Some(Self::Pdb)
+        } else if extension.eq_ignore_ascii_case("pdbqt") {
+            Some(Self::Pdbqt)
         } else {
             None
         }

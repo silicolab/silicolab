@@ -257,6 +257,142 @@ pub(crate) fn render_qm_task_panel(
     }
 }
 
+pub(crate) fn render_docking_task_panel(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+) {
+    let pal = crate::frontend::theme::palette(ui);
+    // The available entries (id + name), collected before the prompt is borrowed
+    // mutably so the receptor/ligand pickers can list them.
+    let entries: Vec<(u64, String)> = state
+        .entries
+        .records
+        .iter()
+        .map(|record| (record.id, record.name.clone()))
+        .collect();
+
+    if let Some(prompt) = &mut state.ui.pending_docking {
+        let label_for = |selected: Option<u64>| -> String {
+            selected
+                .and_then(|id| entries.iter().find(|(eid, _)| *eid == id))
+                .map(|(_, name)| name.clone())
+                .unwrap_or_else(|| "— choose —".to_string())
+        };
+
+        egui::Grid::new("docking_inputs")
+            .num_columns(2)
+            .spacing([8.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Receptor:");
+                egui::ComboBox::from_id_salt("dock_receptor")
+                    .selected_text(label_for(prompt.receptor_entry))
+                    .show_ui(ui, |ui| {
+                        for (id, name) in &entries {
+                            ui.selectable_value(
+                                &mut prompt.receptor_entry,
+                                Some(*id),
+                                name.as_str(),
+                            );
+                        }
+                    });
+                ui.end_row();
+
+                ui.label("Ligand:");
+                egui::ComboBox::from_id_salt("dock_ligand")
+                    .selected_text(label_for(prompt.ligand_entry))
+                    .show_ui(ui, |ui| {
+                        for (id, name) in &entries {
+                            ui.selectable_value(&mut prompt.ligand_entry, Some(*id), name.as_str());
+                        }
+                    });
+                ui.end_row();
+            });
+
+        ui.separator();
+        ui.label(RichText::new("Search box (Å)").strong());
+        egui::Grid::new("docking_box")
+            .num_columns(4)
+            .spacing([6.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Center:");
+                for axis in 0..3 {
+                    ui.add(egui::DragValue::new(&mut prompt.box_center[axis]).speed(0.25));
+                }
+                ui.end_row();
+                ui.label("Size:");
+                for axis in 0..3 {
+                    ui.add(
+                        egui::DragValue::new(&mut prompt.box_size[axis])
+                            .speed(0.25)
+                            .range(1.0..=100.0),
+                    );
+                }
+                ui.end_row();
+            });
+
+        ui.separator();
+        egui::Grid::new("docking_params")
+            .num_columns(2)
+            .spacing([8.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Exhaustiveness:");
+                ui.add(egui::DragValue::new(&mut prompt.exhaustiveness).range(1..=64));
+                ui.end_row();
+                ui.label("Binding modes:");
+                ui.add(egui::DragValue::new(&mut prompt.num_modes).range(1..=20));
+                ui.end_row();
+                ui.label("Seed:");
+                ui.add(egui::DragValue::new(&mut prompt.seed));
+                ui.end_row();
+            });
+        ui.checkbox(&mut prompt.score_only, "Score input pose only (no search)");
+
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui
+                .button(format!("{}  Run", egui_phosphor::regular::PLAY))
+                .clicked()
+            {
+                actions.push(AppAction::StartDocking);
+            }
+            if ui
+                .button(format!("{}  Cancel", egui_phosphor::regular::X))
+                .clicked()
+            {
+                actions.push(AppAction::CancelDockingPrompt);
+            }
+        });
+
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(
+                "Receptor and ligand are prepared heuristically from the chosen entries \
+                 (approximate atom typing + torsion tree). Import already-prepared .pdbqt files \
+                 for production-quality results.",
+            )
+            .small()
+            .color(pal.text_tertiary),
+        );
+    } else if state.jobs.docking_running() {
+        ui.label("Docking is running. Press Esc to stop.");
+        if ui
+            .button(format!("{}  Show Output", egui_phosphor::regular::TERMINAL))
+            .clicked()
+        {
+            state
+                .ui
+                .layout
+                .dock
+                .reveal_static(crate::frontend::state::StaticView::Output);
+            let now = ui.input(|input| input.time);
+            state.mark_layout_dirty(now);
+        }
+    } else {
+        ui.label("Docking configuration is unavailable.");
+    }
+}
+
 /// The molecular QM form: method, basis, charge/spin, the calculation kind, the
 /// properties toggle, and the advanced hartree options.
 fn render_molecular_qm_form(ui: &mut egui::Ui, prompt: &mut crate::frontend::state::QmPrompt) {

@@ -7,7 +7,7 @@ use crate::domain::Structure;
 
 use super::structure_format::{READABLE_FORMATS, StructureFormat, WRITABLE_FORMATS};
 
-const READABLE_EXTENSIONS: [&str; 6] = ["xyz", "cif", "mol2", "slf", "gro", "pdb"];
+const READABLE_EXTENSIONS: [&str; 7] = ["xyz", "cif", "mol2", "slf", "gro", "pdb", "pdbqt"];
 
 pub fn readable_extensions() -> &'static [&'static str] {
     &READABLE_EXTENSIONS

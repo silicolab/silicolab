@@ -106,6 +106,10 @@ const TASK_EXECUTORS: &[TaskExecutor] = &[
         kind: TaskKind::RunMd,
         run: run_md,
     },
+    TaskExecutor {
+        kind: TaskKind::RunDocking,
+        run: run_docking_panel,
+    },
 ];
 
 pub(super) fn task_executor(kind: TaskKind) -> Option<&'static TaskExecutor> {
@@ -171,6 +175,10 @@ fn run_recompute_bonds(state: &mut AppState, task_run_id: u64) {
 }
 
 fn run_md(state: &mut AppState, task_run_id: u64) {
+    open_panel_task(state, task_run_id);
+}
+
+fn run_docking_panel(state: &mut AppState, task_run_id: u64) {
     open_panel_task(state, task_run_id);
 }
 

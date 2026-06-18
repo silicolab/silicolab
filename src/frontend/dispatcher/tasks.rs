@@ -335,6 +335,20 @@ pub(crate) fn ensure_panel_form(state: &mut AppState, task_run_id: u64) {
                 state.ui.block_editor = Some(editor);
             }
         }
+        TaskPanelKind::DockingPrompt => {
+            let active_entry = state.entries.active_entry_id();
+            if state.ui.pending_docking.is_none() {
+                let mut prompt = crate::frontend::state::DockingPrompt::default();
+                // Seed the receptor and search box from the active entry so the
+                // box starts centered on something the user can see.
+                if let Some(entry_id) = active_entry {
+                    prompt.receptor_entry = Some(entry_id);
+                    let center = state.structure().center();
+                    prompt.box_center = [center.x, center.y, center.z];
+                }
+                state.ui.pending_docking = Some(prompt);
+            }
+        }
         TaskPanelKind::None => {}
     }
 }

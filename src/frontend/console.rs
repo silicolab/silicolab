@@ -106,6 +106,8 @@ fn execute_console_line_with_context(
             crate::frontend::disorder_commands::disorder_command(state, &words[1..])
         }
         "qm" => crate::frontend::qm_commands::qm_command(state, &words[1..]),
+        "dock" => crate::frontend::docking_commands::dock_command(state, &words[1..]),
+        "score" => crate::frontend::docking_commands::score_command(state, &words[1..]),
         "help" => Ok(help_text()),
         _ => bail!("unknown command `{command}`"),
     }
@@ -319,6 +321,8 @@ pub fn command_catalog() -> String {
         "  md simulate [--time 1ns] [--temperature 300] [--no-relax]",
         "  qm energy|optimize|freq [--method b3lyp] [--basis def2-svp] [--charge 0] [--spin 1]",
         "  qm periodic [--functional pade] [--basis SZV-GTH] [--kmesh 2x2x2] [--cutoff 280] (needs a cell)",
+        "  dock --receptor <entry> --ligand <entry> [--center x,y,z] [--size x,y,z] [--exhaustiveness 8] [--modes 9] [--seed 0]",
+        "  score --receptor <entry> --ligand <entry> [--center x,y,z] [--size x,y,z]   (single-point pose score)",
         "",
         "Tips: render commands target the active entry unless given `--global`. Call `inspect` \
          first when you are unsure what is loaded.",
@@ -347,6 +351,8 @@ fn help_text() -> String {
         "disorder --of <entry> [--count n|--density g/cm3|--conc mol/L] --box X,Y,Z|--sphere R|--cylinder R,L   pack molecules (alias: pack)",
         "qm energy|optimize|freq [--method b3lyp] [--basis def2-svp] [--charge 0] [--spin 1] [--properties]",
         "qm periodic [--functional pade|lda] [--basis SZV-GTH] [--kmesh 2x2x2] [--cutoff 280] [--forces] [--stress]   periodic (crystal) DFT on the active cell",
+        "dock --receptor <entry> --ligand <entry> [--center x,y,z] [--size x,y,z] [--exhaustiveness 8] [--modes 9] [--seed 0]   dock a ligand into a receptor (Vina)",
+        "score --receptor <entry> --ligand <entry> [--center x,y,z] [--size x,y,z]   single-point score of the ligand's input pose",
         "add --global to render commands to apply them project-wide",
         "script variables: ${name} or ${name:-default}",
     ]

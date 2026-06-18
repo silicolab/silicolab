@@ -13,7 +13,9 @@ front-ends can never drift apart.
 This document captures the design invariants that are not obvious from reading
 any single file. They hold regardless of who (or what) is editing the code;
 respect them so changes don't quietly break the architecture. For how to build,
-test, and land changes, see [CONTRIBUTING.md](CONTRIBUTING.md).
+test, and land changes, see [CONTRIBUTING.md](CONTRIBUTING.md); for where to put
+a new feature and which module to mirror, see
+[docs/adding-a-feature.md](docs/adding-a-feature.md).
 
 ## Entry point
 

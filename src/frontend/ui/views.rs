@@ -9,6 +9,7 @@ pub(crate) fn task_category(theme: &str) -> &'static str {
         "Geometry" => "Optimization",
         "Electronic Structure" => "Quantum Mechanics",
         "Molecular Dynamics" => "Molecular Dynamics",
+        "Molecular Docking" => "Molecular Docking",
         // "Structure Editing" and "Crystal Editing" both fold into editing.
         _ => "Structure Editing",
     }
@@ -21,6 +22,7 @@ pub(crate) const TASK_CATEGORIES: &[&str] = &[
     "Optimization",
     "Quantum Mechanics",
     "Molecular Dynamics",
+    "Molecular Docking",
 ];
 
 pub(crate) fn render_tasks_view(

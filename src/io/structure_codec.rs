@@ -25,6 +25,7 @@ fn codec_for(format: StructureFormat) -> &'static dyn StructureCodec {
         StructureFormat::Psf => &PsfCodec,
         StructureFormat::Gro => &GroCodec,
         StructureFormat::Pdb => &PdbCodec,
+        StructureFormat::Pdbqt => &PdbqtCodec,
     }
 }
 
@@ -34,6 +35,7 @@ struct Mol2Codec;
 struct PsfCodec;
 struct GroCodec;
 struct PdbCodec;
+struct PdbqtCodec;
 
 impl StructureCodec for XyzCodec {
     fn parse(&self, source: &str) -> Result<Structure> {
@@ -92,5 +94,15 @@ impl StructureCodec for PdbCodec {
 
     fn serialize(&self, structure: &Structure) -> Result<String> {
         crate::io::formats::pdb::to_pdb(structure)
+    }
+}
+
+impl StructureCodec for PdbqtCodec {
+    fn parse(&self, source: &str) -> Result<Structure> {
+        crate::io::formats::pdbqt::parse_pdbqt(source)
+    }
+
+    fn serialize(&self, structure: &Structure) -> Result<String> {
+        crate::io::formats::pdbqt::to_pdbqt(structure)
     }
 }

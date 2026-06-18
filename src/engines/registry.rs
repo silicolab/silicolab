@@ -31,6 +31,7 @@ impl EngineId {
     pub const UFF: Self = Self("uff");
     pub const HARTREE: Self = Self("hartree");
     pub const GROMACS: Self = Self("gromacs");
+    pub const DOCKING: Self = Self("docking");
 
     pub fn as_str(self) -> &'static str {
         self.0
@@ -181,6 +182,17 @@ impl EngineRegistry {
             description: "Pure-Rust quantum chemistry: molecular HF, DFT, MP2, and coupled cluster, plus periodic (crystalline) DFT.",
             launch: None,
             version: Some(HARTREE_VERSION.to_string()),
+            built_in: true,
+        });
+        capabilities.push(EngineCapability {
+            id: EngineId::DOCKING,
+            name: "Vina docking",
+            description: "Pure-Rust molecular docking: an AutoDock Vina reimplementation for ligand-receptor pose search and scoring.",
+            launch: None,
+            version: Some(format!(
+                "AutoDock Vina {} compatible",
+                docking::REFERENCE_VINA_VERSION
+            )),
             built_in: true,
         });
 
