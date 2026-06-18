@@ -228,3 +228,54 @@ fn view_script_export_roundtrips() {
     assert!(viewport.surface.chains.contains(&'A'));
     assert_eq!(viewport.ions.show_within, Some(4.0));
 }
+
+#[test]
+fn activate_switches_the_active_entry_by_id() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let fixture = write_console_fixture("activate", CONSOLE_TEST_PDB);
+
+    execute_console_line(&mut state, &open_fixture_command(&fixture)).unwrap();
+    let first = state.entries.active_entry_id().unwrap();
+    execute_console_line(&mut state, &open_fixture_command(&fixture)).unwrap();
+    let second = state.entries.active_entry_id().unwrap();
+    assert_ne!(first, second);
+
+    // `#id` switches back to the earlier entry; the message echoes the id.
+    let message = execute_console_line(&mut state, &format!("activate #{first}")).unwrap();
+    assert_eq!(state.entries.active_entry_id(), Some(first));
+    assert!(message.contains(&format!("#{first}")), "message: {message}");
+
+    // A bare integer is also accepted, and `focus` is an alias.
+    execute_console_line(&mut state, &format!("activate {second}")).unwrap();
+    assert_eq!(state.entries.active_entry_id(), Some(second));
+    execute_console_line(&mut state, &format!("focus #{first}")).unwrap();
+    assert_eq!(state.entries.active_entry_id(), Some(first));
+}
+
+#[test]
+fn activate_reports_unresolvable_references() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let fixture = write_console_fixture("activate_err", CONSOLE_TEST_PDB);
+
+    // Nothing open yet.
+    let empty = execute_console_line(&mut state, "activate #1").unwrap_err();
+    assert!(empty.to_string().contains("no entries are open"));
+
+    execute_console_line(&mut state, &open_fixture_command(&fixture)).unwrap();
+    execute_console_line(&mut state, &open_fixture_command(&fixture)).unwrap();
+
+    // An id with no entry, and a missing argument, both error.
+    let bad_id = execute_console_line(&mut state, "activate #99").unwrap_err();
+    assert!(bad_id.to_string().contains("no open entry with id #99"));
+    assert!(execute_console_line(&mut state, "activate").is_err());
+
+    // The two fixtures import under the same name, so a name reference is
+    // ambiguous and must be disambiguated by id.
+    let duplicate_name = state.entries.active_entry().unwrap().name.clone();
+    let ambiguous =
+        execute_console_line(&mut state, &format!("activate {duplicate_name}")).unwrap_err();
+    assert!(
+        ambiguous.to_string().contains("matches 2 entries"),
+        "error: {ambiguous}"
+    );
+}

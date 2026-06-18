@@ -274,7 +274,7 @@ pub fn inspect(state: &AppState, _query: Option<&str>) -> String {
 
     match state.entries.active_entry() {
         Some(active) => {
-            let _ = writeln!(out, "active entry: {}", active.name);
+            let _ = writeln!(out, "active entry: #{} {}", active.id, active.name);
             let _ = writeln!(
                 out,
                 "structure: {}",
@@ -312,12 +312,22 @@ pub fn inspect(state: &AppState, _query: Option<&str>) -> String {
     }
 
     if entries.len() > 1 {
-        let names: Vec<&str> = entries
+        // Each entry is listed with its id so the agent can `activate <#id>` a
+        // non-active one; the active entry is marked so it is not re-activated.
+        let active_id = state.entries.active_entry_id();
+        let listed: Vec<String> = entries
             .iter()
             .take(12)
-            .map(|entry| entry.name.as_str())
+            .map(|entry| {
+                let marker = if Some(entry.id) == active_id {
+                    " (active)"
+                } else {
+                    ""
+                };
+                format!("#{} {}{}", entry.id, entry.name, marker)
+            })
             .collect();
-        let _ = writeln!(out, "entries: {}", names.join(", "));
+        let _ = writeln!(out, "entries: {}", listed.join(", "));
     }
 
     if let Some(playback) = &state.ui.trajectory {

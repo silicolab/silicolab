@@ -88,6 +88,7 @@ fn execute_console_line_with_context(
 
     match command {
         "open" => open_command(state, context, &words[1..]),
+        "activate" | "focus" => activate_command(state, &words[1..]),
         "sketch" => sketch_command(state, &words[1..]),
         "fetch" => fetch_command(state, &words[1..]),
         "source" | "run" => source_command(state, context, &words[1..]),
@@ -289,6 +290,11 @@ pub fn command_catalog() -> String {
         "    [--db <base-url>] [--dir <directory>]",
         "  sketch <SMILES>             Build a 3D structure from SMILES (e.g. `sketch CCO`).",
         "",
+        "Switching entries (render/md/qm act on the ACTIVE entry only):",
+        "  activate <#id|name>         Make an already-open entry active (e.g. `activate #2`).",
+        "                              `open`/`fetch`/`sketch` create a new active entry; use",
+        "                              `activate` to switch back. `inspect` lists ids and the active one.",
+        "",
         "Viewport (per active entry; add `--global` to apply project-wide):",
         "  view background <color>     Named color or #rrggbb (e.g. `view background white`).",
         "  view cell on|off            Show/hide the unit cell.",
@@ -325,6 +331,7 @@ fn help_text() -> String {
         "commands:",
         "open <path>",
         "sketch <SMILES>   build a 3D structure from a SMILES string and add it as a new entry",
+        "activate <#id|name>   make an already-open entry active (render/md/qm target the active entry)",
         "fetch <pdb-id> [--db <base-url>] [--dir <directory>]   download a structure by PDB id",
         "source <script.sls>",
         "save image <path.png>",
