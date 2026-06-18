@@ -311,6 +311,9 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SetAssistantEffort(effort) => {
             crate::frontend::agent::set_assistant_effort(state, effort)
         }
+        AppAction::SetAssistantEffortSupported(supported) => {
+            crate::frontend::agent::set_assistant_effort_supported(state, supported)
+        }
         AppAction::SetAssistantBaseUrl(url) => {
             crate::frontend::agent::set_assistant_base_url(state, &url)
         }

@@ -254,6 +254,9 @@ pub enum AppAction {
     SetAssistantEnabled(bool),
     /// Set the assistant's reasoning effort and persist.
     SetAssistantEffort(crate::io::llm::types::Effort),
+    /// Pin whether the active OpenAI-compatible model accepts a reasoning-effort
+    /// knob, overriding the registry heuristic. Persists.
+    SetAssistantEffortSupported(bool),
     /// Set (blank clears) the base-URL override for an OpenAI-compatible
     /// assistant provider and persist.
     SetAssistantBaseUrl(String),

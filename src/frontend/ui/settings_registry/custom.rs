@@ -205,8 +205,10 @@ pub(crate) fn render_assistant_settings(
         }
     }
 
-    // Effort picker — only meaningful where the model accepts it.
-    let caps = provider.caps_for(&current_model);
+    // Effort picker — only meaningful where the model accepts it. Caps fold in
+    // the per-model override (see `registry::effective_caps`), so a custom
+    // endpoint pointed at a reasoning model isn't greyed out.
+    let caps = registry::effective_caps(&state.config.assistant, provider);
     let current_effort = state.config.assistant.effort;
     ui.horizontal(|ui| {
         ui.label("Effort");
@@ -226,7 +228,20 @@ pub(crate) fn render_assistant_settings(
             });
         });
     });
-    if !caps.supports_effort {
+    // OpenAI-compatible endpoints take arbitrary model ids the built-in table
+    // can't know, so let the user pin effort support for the active model. The
+    // checkbox shows the effective capability; toggling it persists an override.
+    // Native providers (Anthropic) derive caps reliably from the id, so they
+    // only get the explanatory note.
+    if provider.kind == registry::ProviderKind::OpenAiCompat {
+        let mut supported = caps.supports_effort;
+        if ui
+            .checkbox(&mut supported, "This model supports reasoning effort")
+            .changed()
+        {
+            actions.push(AppAction::SetAssistantEffortSupported(supported));
+        }
+    } else if !caps.supports_effort {
         ui.label(
             RichText::new("This model does not use a reasoning-effort setting.")
                 .size(CAPTION_SIZE)

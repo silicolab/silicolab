@@ -37,6 +37,9 @@ pub fn switch_provider_model(state: &mut AppState, provider: &str, model: &str) 
         // The base-URL override is provider-specific; drop it on a provider change.
         state.config.assistant.base_url = None;
     }
+    // The effort override is per-model; drop it so the new model falls back to
+    // the registry heuristic until the user pins it again.
+    state.config.assistant.effort_override = None;
     state.config.assistant.provider = provider.to_string();
     state.config.assistant.model = model.to_string();
     for conversation in &mut state.ui.agent.conversations {
@@ -59,6 +62,14 @@ pub fn set_assistant_enabled(state: &mut AppState, enabled: bool) {
 /// Set the reasoning effort and persist.
 pub fn set_assistant_effort(state: &mut AppState, effort: Effort) {
     state.config.assistant.effort = effort;
+    persist(state);
+}
+
+/// Pin whether the active OpenAI-compatible model accepts a reasoning-effort
+/// knob, overriding the registry heuristic, and persist. Cleared automatically
+/// when the model or provider changes.
+pub fn set_assistant_effort_supported(state: &mut AppState, supported: bool) {
+    state.config.assistant.effort_override = Some(supported);
     persist(state);
 }
 

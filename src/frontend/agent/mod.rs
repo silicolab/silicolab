@@ -15,7 +15,8 @@ pub use loop_driver::{
     approve_tool_call, cancel_agent, clear_stored_key, delete_assistant_conversation, fetch_models,
     new_assistant_conversation, poll_agent_heavy, poll_agent_turn, poll_model_fetch,
     refresh_key_status, reject_tool_call, rename_assistant_conversation, send_agent_message,
-    set_assistant_api_key, set_assistant_base_url, set_assistant_effort, set_assistant_enabled,
-    switch_assistant_conversation, switch_provider_model,
+    set_assistant_api_key, set_assistant_base_url, set_assistant_effort,
+    set_assistant_effort_supported, set_assistant_enabled, switch_assistant_conversation,
+    switch_provider_model,
 };
 pub use session::{AgentSession, AssistantConversationId, ModelFetchStatus, TranscriptEntry};
