@@ -8,7 +8,7 @@ use anyhow::{Result, anyhow, bail};
 /// Run a quantum-chemistry calculation.
 ///
 /// `report` receives coarse stage strings (`"running scf"`, …). `cancel` is
-/// **best-effort**: it is honored before the calculation starts, but chemx's
+/// **best-effort**: it is honored before the calculation starts, but hartree's
 /// `Job::run` is a single opaque call with no preemption hook, so an in-flight
 /// SCF cannot be interrupted — the worker runs to completion and the caller
 /// discards the result.
@@ -57,7 +57,7 @@ pub fn run_qm(
     let result = resolved
         .job
         .run()
-        .map_err(|e| anyhow!("chemx calculation failed: {e}"))?;
+        .map_err(|e| anyhow!("hartree calculation failed: {e}"))?;
 
     report("collecting results");
 

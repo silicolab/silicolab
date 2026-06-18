@@ -1,17 +1,17 @@
 //! In-process quantum-chemistry engine.
 //!
-//! Wraps the `chemx` crate (pure-Rust HF/DFT/MP2/CC) so the rest of the app can
+//! Wraps the `hartree` crate (pure-Rust HF/DFT/MP2/CC) so the rest of the app can
 //! request single-point energies, geometry optimization, and properties or
-//! vibrational frequencies from a [`Structure`] without knowing chemx's types.
+//! vibrational frequencies from a [`Structure`] without knowing hartree's types.
 //! Unlike the GROMACS engine this is a library call — it runs in-process on a
 //! worker thread, not as an external subprocess.
 //!
 //! The request/outcome edge ([`QmRequest`], [`QmOutcome`]) deliberately keeps
-//! chemx's types off the public API: every chemx option silicolab exposes is
-//! mirrored by a plain enum/struct here, and every chemx result field we report
+//! hartree's types off the public API: every hartree option silicolab exposes is
+//! mirrored by a plain enum/struct here, and every hartree result field we report
 //! is folded into the formatted [`QmOutcome::summary`]. That boundary is what
-//! would let a future build run chemx as an out-of-process engine (see the
-//! `chemx` binary) without touching any caller.
+//! would let a future build run hartree as an out-of-process engine (see the
+//! `hartree` binary) without touching any caller.
 //!
 //! [`Structure`]: crate::domain::Structure
 

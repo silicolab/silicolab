@@ -4,7 +4,7 @@
 //! a workflow-layer entry point and a progress type, keeping the
 //! frontend → workflows → engines layering intact. It dispatches a [`QmJob`] to
 //! the molecular or periodic engine path; both return a [`QmOutcome`], so the
-//! caller's plumbing is agnostic to which ran. chemx runs the whole calculation
+//! caller's plumbing is agnostic to which ran. hartree runs the whole calculation
 //! in one opaque call, so progress is a coarse stage label rather than a
 //! per-step structure.
 

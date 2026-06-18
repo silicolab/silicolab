@@ -1,12 +1,12 @@
 use super::*;
 
-use chemx::scf::Reference;
-use chemx::{BasisSet, JobResult, PostHfResult, ecp_summary};
+use hartree::scf::Reference;
+use hartree::{BasisSet, JobResult, PostHfResult, ecp_summary};
 
 use crate::domain::Structure;
 
-/// Render a human-readable report of `result` covering every section chemx
-/// populates. Mirrors chemx-cli's `report*` formatters (trimming only the
+/// Render a human-readable report of `result` covering every section hartree
+/// populates. Mirrors hartree-cli's `report*` formatters (trimming only the
 /// per-iteration SCF/optimizer history tables, which are noise in a panel).
 pub(crate) fn format_summary(
     method: &QmMethod,
@@ -313,7 +313,7 @@ fn push_post_hf(out: &mut String, result: &JobResult) {
     }
 }
 
-fn push_ccsd(out: &mut String, n_frozen: usize, cc: &chemx::cc::CcsdResult) {
+fn push_ccsd(out: &mut String, n_frozen: usize, cc: &hartree::cc::CcsdResult) {
     out.push_str(&format!(
         "  CCSD (frozen core: {n_frozen}, {} in {} iters):\n",
         if cc.converged {
@@ -422,7 +422,7 @@ fn push_frequencies(out: &mut String, result: &JobResult) {
     ));
 }
 
-/// chemx's method-quality guardrails (always populated; empty prints nothing).
+/// hartree's method-quality guardrails (always populated; empty prints nothing).
 fn push_method_warnings(out: &mut String, result: &JobResult) {
     if result.method_warnings.is_empty() {
         return;

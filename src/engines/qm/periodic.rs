@@ -1,25 +1,25 @@
 //! In-process periodic (crystalline) quantum chemistry.
 //!
-//! Wraps chemx 0.4's Gaussian-and-plane-waves (GPW) periodic SCF so the rest of
+//! Wraps hartree 0.1's Gaussian-and-plane-waves (GPW) periodic SCF so the rest of
 //! the app can compute the energy — and optional forces and stress — of a unit
-//! cell without touching chemx's periodic types. It mirrors the molecular engine
+//! cell without touching hartree's periodic types. It mirrors the molecular engine
 //! boundary in the parent module: [`PeriodicQmRequest`] in, [`QmOutcome`] out,
-//! with every chemx result folded into [`QmOutcome::summary`].
+//! with every hartree result folded into [`QmOutcome::summary`].
 //!
 //! ## What periodic v1 supports
 //!
-//! chemx's periodic path is deliberately narrower than its molecular one:
+//! hartree's periodic path is deliberately narrower than its molecular one:
 //!
 //! * **Closed-shell, spin-restricted Kohn–Sham DFT at the LDA level** only
 //!   ([`PeriodicFunctional`]). Hybrids, dispersion, and post-HF are
 //!   molecular-only.
 //! * **GTH pseudopotentials with GTH basis sets** (e.g. `SZV-GTH`, `DZVP-GTH`).
 //!   The electron count comes from the GTH valence, so the net molecular charge
-//!   is *not* modeled and an odd valence-electron count is rejected by chemx.
+//!   is *not* modeled and an odd valence-electron count is rejected by hartree.
 //! * **Γ-point or Monkhorst–Pack k-meshes** ([`KMesh`]).
 //! * A **real unit cell** is required; a molecular structure has none.
 //!
-//! Geometry relaxation is not offered (chemx exposes only single-point energy
+//! Geometry relaxation is not offered (hartree exposes only single-point energy
 //! plus optional forces/stress), so [`QmOutcome::optimized_structure`] is always
 //! `None` here.
 
@@ -27,20 +27,22 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Result, anyhow, bail};
-use chemx::periodic::{Cell, KPoint, MonkhorstPack};
-use chemx::{Molecule, PeriodicFunctional as ChemxPeriodicFunctional, PeriodicJob, run_periodic};
+use hartree::periodic::{Cell, KPoint, MonkhorstPack};
+use hartree::{
+    Molecule, PeriodicFunctional as HartreePeriodicFunctional, PeriodicJob, run_periodic,
+};
 use nalgebra::Vector3;
 
 use super::{BOHR_TO_ANGSTROM, HARTREE_TO_EV, QmOutcome, ensure_known_elements};
 use crate::domain::Structure;
 use crate::io::structure_text::to_xyz;
 
-/// Ångström → bohr. silicolab stores geometry and lattice vectors in Å; chemx's
+/// Ångström → bohr. silicolab stores geometry and lattice vectors in Å; hartree's
 /// periodic types work in bohr.
 const ANGSTROM_TO_BOHR: f64 = 1.0 / BOHR_TO_ANGSTROM;
 
-/// LDA-level exchange–correlation functional for the periodic GPW path. chemx
-/// 0.4's periodic SCF supports only these two; richer functionals remain a
+/// LDA-level exchange–correlation functional for the periodic GPW path. hartree
+/// 0.1's periodic SCF supports only these two; richer functionals remain a
 /// molecular-only feature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PeriodicFunctional {
@@ -65,19 +67,19 @@ impl PeriodicFunctional {
         }
     }
 
-    /// Parse a functional keyword, delegating to chemx's own resolution so the
+    /// Parse a functional keyword, delegating to hartree's own resolution so the
     /// accepted spellings stay in sync (`pade`/`pz`/`gth-pade`, `lda`/`pw92`/`svwn`).
     pub fn parse(input: &str) -> Result<Self> {
-        match ChemxPeriodicFunctional::from_name(input.trim()).map_err(|e| anyhow!(e))? {
-            ChemxPeriodicFunctional::Pade => Ok(PeriodicFunctional::Pade),
-            ChemxPeriodicFunctional::Lda => Ok(PeriodicFunctional::Lda),
+        match HartreePeriodicFunctional::from_name(input.trim()).map_err(|e| anyhow!(e))? {
+            HartreePeriodicFunctional::Pade => Ok(PeriodicFunctional::Pade),
+            HartreePeriodicFunctional::Lda => Ok(PeriodicFunctional::Lda),
         }
     }
 
-    fn to_chemx(self) -> ChemxPeriodicFunctional {
+    fn to_hartree(self) -> HartreePeriodicFunctional {
         match self {
-            PeriodicFunctional::Pade => ChemxPeriodicFunctional::Pade,
-            PeriodicFunctional::Lda => ChemxPeriodicFunctional::Lda,
+            PeriodicFunctional::Pade => HartreePeriodicFunctional::Pade,
+            PeriodicFunctional::Lda => HartreePeriodicFunctional::Lda,
         }
     }
 }
@@ -111,7 +113,7 @@ impl KMesh {
         format!("{a}×{b}×{c}")
     }
 
-    /// Resolve to the chemx k-points. `[1, 1, 1]` returns the bare Γ point;
+    /// Resolve to the hartree k-points. `[1, 1, 1]` returns the bare Γ point;
     /// anything else is a regular Monkhorst–Pack mesh.
     fn to_kpoints(self) -> Result<Vec<KPoint>> {
         if self.divisions.contains(&0) {
@@ -135,12 +137,12 @@ impl KMesh {
 pub struct PeriodicQmRequest {
     pub structure: Structure,
     pub functional: PeriodicFunctional,
-    /// GTH basis-set name (e.g. `SZV-GTH`, `DZVP-GTH`). chemx validates it
+    /// GTH basis-set name (e.g. `SZV-GTH`, `DZVP-GTH`). hartree validates it
     /// against the bundled GTH-PADE library and lists the available sets on a
     /// miss.
     pub basis: String,
     pub kmesh: KMesh,
-    /// Real-space grid cutoff in **Rydberg** (the CP2K convention; chemx's
+    /// Real-space grid cutoff in **Rydberg** (the CP2K convention; hartree's
     /// default is 280 Ry). Higher is more accurate and slower.
     pub e_cut_ry: f64,
     /// Maximum SCF iterations.
@@ -152,7 +154,7 @@ pub struct PeriodicQmRequest {
 }
 
 impl PeriodicQmRequest {
-    /// A plain Γ-point single point at chemx's default cutoff, for `structure`.
+    /// A plain Γ-point single point at hartree's default cutoff, for `structure`.
     pub fn new(structure: Structure) -> Self {
         Self {
             structure,
@@ -167,17 +169,17 @@ impl PeriodicQmRequest {
     }
 }
 
-/// chemx's default periodic grid cutoff (Rydberg).
+/// hartree's default periodic grid cutoff (Rydberg).
 pub const DEFAULT_E_CUT_RY: f64 = 280.0;
-/// Default SCF iteration cap (chemx's `PeriodicScfOptions` default).
+/// Default SCF iteration cap (hartree's `PeriodicScfOptions` default).
 pub const DEFAULT_MAX_ITER: u32 = 100;
 /// Default GTH basis. SZV-GTH is minimal but by far the broadest in element
 /// coverage among the bundled GTH sets (H, Li, C, O, F, Na, Mg, Si, Cl), so it
 /// is the safest "it just runs" default. The bundled `DZVP-GTH` set is the
-/// accuracy step but covers only a few elements (Li, F, Na, Mg, Cl) — chemx
+/// accuracy step but covers only a few elements (Li, F, Na, Mg, Cl) — hartree
 /// errors with the list of available sets when an element is missing.
 pub const DEFAULT_PERIODIC_BASIS: &str = "SZV-GTH";
-/// GTH basis sets offered in the GUI dropdown. chemx accepts more (and the
+/// GTH basis sets offered in the GUI dropdown. hartree accepts more (and the
 /// console `qm periodic` command takes any name); see [`DEFAULT_PERIODIC_BASIS`]
 /// for the element-coverage caveat on `DZVP-GTH`.
 pub const PERIODIC_BASES: &[&str] = &["SZV-GTH", "DZVP-GTH"];
@@ -185,7 +187,7 @@ pub const PERIODIC_BASES: &[&str] = &["SZV-GTH", "DZVP-GTH"];
 /// Run a periodic quantum-chemistry calculation.
 ///
 /// `report` receives coarse stage strings. `cancel` is **best-effort**: it is
-/// honored before the calculation starts, but chemx's `run_periodic` is a single
+/// honored before the calculation starts, but hartree's `run_periodic` is a single
 /// opaque call with no preemption hook, so an in-flight SCF cannot be
 /// interrupted — the worker runs to completion and the caller discards the
 /// result.
@@ -208,8 +210,8 @@ pub fn run_periodic_qm(
     if structure.atoms.is_empty() {
         bail!("the structure has no atoms to compute");
     }
-    // Guard the chemx inputs the GUI clamps but the console (and agent) do not.
-    // A non-positive cutoff makes chemx's real-space grid constructor panic, and
+    // Guard the hartree inputs the GUI clamps but the console (and agent) do not.
+    // A non-positive cutoff makes hartree's real-space grid constructor panic, and
     // a zero iteration cap silently returns a bogus zero-energy "result" (the SCF
     // loop `1..=0` never runs), so reject both up front with a clear error.
     if !e_cut_ry.is_finite() || e_cut_ry <= 0.0 {
@@ -231,7 +233,7 @@ pub fn run_periodic_qm(
     // PADE functional; we then override the functional and SCF knobs.
     let mut job = PeriodicJob::gth_pade(molecule, cell, kpoints, &basis)
         .map_err(|e| anyhow!("could not set up the periodic calculation: {e}"))?;
-    job.functional = functional.to_chemx();
+    job.functional = functional.to_hartree();
     job.options.e_cut = e_cut_ry;
     job.options.max_iter = max_iter as usize;
     job.forces = forces;
@@ -256,7 +258,7 @@ pub fn run_periodic_qm(
     })
 }
 
-/// Build a chemx [`Cell`] (bohr) from the structure's unit cell (Å). Rejects a
+/// Build a hartree [`Cell`] (bohr) from the structure's unit cell (Å). Rejects a
 /// missing cell and the `1×1×1`/90° placeholder some tools write for a
 /// non-periodic molecule (using it as a lattice is physically meaningless).
 fn periodic_cell_from_structure(structure: &Structure) -> Result<Cell> {
@@ -286,15 +288,15 @@ fn periodic_cell_from_structure(structure: &Structure) -> Result<Cell> {
     .map_err(|e| anyhow!("invalid unit cell: {e}"))
 }
 
-/// Build the chemx [`Molecule`] for a periodic job. Like the molecular path it
+/// Build the hartree [`Molecule`] for a periodic job. Like the molecular path it
 /// round-trips through an XYZ string (Å → bohr) and validates element symbols,
 /// but it does *not* apply charge/spin: the periodic SCF derives its
-/// (closed-shell) electron count from the GTH valence, and chemx rejects an odd
+/// (closed-shell) electron count from the GTH valence, and hartree rejects an odd
 /// valence count with a clear message of its own.
 fn periodic_molecule_from_structure(structure: &Structure) -> Result<Molecule> {
     ensure_known_elements(structure)?;
     Molecule::from_xyz(&to_xyz(structure))
-        .map_err(|e| anyhow!("chemx could not parse the cell geometry: {e}"))
+        .map_err(|e| anyhow!("hartree could not parse the cell geometry: {e}"))
 }
 
 /// Render a human-readable report of a periodic result: cell, k-mesh, cutoff,
@@ -306,7 +308,7 @@ fn format_periodic_summary(
     basis: &str,
     kmesh: KMesh,
     e_cut_ry: f64,
-    result: &chemx::PeriodicJobResult,
+    result: &hartree::PeriodicJobResult,
 ) -> String {
     let mut out = String::new();
     let n_atoms = structure.atoms.len();
@@ -373,7 +375,7 @@ fn format_periodic_summary(
     }
 
     if let Some(forces) = &result.forces {
-        // chemx returns one force per atom, in the molecule's (= structure's)
+        // hartree returns one force per atom, in the molecule's (= structure's)
         // order; assert the invariant so a future desync surfaces instead of the
         // zip silently truncating, mirroring the molecular optimize path.
         debug_assert_eq!(
@@ -413,7 +415,7 @@ fn format_periodic_summary(
 /// whether the band extrema sit at the same k-point (direct) or not (indirect).
 /// `None` when there is no virtual band to compare against (or a metallic
 /// crossing makes the gap non-positive).
-fn band_gap_estimate(scf: &chemx::periodic::PeriodicScfResult) -> Option<(f64, &'static str)> {
+fn band_gap_estimate(scf: &hartree::periodic::PeriodicScfResult) -> Option<(f64, &'static str)> {
     // The SCF occupied exactly n_elec/2 bands with the exact (even) GTH valence
     // count; recover that integer by rounding the *half* of the grid-integrated
     // count. Rounding `n_elec_grid` first can land on an odd integer (the grid
@@ -491,7 +493,7 @@ mod tests {
     }
 
     #[test]
-    fn functional_parse_matches_chemx_spellings() {
+    fn functional_parse_matches_hartree_spellings() {
         assert_eq!(
             PeriodicFunctional::parse("pade").unwrap(),
             PeriodicFunctional::Pade
@@ -551,7 +553,7 @@ mod tests {
 
     #[test]
     fn degenerate_inputs_are_rejected_before_scf() {
-        // A non-positive cutoff would otherwise panic inside chemx's grid
+        // A non-positive cutoff would otherwise panic inside hartree's grid
         // constructor; a zero iteration cap would silently yield a 0 Eh result.
         let mut zero_cutoff = PeriodicQmRequest::new(silicon_primitive());
         zero_cutoff.e_cut_ry = 0.0;

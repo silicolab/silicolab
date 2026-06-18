@@ -1,18 +1,18 @@
 use super::*;
 
 use anyhow::{Context, Result, anyhow, bail};
-use chemx::composite::Composite;
-use chemx::composite::composite;
-use chemx::dft::FunctionalSpec;
-use chemx::disp::Dispersion;
-use chemx::scf::Smearing;
-use chemx::{Element, Job, JobOptions, Method, Molecule};
+use hartree::composite::Composite;
+use hartree::composite::composite;
+use hartree::dft::FunctionalSpec;
+use hartree::disp::Dispersion;
+use hartree::scf::Smearing;
+use hartree::{Element, Job, JobOptions, Method, Molecule};
 
 use crate::domain::Structure;
 use crate::io::structure_text::to_xyz;
 
-/// Validate that every atom carries a chemx-recognized element symbol, naming
-/// the offending atom (chemx's own parse error does not). The structure editor
+/// Validate that every atom carries a hartree-recognized element symbol, naming
+/// the offending atom (hartree's own parse error does not). The structure editor
 /// accepts free-text symbols, so an atom may carry a typo, a stray character, or
 /// a blank. Shared by the molecular and periodic engine paths.
 pub(crate) fn ensure_known_elements(structure: &Structure) -> Result<()> {
@@ -29,7 +29,7 @@ pub(crate) fn ensure_known_elements(structure: &Structure) -> Result<()> {
     Ok(())
 }
 
-/// Whether chemx will accept `symbol` as an element. Mirrors `Molecule::from_xyz`,
+/// Whether hartree will accept `symbol` as an element. Mirrors `Molecule::from_xyz`,
 /// which takes either a chemical symbol (`"O"`) or an atomic number (`"8"`).
 fn is_known_element(symbol: &str) -> bool {
     let symbol = symbol.trim();
@@ -42,9 +42,9 @@ fn is_known_element(symbol: &str) -> bool {
     }
 }
 
-/// Build a chemx [`Molecule`] from one of our [`Structure`]s.
+/// Build a hartree [`Molecule`] from one of our [`Structure`]s.
 ///
-/// We round-trip through an XYZ string (Ångström) so chemx owns element-symbol
+/// We round-trip through an XYZ string (Ångström) so hartree owns element-symbol
 /// parsing and the Å→bohr conversion, then apply the net charge and spin.
 pub(crate) fn molecule_from_structure(
     structure: &Structure,
@@ -54,7 +54,7 @@ pub(crate) fn molecule_from_structure(
     ensure_known_elements(structure)?;
 
     let molecule = Molecule::from_xyz(&to_xyz(structure))
-        .context("chemx could not parse the molecule geometry")?
+        .context("hartree could not parse the molecule geometry")?
         .with_charge(charge)
         .with_multiplicity(multiplicity);
     molecule
@@ -84,7 +84,7 @@ pub(crate) fn structure_with_positions(
     Ok(relaxed)
 }
 
-/// The resolved chemx [`Job`] plus the bits of context the summary needs that
+/// The resolved hartree [`Job`] plus the bits of context the summary needs that
 /// are not recoverable from [`JobResult`] alone (the displayed basis, the
 /// composite registry entry, and whether scalar relativity was on).
 pub(crate) struct ResolvedJob {
@@ -99,10 +99,10 @@ pub(crate) struct ResolvedJob {
     pub(crate) cpcm_solvent: Option<String>,
 }
 
-/// Resolve `request` into a chemx [`Job`], mapping every silicolab option onto
-/// `JobOptions`/`Method` exactly as chemx-cli does. CLI-level incompatibilities
-/// that chemx's `Job::run` does not itself catch are rejected here with a
-/// pointed message; the deeper physics guards are left to chemx.
+/// Resolve `request` into a hartree [`Job`], mapping every silicolab option onto
+/// `JobOptions`/`Method` exactly as hartree-cli does. CLI-level incompatibilities
+/// that hartree's `Job::run` does not itself catch are rejected here with a
+/// pointed message; the deeper physics guards are left to hartree.
 pub(crate) fn build_job(
     structure: &Structure,
     method: &QmMethod,
@@ -131,17 +131,17 @@ pub(crate) fn build_job(
         );
     }
 
-    let chemx_method = resolve_chemx_method(method, multiplicity, comp)?;
+    let hartree_method = resolve_hartree_method(method, multiplicity, comp)?;
     let resolved_basis = match comp {
         Some(c) => c.basis.to_string(),
         None => basis.to_string(),
     };
 
     // Dispersion: a composite's own parametrization, or a `-d3`/`-d4` request
-    // keyed by the method (mirrors chemx-cli's param-key derivation).
+    // keyed by the method (mirrors hartree-cli's param-key derivation).
     let dispersion = match (comp, options.dispersion) {
         (Some(c), _) => Some(c.dispersion),
-        (None, Some(disp)) => Some(resolve_dispersion(method, &chemx_method, disp)?),
+        (None, Some(disp)) => Some(resolve_dispersion(method, &hartree_method, disp)?),
         (None, None) => None,
     };
 
@@ -151,10 +151,10 @@ pub(crate) fn build_job(
     let cosx = options.scf_backend == QmScfBackend::Cosx;
 
     // Grid level: explicit override, else the composite's recommended grid,
-    // else a grid-sensitive functional's recommended level, else chemx's 3.
+    // else a grid-sensitive functional's recommended level, else hartree's 3.
     let grid_level = options.grid_level.unwrap_or_else(|| {
         comp.map(|c| c.grid_level)
-            .unwrap_or_else(|| match &chemx_method {
+            .unwrap_or_else(|| match &hartree_method {
                 Method::Dft(spec) if spec.grid_sensitive() => spec.recommended_grid_level(),
                 _ => 3,
             })
@@ -169,8 +169,9 @@ pub(crate) fn build_job(
     if let Some(solv) = &options.solvation {
         match solv {
             QmSolvation::Cpcm(CpcmDielectric::Named(name)) => {
-                let eps = chemx::solv::solvent_epsilon(name).ok_or_else(|| {
-                    let names: Vec<&str> = chemx::solv::SOLVENTS.iter().map(|(n, _)| *n).collect();
+                let eps = hartree::solv::solvent_epsilon(name).ok_or_else(|| {
+                    let names: Vec<&str> =
+                        hartree::solv::SOLVENTS.iter().map(|(n, _)| *n).collect();
                     anyhow!(
                         "unknown C-PCM solvent `{name}` (available: {}; or give an explicit ε)",
                         names.join(", ")
@@ -219,7 +220,7 @@ pub(crate) fn build_job(
         job: Job {
             molecule,
             basis: resolved_basis.clone(),
-            method: chemx_method,
+            method: hartree_method,
             options: job_options,
         },
         basis: resolved_basis,
@@ -229,9 +230,9 @@ pub(crate) fn build_job(
     })
 }
 
-/// Map a [`QmMethod`] to a chemx [`Method`]. A composite runs its plain
+/// Map a [`QmMethod`] to a hartree [`Method`]. A composite runs its plain
 /// functional (the corrections are added at the job layer).
-fn resolve_chemx_method(
+fn resolve_hartree_method(
     method: &QmMethod,
     multiplicity: u32,
     comp: Option<&'static Composite>,
@@ -270,11 +271,11 @@ fn resolve_chemx_method(
     })
 }
 
-/// Resolve a `-d3`/`-d4` request for a non-composite method into a chemx
-/// [`Dispersion`], keyed by the method (mirrors chemx-cli lines 613–646).
+/// Resolve a `-d3`/`-d4` request for a non-composite method into a hartree
+/// [`Dispersion`], keyed by the method (mirrors hartree-cli lines 613–646).
 fn resolve_dispersion(
     method: &QmMethod,
-    chemx_method: &Method,
+    hartree_method: &Method,
     disp: QmDispersion,
 ) -> Result<Dispersion> {
     if method.is_post_hf() {
@@ -284,7 +285,7 @@ fn resolve_dispersion(
         );
     }
     let d4 = disp == QmDispersion::D4;
-    let param_key = match chemx_method {
+    let param_key = match hartree_method {
         Method::Rhf | Method::Uhf | Method::Rohf => "hf".to_string(),
         Method::Dft(spec) => spec
             .d4_param_set()

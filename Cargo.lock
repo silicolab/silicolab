@@ -722,214 +722,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "chemx"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14186f8e3c79e005ac48fcd2d6ea23f5d0c8fd70097ff9bb44b74f21ecc7892e"
-dependencies = [
- "chemx-basis",
- "chemx-cc",
- "chemx-core",
- "chemx-dft",
- "chemx-disp",
- "chemx-ext",
- "chemx-grad",
- "chemx-integrals",
- "chemx-linalg",
- "chemx-opt",
- "chemx-periodic",
- "chemx-props",
- "chemx-scf",
- "chemx-solv",
- "latx",
-]
-
-[[package]]
-name = "chemx-basis"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e31dbd9918ecc429ab71162e8a74f5e939d4a2f173e719040b8248ba9bdeb69c"
-dependencies = [
- "chemx-core",
- "integral",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "chemx-cc"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ef42f9e598f82da5ec4b8bbd9ee81f105aab48ddbce0a5460f29877d2e90d466"
-dependencies = [
- "chemx-core",
- "chemx-integrals",
- "chemx-linalg",
- "chemx-scf",
- "chemx-tensor",
- "rayon",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "chemx-core"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57b1badab12248a72333c416ba42f153f34d6be4ad8249800e87f879164dcc3c"
-dependencies = [
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "chemx-dft"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "631cedfdb2f443a622a9f6013394932c41b5d885eb3d840914bf36ae15101e9c"
-dependencies = [
- "chemx-basis",
- "chemx-core",
- "chemx-integrals",
- "chemx-linalg",
- "chemx-scf",
- "rayon",
- "thiserror 2.0.18",
- "xcx",
-]
-
-[[package]]
-name = "chemx-disp"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "30d3a837d150717a233106952795c07b95807da30f61d86cf341d87df0d8a348"
-dependencies = [
- "chemx-core",
- "libm",
-]
-
-[[package]]
-name = "chemx-ext"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6c93843b8a3a75075f5e5cbc8debd425262100502690bf15d1bf6c5fd0a412c1"
-dependencies = [
- "chemx-core",
- "serde_json",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "chemx-grad"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "04d4c7d8fd313bd5b4e16298075329fbd56fc85a2ed10f152146007af0ae34b1"
-dependencies = [
- "chemx-core",
- "chemx-integrals",
- "chemx-linalg",
- "chemx-scf",
-]
-
-[[package]]
-name = "chemx-integrals"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7864d18ddb3b7715900adb7ed38123c4894847a17329326fedc1518a19faf33"
-dependencies = [
- "chemx-core",
- "chemx-linalg",
- "integral",
- "latx",
- "rayon",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "chemx-linalg"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c5417bf119c60ab665fa183dae3e71c286b54e42c1ea76e7d1814dea3a8ef82"
-dependencies = [
- "faer",
-]
-
-[[package]]
-name = "chemx-opt"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3785c0983084d1c53c22cf7863a010303fb8b19c509bbbb591c2a72eb8e7c3db"
-dependencies = [
- "chemx-core",
- "chemx-linalg",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "chemx-periodic"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6edac0df2aeaf5b60dfbe1eec7cfd1f2a67b22cf6e222e0f37434c92ffb105c8"
-dependencies = [
- "chemx-basis",
- "chemx-core",
- "chemx-integrals",
- "chemx-linalg",
- "latx",
- "libm",
- "thiserror 2.0.18",
- "xcx",
-]
-
-[[package]]
-name = "chemx-props"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3aa5c544bb36360443a5441c036a75421bc34e4c5de28ab5f75f3f99b887d27"
-dependencies = [
- "chemx-core",
- "chemx-integrals",
- "chemx-linalg",
- "rayon",
-]
-
-[[package]]
-name = "chemx-scf"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fcc691be53373fdcfbf27209700162efbb9d7f4ea189cc9a3ba4bcfd65747c59"
-dependencies = [
- "chemx-core",
- "chemx-integrals",
- "chemx-linalg",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "chemx-solv"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "719d3f6d4904076758275dd997396709864b0e8a24d71d242ea890fa16ee5a35"
-dependencies = [
- "chemx-core",
- "chemx-dft",
- "chemx-integrals",
- "chemx-linalg",
- "chemx-scf",
- "libm",
- "thiserror 2.0.18",
-]
-
-[[package]]
-name = "chemx-tensor"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9ffa424f7679c6a5d8b65af232c68c10d133ac22b95334e8876723860e437340"
-dependencies = [
- "chemx-linalg",
- "rayon",
-]
-
-[[package]]
 name = "clipboard-win"
 version = "5.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2658,6 +2450,23 @@ dependencies = [
  "crunchy",
  "num-traits",
  "zerocopy",
+]
+
+[[package]]
+name = "hartree"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ae631b8a8f38f2dfd1cbb310e51eea8b1f1eacf6cdecd3f02b2c05de151422cc"
+dependencies = [
+ "faer",
+ "integral",
+ "latx",
+ "libm",
+ "rayon",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "xcx",
 ]
 
 [[package]]
@@ -5332,11 +5141,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bytemuck",
- "chemx",
  "eframe",
  "egui-phosphor",
  "egui_commonmark",
  "flate2",
+ "hartree",
  "image",
  "muda",
  "nalgebra 0.35.0",
