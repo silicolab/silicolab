@@ -258,7 +258,7 @@ pub(crate) fn render_qm_task_panel(
 }
 
 /// The molecular QM form: method, basis, charge/spin, the calculation kind, the
-/// properties toggle, and the advanced chemx options.
+/// properties toggle, and the advanced hartree options.
 fn render_molecular_qm_form(ui: &mut egui::Ui, prompt: &mut crate::frontend::state::QmPrompt) {
     use crate::engines::qm::{QmKind, QmMethod};
 
@@ -320,7 +320,7 @@ fn render_molecular_qm_form(ui: &mut egui::Ui, prompt: &mut crate::frontend::sta
                 egui::ComboBox::from_id_salt("qm_basis")
                     .selected_text(prompt.basis.clone())
                     .show_ui(ui, |ui| {
-                        // chemx's bundled basis sets, smallest to largest.
+                        // hartree's bundled basis sets, smallest to largest.
                         for basis in [
                             "sto-3g",
                             "6-31g",
@@ -420,7 +420,7 @@ fn render_periodic_qm_form(ui: &mut egui::Ui, form: &mut crate::frontend::state:
 
             ui.label("Grid cutoff (Ry):");
             // Floor at 100 Ry: below that a GPW real-space grid is too coarse to
-            // give a meaningful energy (chemx's own default is 280 Ry).
+            // give a meaningful energy (hartree's own default is 280 Ry).
             ui.add(
                 egui::DragValue::new(&mut form.e_cut_ry)
                     .range(100.0..=1200.0)
@@ -445,7 +445,7 @@ fn render_periodic_qm_form(ui: &mut egui::Ui, form: &mut crate::frontend::state:
     );
 }
 
-/// Common implicit-solvation solvent names offered in the panel dropdown. chemx
+/// Common implicit-solvation solvent names offered in the panel dropdown. hartree
 /// accepts more (especially for SMD); the console `qm` command takes any name.
 const QM_SOLVENTS: &[&str] = &[
     "water",
@@ -461,7 +461,7 @@ const QM_SOLVENTS: &[&str] = &[
     "chloroform",
 ];
 
-/// The "Advanced (chemx 0.4)" collapsing section of the QM panel: dispersion,
+/// The "Advanced (hartree 0.1)" collapsing section of the QM panel: dispersion,
 /// solvation, SCF backend, relativity, smearing, FOD, and thermochemistry knobs.
 /// Options that do not apply to the chosen method are hidden rather than shown
 /// disabled.
@@ -478,7 +478,7 @@ fn render_qm_advanced(
     );
     let method_is_mp2 = matches!(prompt.method, QmMethod::Mp2);
 
-    egui::CollapsingHeader::new("Advanced (chemx 0.4)")
+    egui::CollapsingHeader::new("Advanced (hartree 0.1)")
         .default_open(false)
         .show(ui, |ui| {
             // Dispersion — composites carry their own; post-HF has none.

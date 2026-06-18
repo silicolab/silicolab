@@ -1,11 +1,11 @@
 use super::*;
 
-use chemx::composite::composite;
-use chemx::props::thermo::QRRHO_W0_DEFAULT_CM1;
+use hartree::composite::composite;
+use hartree::props::thermo::QRRHO_W0_DEFAULT_CM1;
 
 use crate::domain::Structure;
 
-/// Bohr → Ångström. chemx stores nuclear positions in bohr.
+/// Bohr → Ångström. hartree stores nuclear positions in bohr.
 pub(crate) const BOHR_TO_ANGSTROM: f64 = 0.529_177_210_903;
 /// Hartree → electron-volt.
 pub(crate) const HARTREE_TO_EV: f64 = 27.211_386_245_988;
@@ -14,10 +14,10 @@ pub(crate) const HARTREE_TO_KCAL: f64 = 627.509_474_063;
 /// Atomic-unit dipole (e·a₀) → Debye.
 pub(crate) const AU_DIPOLE_TO_DEBYE: f64 = 2.541_746_473;
 
-/// Electronic-structure method. Mirrors `chemx::Method` but is parseable from a
+/// Electronic-structure method. Mirrors `hartree::Method` but is parseable from a
 /// console argument or UI dropdown and keeps the external type off our API edge.
 ///
-/// [`QmMethod::Composite`] additionally covers chemx's "3c" composites
+/// [`QmMethod::Composite`] additionally covers hartree's "3c" composites
 /// (r2scan-3c, b3lyp-3c, b97-3c, pbeh-3c), which bundle a functional, an implied
 /// basis, dispersion, and short-range corrections under one keyword.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,7 +75,7 @@ impl QmMethod {
     /// `-d3`/`-d4` dispersion suffix (returned separately, since dispersion is
     /// an independent option). Anything that is not a known wavefunction method
     /// or composite is treated as a DFT functional name and validated when the
-    /// job runs. Mirrors chemx-cli's method resolution.
+    /// job runs. Mirrors hartree-cli's method resolution.
     pub fn parse(input: &str) -> (QmMethod, Option<QmDispersion>) {
         let lower = input.trim().to_ascii_lowercase();
         // Split off a dispersion suffix first. Composites define their own
@@ -183,7 +183,7 @@ pub enum QmSolvation {
     /// C-PCM electrostatics: a named solvent (resolved to its dielectric) or an
     /// explicit dielectric constant ε.
     Cpcm(CpcmDielectric),
-    /// SMD universal solvation (named solvent from chemx's bundled library).
+    /// SMD universal solvation (named solvent from hartree's bundled library).
     Smd(String),
     /// ALPB implicit solvation (xtb GFN2 parameters).
     Alpb(String),
@@ -194,14 +194,14 @@ pub enum QmSolvation {
 /// How a C-PCM run fixes its dielectric constant.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CpcmDielectric {
-    /// A named solvent (e.g. `water`), resolved to ε from chemx's table.
+    /// A named solvent (e.g. `water`), resolved to ε from hartree's table.
     Named(String),
     /// An explicit dielectric constant.
     Epsilon(f64),
 }
 
-/// Advanced options for a [`QmRequest`], mirroring `chemx::JobOptions`. Every
-/// field defaults to chemx's own default, so `QmOptions::default()` reproduces a
+/// Advanced options for a [`QmRequest`], mirroring `hartree::JobOptions`. Every
+/// field defaults to hartree's own default, so `QmOptions::default()` reproduces a
 /// plain SCF single point.
 #[derive(Debug, Clone)]
 pub struct QmOptions {
@@ -220,7 +220,7 @@ pub struct QmOptions {
     pub x2c: bool,
     /// Correlate all orbitals (disable the noble-gas frozen core) for post-HF.
     pub all_electron: bool,
-    /// DFT integration grid level 0–4. `None` uses chemx's per-method default.
+    /// DFT integration grid level 0–4. `None` uses hartree's per-method default.
     pub grid_level: Option<usize>,
     /// Fermi-Dirac fractional-occupation smearing at this electronic
     /// temperature (kelvin). Energy-only.
@@ -291,7 +291,7 @@ pub struct QmRequest {
     /// Spin multiplicity, `2S + 1` (1 = singlet).
     pub multiplicity: u32,
     pub kind: QmKind,
-    /// Advanced chemx options (dispersion, solvation, SCF backend, …).
+    /// Advanced hartree options (dispersion, solvation, SCF backend, …).
     pub options: QmOptions,
 }
 
@@ -310,7 +310,7 @@ pub enum QmJob {
 /// The result of a quantum-chemistry calculation.
 ///
 /// Structured fields cover what callers read programmatically (energy, the
-/// optimized geometry); everything chemx reports — properties, frequencies,
+/// optimized geometry); everything hartree reports — properties, frequencies,
 /// thermochemistry, dispersion/solvation breakdowns, diagnostics, and the
 /// method-quality warnings — is folded into the formatted [`Self::summary`].
 #[derive(Debug, Clone)]

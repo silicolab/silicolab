@@ -656,7 +656,7 @@ pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
         running
             .cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        // chemx runs the calculation in one opaque call, so a cancel only takes
+        // hartree runs the calculation in one opaque call, so a cancel only takes
         // effect at the next stage boundary; the in-flight step runs to the end.
         state.set_message(
             "QM calculation stopping (the current step runs to completion)".to_string(),

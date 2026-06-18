@@ -51,7 +51,7 @@ impl OptimizationPrompt {
     }
 }
 
-/// User-editable configuration for a quantum-chemistry (chemx) calculation.
+/// User-editable configuration for a quantum-chemistry (hartree) calculation.
 #[derive(Debug, Clone)]
 pub struct QmPrompt {
     pub method: crate::engines::qm::QmMethod,
@@ -68,7 +68,7 @@ pub struct QmPrompt {
     /// doesn't clobber the user's choice, while switching to a different QM task
     /// re-defaults the panel.
     pub default_kind: crate::engines::qm::QmKind,
-    /// All advanced chemx options (dispersion, solvation, SCF backend, …).
+    /// All advanced hartree options (dispersion, solvation, SCF backend, …).
     pub options: crate::engines::qm::QmOptions,
     /// Whether the panel is in periodic (crystalline) mode. Only selectable when
     /// the active structure carries a real unit cell; the molecular fields above

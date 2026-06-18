@@ -5,7 +5,7 @@
 //!   is added as a new entry (the original is preserved).
 //! * `qm freq`     — harmonic vibrational frequencies at the current geometry.
 //!
-//! All run synchronously via [`crate::engines::qm`] (pure-Rust chemx), which
+//! All run synchronously via [`crate::engines::qm`] (pure-Rust hartree), which
 //! suits headless `.sls`/CLI use and small molecules; the GUI drives the same
 //! engine on a worker thread so long calculations don't block rendering.
 
@@ -43,7 +43,7 @@ pub fn qm_command(state: &mut AppState, args: &[String]) -> Result<String> {
              \x20         --kmesh <n|nxnxn>   --cutoff <Ry>   --max-iter <n>   --forces   --stress"
         );
     };
-    // `qm recommend <task>` prints chemx's recommended level of theory for a
+    // `qm recommend <task>` prints hartree's recommended level of theory for a
     // task and needs no active structure.
     if sub == "recommend" {
         return qm_recommend(&args[1..]);
@@ -67,13 +67,13 @@ pub fn qm_command(state: &mut AppState, args: &[String]) -> Result<String> {
     run(state, kind, &args[1..])
 }
 
-/// `qm recommend <task>`: chemx's data-driven level-of-theory guidance.
+/// `qm recommend <task>`: hartree's data-driven level-of-theory guidance.
 fn qm_recommend(args: &[String]) -> Result<String> {
-    let tasks = chemx::guardrails::recommendation_tasks().join(", ");
+    let tasks = hartree::guardrails::recommendation_tasks().join(", ");
     let Some(task) = args.first() else {
         bail!("usage: qm recommend <task>  (available: {tasks})");
     };
-    let rec = chemx::guardrails::recommend(task)
+    let rec = hartree::guardrails::recommend(task)
         .ok_or_else(|| anyhow!("unknown task `{task}` (available: {tasks})"))?;
     let mut out = format!("recommended level of theory for {}:\n", rec.task);
     out.push_str(&format!("  level:     {}\n", rec.level));

@@ -11,7 +11,6 @@ license = "GPL-3.0-or-later"
 [dependencies]
 anyhow = "1.0"
 bytemuck = { version = "1", features = ["derive"] }
-chemx = "0.4.0"
 eframe = { version = "0.34", features = ["persistence"] }
 egui-phosphor = "0.12.0"
 # Renders the assistant's Markdown replies in the Assistant tab. `pulldown_cmark`
@@ -21,6 +20,7 @@ egui_commonmark = { version = "0.23", default-features = false, features = [
     "pulldown_cmark",
 ] }
 flate2 = "1"
+hartree = "0.1.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
 nalgebra = "0.35.0"
 rfd = "0.17"

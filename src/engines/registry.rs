@@ -29,7 +29,7 @@ pub struct EngineId(pub &'static str);
 
 impl EngineId {
     pub const UFF: Self = Self("uff");
-    pub const CHEMX: Self = Self("chemx");
+    pub const HARTREE: Self = Self("hartree");
     pub const GROMACS: Self = Self("gromacs");
 
     pub fn as_str(self) -> &'static str {
@@ -135,10 +135,10 @@ struct EngineSpec {
     version_arg: Option<&'static str>,
 }
 
-/// Version of the bundled `chemx` quantum-chemistry library. chemx exposes no
-/// version constant, so keep this in sync with the `chemx` dependency in
+/// Version of the bundled `hartree` quantum-chemistry library. hartree exposes no
+/// version constant, so keep this in sync with the `hartree` dependency in
 /// `Cargo.toml`.
-const CHEMX_VERSION: &str = "0.4.0";
+const HARTREE_VERSION: &str = "0.1.0";
 
 const ENGINE_SPECS: &[EngineSpec] = &[EngineSpec {
     id: EngineId::GROMACS,
@@ -176,11 +176,11 @@ impl EngineRegistry {
             built_in: true,
         });
         capabilities.push(EngineCapability {
-            id: EngineId::CHEMX,
-            name: "chemx",
+            id: EngineId::HARTREE,
+            name: "hartree",
             description: "Pure-Rust quantum chemistry: molecular HF, DFT, MP2, and coupled cluster, plus periodic (crystalline) DFT.",
             launch: None,
-            version: Some(CHEMX_VERSION.to_string()),
+            version: Some(HARTREE_VERSION.to_string()),
             built_in: true,
         });
 

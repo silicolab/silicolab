@@ -76,7 +76,7 @@ pub enum DisorderWorkerMessage {
     Failed(String),
 }
 
-/// A background quantum-chemistry (chemx) job the UI is polling.
+/// A background quantum-chemistry (hartree) job the UI is polling.
 pub struct RunningQmJob {
     pub cancel: Arc<AtomicBool>,
     pub receiver: Receiver<QmWorkerMessage>,
