@@ -11,7 +11,6 @@
 //! long search doesn't block rendering. Inputs are prepared heuristically — import
 //! already-prepared `.pdbqt` for production-quality results.
 
-use std::collections::BTreeMap;
 use std::sync::{Arc, atomic::AtomicBool};
 
 use anyhow::{Result, anyhow, bail};
@@ -19,22 +18,22 @@ use anyhow::{Result, anyhow, bail};
 use crate::{
     domain::Structure,
     engines::docking::{DockingConfig, DockingInput, DockingKind, DockingOutcome, DockingRequest},
-    frontend::state::AppState,
+    frontend::{console::DockArgs, state::AppState},
     io::structure_paths::default_structure_save_path,
     workflows::docking::run_docking_calculation,
 };
 
 /// `dock ...` — run the full Monte-Carlo docking search.
-pub fn dock_command(state: &mut AppState, args: &[String]) -> Result<String> {
+pub fn dock_command(state: &mut AppState, args: DockArgs) -> Result<String> {
     run_docking_command(state, DockingKind::Dock, args)
 }
 
 /// `score ...` — score the ligand's input pose without searching.
-pub fn score_command(state: &mut AppState, args: &[String]) -> Result<String> {
+pub fn score_command(state: &mut AppState, args: DockArgs) -> Result<String> {
     run_docking_command(state, DockingKind::ScoreOnly, args)
 }
 
-fn run_docking_command(state: &mut AppState, kind: DockingKind, args: &[String]) -> Result<String> {
+fn run_docking_command(state: &mut AppState, kind: DockingKind, args: DockArgs) -> Result<String> {
     let request = assemble_request(state, kind, args)?;
     // Synchronous: a throwaway cancel flag and a no-op progress sink.
     let cancel = Arc::new(AtomicBool::new(false));
@@ -45,28 +44,31 @@ fn run_docking_command(state: &mut AppState, kind: DockingKind, args: &[String])
 
 /// Build a docking request for the agent's async (off-thread) `dock` tool, so the
 /// GUI assistant runs the same code path a human types — mirrors
-/// [`crate::frontend::qm_commands::build_agent_qm_request`].
+/// [`crate::frontend::qm_commands::build_agent_qm_request`]. The agent passes the
+/// raw tokens after the `dock` verb, parsed through the same console grammar.
 pub fn build_agent_dock_request(state: &mut AppState, args: &[String]) -> Result<DockingRequest> {
-    assemble_request(state, DockingKind::Dock, args)
+    let parsed = crate::frontend::console::parse_dock_args(args)?;
+    assemble_request(state, DockingKind::Dock, parsed)
 }
 
-/// Resolve the receptor/ligand entries and the search box from `--flags` into a
-/// [`DockingRequest`]. Shared by the synchronous command and the agent tool.
+/// Resolve the receptor/ligand entries and the search box from [`DockArgs`] into
+/// a [`DockingRequest`]. Shared by the synchronous command and the agent tool.
 fn assemble_request(
     state: &mut AppState,
     kind: DockingKind,
-    args: &[String],
+    args: DockArgs,
 ) -> Result<DockingRequest> {
-    let flags = DockFlags::parse(args)?;
     let verb = match kind {
         DockingKind::Dock => "dock",
         DockingKind::ScoreOnly => "score",
     };
-    let receptor_ref = flags
-        .str("receptor")
+    let receptor_ref = args
+        .receptor
+        .as_deref()
         .ok_or_else(|| anyhow!("{verb} requires --receptor <entry>"))?;
-    let ligand_ref = flags
-        .str("ligand")
+    let ligand_ref = args
+        .ligand
+        .as_deref()
         .ok_or_else(|| anyhow!("{verb} requires --ligand <entry>"))?;
     let receptor_id = resolve_entry_id(state, receptor_ref)?;
     let ligand_id = resolve_entry_id(state, ligand_ref)?;
@@ -79,14 +81,14 @@ fn assemble_request(
     let ligand = entry_structure(state, ligand_id, "ligand")?;
 
     // Default the box to the receptor centroid and a 22.5 Å cube.
-    let box_center = match flags.str("center") {
+    let box_center = match args.center.as_deref() {
         Some(spec) => parse_triple(spec, "center")?,
         None => {
             let center = receptor.center();
             [center.x as f64, center.y as f64, center.z as f64]
         }
     };
-    let box_size = match flags.str("size") {
+    let box_size = match args.size.as_deref() {
         Some(spec) => parse_triple(spec, "size")?,
         None => [22.5, 22.5, 22.5],
     };
@@ -95,9 +97,9 @@ fn assemble_request(
     }
 
     let config = DockingConfig {
-        exhaustiveness: flags.uint("exhaustiveness")?.unwrap_or(8).max(1) as usize,
-        num_modes: flags.uint("modes")?.unwrap_or(9).max(1) as usize,
-        seed: flags.uint("seed")?.unwrap_or(0),
+        exhaustiveness: args.exhaustiveness.unwrap_or(8).max(1) as usize,
+        num_modes: args.modes.unwrap_or(9).max(1) as usize,
+        seed: args.seed.unwrap_or(0),
     };
     Ok(DockingRequest {
         receptor: DockingInput::Structure(Box::new(receptor)),
@@ -198,57 +200,13 @@ pub(crate) fn add_pose_entries(state: &mut AppState, outcome: &DockingOutcome) {
     }
 }
 
-/// Minimal `--key value` parser (the docking commands take no boolean flags),
-/// matching the `qm`/`md` command scanners.
-struct DockFlags {
-    values: BTreeMap<String, String>,
-}
-
-impl DockFlags {
-    fn parse(args: &[String]) -> Result<Self> {
-        let mut values = BTreeMap::new();
-        let mut i = 0;
-        while i < args.len() {
-            let arg = &args[i];
-            let Some(key) = arg.strip_prefix("--") else {
-                bail!("unexpected argument `{arg}` (expected --key value)");
-            };
-            if let Some((k, v)) = key.split_once('=') {
-                values.insert(k.to_string(), v.to_string());
-                i += 1;
-            } else if i + 1 < args.len() && !args[i + 1].starts_with("--") {
-                values.insert(key.to_string(), args[i + 1].clone());
-                i += 2;
-            } else {
-                bail!("--{key} expects a value");
-            }
-        }
-        Ok(Self { values })
-    }
-
-    fn str(&self, key: &str) -> Option<&str> {
-        self.values.get(key).map(String::as_str)
-    }
-
-    fn uint(&self, key: &str) -> Result<Option<u32>> {
-        self.values
-            .get(key)
-            .map(|v| {
-                v.parse::<u32>()
-                    .map_err(|_| anyhow!("--{key} must be a positive integer, got `{v}`"))
-            })
-            .transpose()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use nalgebra::Point3;
 
-    use super::{dock_command, score_command};
     use crate::{
         domain::{Atom, Bond, BondType, Structure},
-        frontend::state::AppState,
+        frontend::{console::execute_console_line, state::AppState},
         io::structure_paths::default_structure_save_path,
     };
 
@@ -285,18 +243,11 @@ mod tests {
         let mut state = AppState::scratch(Default::default(), Vec::new());
         let receptor = add(&mut state);
         let ligand = add(&mut state);
-        let out = score_command(
+        let out = execute_console_line(
             &mut state,
-            &[
-                "--receptor".to_string(),
-                receptor.to_string(),
-                "--ligand".to_string(),
-                ligand.to_string(),
-                "--center".to_string(),
-                "1.8,0.6,0.0".to_string(),
-                "--size".to_string(),
-                "20,20,20".to_string(),
-            ],
+            &format!(
+                "score --receptor {receptor} --ligand {ligand} --center 1.8,0.6,0.0 --size 20,20,20"
+            ),
         )
         .expect("score should succeed");
         assert!(out.contains("free energy"), "got: {out}");
@@ -306,14 +257,9 @@ mod tests {
     fn dock_requires_distinct_entries() {
         let mut state = AppState::scratch(Default::default(), Vec::new());
         let entry = add(&mut state);
-        let err = dock_command(
+        let err = execute_console_line(
             &mut state,
-            &[
-                "--receptor".to_string(),
-                entry.to_string(),
-                "--ligand".to_string(),
-                entry.to_string(),
-            ],
+            &format!("dock --receptor {entry} --ligand {entry}"),
         )
         .expect_err("same entry for both should be rejected");
         assert!(err.to_string().contains("different entries"), "got: {err}");
@@ -324,23 +270,13 @@ mod tests {
         let mut state = AppState::scratch(Default::default(), Vec::new());
         let receptor = add(&mut state);
         let ligand = add(&mut state);
-        let out = dock_command(
+        // Keep the search tiny so the test stays fast.
+        let out = execute_console_line(
             &mut state,
-            &[
-                "--receptor".to_string(),
-                receptor.to_string(),
-                "--ligand".to_string(),
-                ligand.to_string(),
-                "--center".to_string(),
-                "1.8,0.6,0.0".to_string(),
-                "--size".to_string(),
-                "20,20,20".to_string(),
-                // Keep the search tiny so the test stays fast.
-                "--exhaustiveness".to_string(),
-                "1".to_string(),
-                "--modes".to_string(),
-                "3".to_string(),
-            ],
+            &format!(
+                "dock --receptor {receptor} --ligand {ligand} --center 1.8,0.6,0.0 \
+                 --size 20,20,20 --exhaustiveness 1 --modes 3"
+            ),
         )
         .expect("dock should succeed");
         assert!(out.contains("Docking complete"), "got: {out}");
@@ -356,7 +292,7 @@ mod tests {
     #[test]
     fn missing_receptor_is_reported() {
         let mut state = AppState::scratch(Default::default(), Vec::new());
-        let err = dock_command(&mut state, &["--ligand".to_string(), "active".to_string()])
+        let err = execute_console_line(&mut state, "dock --ligand active")
             .expect_err("missing --receptor should error");
         assert!(err.to_string().contains("--receptor"), "got: {err}");
     }

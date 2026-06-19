@@ -1,18 +1,22 @@
-use anyhow::{Result, anyhow, bail};
+//! Value parsers and the shared viewport mutator for the console grammar.
+//!
+//! These functions are the bridge between clap and the domain types: each
+//! `parse_*` is used as a clap `value_parser`, so the grammar in
+//! [`super::grammar`] stays declarative and the accepted token sets (named
+//! colors, `on`/`off`, atom-style aliases, …) live in one place. clap value
+//! parsers must return `Result<T, String>` (or any `Display` error), so these
+//! mirror the old hand-rolled helpers' accepted inputs while letting clap render
+//! the failures.
+
 use eframe::egui::Color32;
 
-use crate::frontend::{ViewportVisualState, state::AppState};
+use crate::frontend::{
+    LightPreset, SurfaceStyle, ViewportVisualState,
+    state::{AppState, AtomStyle},
+};
 
-pub(crate) fn parse_chain_arg(arg: Option<&String>) -> Result<char> {
-    arg.and_then(|value| value.chars().next())
-        .ok_or_else(|| anyhow!("chain id is required"))
-}
-
-pub(crate) fn parse_color_arg(arg: Option<&String>) -> Result<Color32> {
-    let value = arg.ok_or_else(|| anyhow!("color is required"))?;
-    parse_color(value).ok_or_else(|| anyhow!("unknown color `{value}`"))
-}
-
+/// Parse a color token: a named color or `#rrggbb`. Used both as a clap
+/// `value_parser` (via [`parse_color_value`]) and by the view-script exporter.
 pub(crate) fn parse_color(value: &str) -> Option<Color32> {
     let lower = value.to_ascii_lowercase().replace('-', " ");
     match lower.as_str() {
@@ -34,48 +38,58 @@ pub(crate) fn parse_color(value: &str) -> Option<Color32> {
     }
 }
 
-pub(crate) fn parse_bool(arg: Option<&String>, name: &str) -> Result<bool> {
-    match arg.map(String::as_str) {
-        Some("true" | "on" | "yes" | "1") => Ok(true),
-        Some("false" | "off" | "no" | "0") => Ok(false),
-        _ => bail!("{name} must be on or off"),
+/// clap value parser for a color argument (named or `#rrggbb`).
+pub(crate) fn parse_color_value(value: &str) -> Result<Color32, String> {
+    parse_color(value).ok_or_else(|| format!("unknown color `{value}`"))
+}
+
+/// clap value parser for an `on`/`off` toggle. Accepts the same spellings the
+/// old hand-written `parse_bool` did, so scripts keep working verbatim.
+pub(crate) fn parse_onoff(value: &str) -> Result<bool, String> {
+    match value {
+        "true" | "on" | "yes" | "1" => Ok(true),
+        "false" | "off" | "no" | "0" => Ok(false),
+        _ => Err("expected on or off".to_string()),
     }
 }
 
-pub(crate) fn parse_f32(arg: Option<&String>, name: &str) -> Result<f32> {
-    arg.ok_or_else(|| anyhow!("{name} is required"))?
-        .parse::<f32>()
-        .map_err(Into::into)
+/// clap value parser for a chain id: the first character of the token, matching
+/// the old `parse_chain_arg` (a multi-character token uses its first char).
+pub(crate) fn parse_chain(value: &str) -> Result<char, String> {
+    value
+        .chars()
+        .next()
+        .ok_or_else(|| "chain id is required".to_string())
 }
 
-pub(crate) fn parse_usize(arg: Option<&String>, name: &str) -> Result<usize> {
-    arg.ok_or_else(|| anyhow!("{name} is required"))?
-        .parse::<usize>()
-        .map_err(Into::into)
+/// clap value parser for a per-atom representation style (with its aliases).
+pub(crate) fn parse_atom_style(value: &str) -> Result<AtomStyle, String> {
+    AtomStyle::from_token(value)
+        .ok_or_else(|| "expected cartoon|ball-stick|stick|wireframe|sphere|dots|hidden".to_string())
 }
 
-pub(crate) fn option_value<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
-    args.windows(2)
-        .find(|pair| pair[0] == name)
-        .map(|pair| pair[1].as_str())
+/// clap value parser for a lighting preset.
+pub(crate) fn parse_light_preset(value: &str) -> Result<LightPreset, String> {
+    match value {
+        "soft" => Ok(LightPreset::Soft),
+        "gentle" => Ok(LightPreset::Gentle),
+        "studio" => Ok(LightPreset::Studio),
+        _ => Err("expected soft|gentle|studio".to_string()),
+    }
 }
 
-pub(crate) fn without_global_arg(args: &[String]) -> (Vec<String>, bool) {
-    let mut global = false;
-    let filtered = args
-        .iter()
-        .filter_map(|arg| {
-            if arg == "--global" {
-                global = true;
-                None
-            } else {
-                Some(arg.clone())
-            }
-        })
-        .collect();
-    (filtered, global)
+/// clap value parser for a surface fill style.
+pub(crate) fn parse_surface_style(value: &str) -> Result<SurfaceStyle, String> {
+    match value {
+        "fill" => Ok(SurfaceStyle::Fill),
+        "mesh" => Ok(SurfaceStyle::Mesh),
+        _ => Err("expected fill|mesh".to_string()),
+    }
 }
 
+/// Apply a viewport mutation to the active entry, and — when `global` — to the
+/// project default and every open entry's viewport too. Shared by every render
+/// command so the `--global` semantics live in one place.
 pub(crate) fn update_viewport<F>(state: &mut AppState, global: bool, mut update: F)
 where
     F: FnMut(&mut ViewportVisualState),

@@ -6,8 +6,7 @@ use std::{
 };
 
 use super::{
-    execute_console_line, expand_script_variables, normalize_script_path, parse_fetch_command_args,
-    script_source_path,
+    Command, ViewKind, execute_console_line, expand_script_variables, parse_command, shell_words,
 };
 use crate::frontend::{
     LightPreset, SurfaceStyle, ViewportVisualState,
@@ -38,33 +37,164 @@ fn open_fixture_command(path: &Path) -> String {
     format!("open {}", path.display())
 }
 
+/// `source`/`run` are ordinary subcommands now; a quoted path is de-quoted in
+/// exactly one place (the tokenizer) before clap sees it, and `run` is an alias.
 #[test]
-fn source_and_run_take_the_rest_of_the_line_as_script_path() {
-    let path = r#""C:\projects\silicolab\reference\sls.sls""#;
-    assert_eq!(script_source_path(&format!("source {path}")), Some(path));
+fn source_and_run_parse_the_script_path_dequoted() {
+    let words = shell_words(r#"source "C:\projects\silicolab\reference\sls.sls""#).unwrap();
+    match parse_command(&words).unwrap() {
+        Command::Source { path } => {
+            assert_eq!(
+                path,
+                PathBuf::from(r"C:\projects\silicolab\reference\sls.sls")
+            );
+        }
+        other => panic!("expected source, got {other:?}"),
+    }
+
+    let words = shell_words(r"run C:\tmp\demo.sls").unwrap();
+    match parse_command(&words).unwrap() {
+        Command::Source { path } => assert_eq!(path, PathBuf::from(r"C:\tmp\demo.sls")),
+        other => panic!("expected source via `run` alias, got {other:?}"),
+    }
+}
+
+/// The tokenizer strips a single wrapping quote pair (double or single) so the
+/// script path arrives at clap already de-quoted — backslashes intact.
+#[test]
+fn tokenizer_strips_one_wrapping_quote_pair() {
     assert_eq!(
-        script_source_path("run C:\\tmp\\demo.sls"),
-        Some("C:\\tmp\\demo.sls")
+        shell_words(r#""C:\tmp\demo.sls""#).unwrap(),
+        vec![r"C:\tmp\demo.sls".to_string()]
+    );
+    assert_eq!(
+        shell_words(r#"'C:\tmp\demo.sls'"#).unwrap(),
+        vec![r"C:\tmp\demo.sls".to_string()]
     );
 }
 
-#[test]
-fn script_paths_allow_one_wrapping_quote_pair() {
-    assert_eq!(
-        normalize_script_path(r#""C:\tmp\demo.sls""#).unwrap(),
-        r"C:\tmp\demo.sls"
-    );
-    assert_eq!(
-        normalize_script_path(r#"'C:\tmp\demo.sls'"#).unwrap(),
-        r"C:\tmp\demo.sls"
-    );
-}
-
+/// Unbalanced quotes fail at the tokenizer, before any filesystem access — the
+/// single place quote handling lives now.
 #[test]
 fn malformed_script_quotes_fail_before_filesystem_access() {
-    assert!(normalize_script_path(r#""C:\tmp\demo.sls"#).is_err());
-    assert!(normalize_script_path(r#"C:\tmp\demo.sls""#).is_err());
-    assert!(normalize_script_path(r#"'C:\tmp\demo.sls"#).is_err());
+    assert!(shell_words(r#"source "C:\tmp\demo.sls"#).is_err());
+    assert!(shell_words(r#"source C:\tmp\demo.sls""#).is_err());
+    assert!(shell_words(r#"source 'C:\tmp\demo.sls"#).is_err());
+}
+
+/// The still-deferred domain commands capture their tail verbatim
+/// (hyphen-leading values and all) and hand it to the existing parsers. This is
+/// the path the GUI console and `.sls` scripts take; the agent heavy-path splits
+/// the same string itself.
+#[test]
+fn deferred_domain_commands_pass_their_tail_through_unparsed() {
+    // A leading-hyphen first token and a negative value both survive.
+    let qm = shell_words("qm energy --method rhf --charge -1").unwrap();
+    match parse_command(&qm).unwrap() {
+        Command::Qm { args } => {
+            assert_eq!(args, vec!["energy", "--method", "rhf", "--charge", "-1"])
+        }
+        other => panic!("expected qm pass-through, got {other:?}"),
+    }
+
+    // `pack` is an alias of `disorder`; the tail still passes through.
+    let pack = shell_words("pack --of active --box 10,10,10").unwrap();
+    match parse_command(&pack).unwrap() {
+        Command::Disorder { args } => {
+            assert_eq!(args, vec!["--of", "active", "--box", "10,10,10"])
+        }
+        other => panic!("expected disorder via `pack`, got {other:?}"),
+    }
+}
+
+/// `dock`/`score` are now nested clap: flags become typed fields (negative box
+/// coordinates included), so the body and the agent path share one parser.
+#[test]
+fn dock_flags_parse_into_typed_fields() {
+    let dock =
+        shell_words("dock --receptor #1 --ligand #2 --center -1,2,3 --exhaustiveness 4").unwrap();
+    match parse_command(&dock).unwrap() {
+        Command::Dock(args) => {
+            assert_eq!(args.receptor.as_deref(), Some("#1"));
+            assert_eq!(args.ligand.as_deref(), Some("#2"));
+            assert_eq!(args.center.as_deref(), Some("-1,2,3"));
+            assert_eq!(args.exhaustiveness, Some(4));
+            assert_eq!(args.size, None);
+        }
+        other => panic!("expected dock, got {other:?}"),
+    }
+
+    match parse_command(&shell_words("score --receptor active --ligand #2").unwrap()).unwrap() {
+        Command::Score(args) => assert_eq!(args.receptor.as_deref(), Some("active")),
+        other => panic!("expected score, got {other:?}"),
+    }
+}
+
+/// `--global` is accepted both after the subcommand keyword and before it.
+#[test]
+fn global_flag_is_accepted_in_either_position() {
+    for line in [
+        "view background white --global",
+        "view --global background white",
+    ] {
+        match parse_command(&shell_words(line).unwrap()).unwrap() {
+            Command::View(args) => {
+                assert!(args.global.global, "`--global` not seen in `{line}`");
+                assert!(matches!(args.kind, ViewKind::Background { .. }));
+            }
+            other => panic!("expected view, got {other:?}"),
+        }
+    }
+
+    // Without it, `global` is false (and `focus` aliases `activate`).
+    match parse_command(&shell_words("surface style mesh").unwrap()).unwrap() {
+        Command::Surface(args) => assert!(!args.global.global),
+        other => panic!("expected surface, got {other:?}"),
+    }
+}
+
+/// A quoted, spaced path is one token by the time clap sees it.
+#[test]
+fn quoted_spaced_path_is_a_single_open_argument() {
+    let words = shell_words(r#"open "C:\some path\x.pdb""#).unwrap();
+    match parse_command(&words).unwrap() {
+        Command::Open { path } => assert_eq!(path, r"C:\some path\x.pdb"),
+        other => panic!("expected open, got {other:?}"),
+    }
+}
+
+/// The bare `*.sls` shortcut only fires for a single whitespace-free `.sls`
+/// token, never for a multi-word line.
+#[test]
+fn bare_script_path_shortcut_recognition() {
+    assert!(super::looks_like_script_path("foo.sls"));
+    assert!(super::looks_like_script_path(r"C:\scripts\demo.SLS"));
+    assert!(!super::looks_like_script_path("foo.pdb"));
+    assert!(!super::looks_like_script_path("source foo.sls"));
+}
+
+/// Drift guard: every top-level command in the clap tree must be documented in
+/// the assistant's `command_catalog()`, except the scripting/meta plumbing that
+/// is deliberately not an assistant action.
+#[test]
+fn every_command_is_catalogued_or_exempt() {
+    // - source/run: scripting plumbing, not an assistant action.
+    // - help: meta.
+    // - disorder/pack: GUI/CLI-only today; not yet surfaced to the assistant.
+    //   TODO(catalog): add `disorder` to command_catalog() if/when the assistant
+    //   should drive packing, then drop it from this list.
+    const EXEMPT: &[&str] = &["source", "disorder", "help"];
+    let catalog = super::command_catalog();
+    for name in super::top_level_command_names() {
+        if EXEMPT.contains(&name.as_str()) {
+            continue;
+        }
+        assert!(
+            catalog.contains(name.as_str()),
+            "top-level command `{name}` is missing from command_catalog(); \
+             document it for the assistant or add it to the EXEMPT list"
+        );
+    }
 }
 
 #[test]
@@ -91,28 +221,44 @@ fn missing_script_variables_fail_without_default() {
 
 #[test]
 fn fetch_command_args_support_db_and_dir_flags() {
-    let parsed = parse_fetch_command_args(&[
-        "4hhb".to_string(),
-        "--db".to_string(),
-        "https://example.org/pdb".to_string(),
-        "--dir".to_string(),
-        "tmp/structures".to_string(),
-    ])
-    .unwrap();
-
-    assert_eq!(parsed.id, "4hhb");
-    assert_eq!(parsed.base_url, "https://example.org/pdb");
-    assert_eq!(parsed.dir.unwrap(), PathBuf::from("tmp/structures"));
+    let words =
+        shell_words("fetch 4hhb --db https://example.org/pdb --dir tmp/structures").unwrap();
+    match parse_command(&words).unwrap() {
+        Command::Fetch { id, db, dir } => {
+            assert_eq!(id, "4hhb");
+            assert_eq!(db.as_deref(), Some("https://example.org/pdb"));
+            assert_eq!(dir.unwrap(), PathBuf::from("tmp/structures"));
+        }
+        other => panic!("expected fetch, got {other:?}"),
+    }
 }
 
 #[test]
 fn fetch_command_args_reject_unknown_flags() {
-    let error = parse_fetch_command_args(&["4hhb".to_string(), "--oops".to_string()])
-        .expect_err("unknown flags should fail");
+    let words = shell_words("fetch 4hhb --oops").unwrap();
     assert!(
-        error
-            .to_string()
-            .contains("unknown flag `--oops` for fetch")
+        parse_command(&words).is_err(),
+        "an unknown flag should fail to parse"
+    );
+}
+
+/// `help` is now clap-rendered, and an unknown command still comes back through
+/// the `Err` channel (shown as `command failed: ...`) rather than exiting.
+#[test]
+fn help_renders_and_unknown_command_errors() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+
+    let help = execute_console_line(&mut state, "help").expect("help should render");
+    for expected in ["open", "view", "dock"] {
+        assert!(
+            help.contains(expected),
+            "help missing `{expected}`:\n{help}"
+        );
+    }
+
+    assert!(
+        execute_console_line(&mut state, "definitely-not-a-command").is_err(),
+        "an unknown command must surface as an error, not exit"
     );
 }
 
