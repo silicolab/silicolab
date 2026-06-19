@@ -1,0 +1,16 @@
+[
+  {
+    "name": "docking-pose-prediction",
+    "engine": "docking",
+    "description": "Predict a ligand binding pose: `dock --receptor <entry> --ligand <entry>`. Give --center/--size for a known pocket; without them it boxes the whole receptor (blind docking).",
+    "triggers": ["dock", "docking", "ligand", "receptor", "binding pose", "vina", "affinity", "pocket", "screening", "bind"],
+    "command": ["dock --receptor active --ligand 2 --center 10,12,8 --size 20,20,20"],
+    "caveats": [
+      "Specify --center/--size on the known binding site for a meaningful result; the whole-receptor default is only for blind docking.",
+      "Vina ignores input partial charges and the preparation is approximate - treat scores as a ranking, not absolute affinities.",
+      "Use `score` (single-pose score) when you only want to rank an existing pose; raise --exhaustiveness for harder cases."
+    ],
+    "body": "`inspect` lists open entries and their ids so you can pass the right --receptor/--ligand. Center the box on the pocket centroid; a ~20 Angstrom cube usually covers a site. --modes sets how many poses to return, --seed makes a run reproducible.",
+    "in_table": true
+  }
+]

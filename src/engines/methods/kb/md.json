@@ -1,0 +1,28 @@
+[
+  {
+    "name": "md-equilibrium-dynamics",
+    "engine": "md",
+    "description": "Classical dynamics / solvation / sampling of a large or flexible system: `md build` (box + topology) then `md simulate` (EM -> NVT -> NPT -> production).",
+    "triggers": ["md", "molecular dynamics", "simulation", "gromacs", "solvation", "equilibration", "trajectory", "ensemble", "nvt", "npt", "sampling", "dynamics"],
+    "command": ["md build", "md simulate --time 1ns --temperature 300"],
+    "caveats": [
+      "MD runs in WSL via GROMACS - confirm the GROMACS engine is configured (check `inspect`).",
+      "`md build` assigns a force field and water model automatically; make sure the topology suits your system before a long run.",
+      "Use MD for dynamics, solvation, and large flexible systems - not for bond breaking or electronic properties (use QM for those)."
+    ],
+    "body": "Start short to validate the setup, then extend --time. NVT equilibrates temperature, NPT equilibrates density, then production samples. For a single relaxed structure rather than a trajectory, `--no-relax` skips equilibration. Analysis (RMSD, etc.) runs after production.",
+    "in_table": true
+  },
+  {
+    "name": "md-vs-qm",
+    "engine": "md",
+    "description": "Deciding QM vs MD: QM for electronic structure / energies / spectra of small systems; MD for time evolution, solvation, and conformational sampling of large ones.",
+    "triggers": ["md or qm", "qm or md", "which engine", "force field vs", "dynamics vs", "choose engine", "method choice"],
+    "command": [],
+    "caveats": [
+      "Classical MD cannot break or form covalent bonds and has no electronic structure; QM cannot reach the size/timescale MD samples."
+    ],
+    "body": "Rule of thumb: thousands of atoms over nanoseconds -> MD (GROMACS). Tens of atoms, energies/barriers/spectra/charges -> QM. Workflows often combine them: sample conformers or a binding pose, then refine key structures with QM.",
+    "in_table": false
+  }
+]
