@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Result, bail};
 
@@ -6,11 +9,13 @@ use crate::frontend::state::AppState;
 
 mod args;
 mod editing;
+mod grammar;
 mod loading;
 mod render;
 
 pub(crate) use args::*;
 pub(crate) use editing::*;
+pub(crate) use grammar::*;
 pub(crate) use loading::*;
 pub(crate) use render::*;
 
@@ -35,8 +40,8 @@ pub struct ScriptRunResult {
 }
 
 impl ScriptContext {
-    pub(crate) fn resolve_path(&self, path: &str) -> PathBuf {
-        PathBuf::from(path)
+    pub(crate) fn resolve_path(&self, path: impl AsRef<Path>) -> PathBuf {
+        path.as_ref().to_path_buf()
     }
 }
 
@@ -71,46 +76,21 @@ fn execute_console_line_with_context(
     }
 
     let expanded = expand_script_variables(trimmed, &context.variables)?;
-    if let Some(path) = script_source_path(trimmed) {
-        let expanded_path = expand_script_variables(path, &context.variables)?;
-        run_script_path_with_context(state, context, &expanded_path)?;
-        return Ok(String::new());
-    }
+    // The bare `*.sls` shortcut: a single whitespace-free `.sls` token runs as a
+    // script. Checked before tokenization so it can't be mistaken for a command.
     if looks_like_script_path(&expanded) {
         run_script_path_with_context(state, context, &expanded)?;
         return Ok(String::new());
     }
 
+    // Tokenize (Windows-backslash-safe), then let the clap grammar dispatch.
+    // `source`/`run` is now an ordinary subcommand, so a quoted script path is
+    // de-quoted in exactly one place — the tokenizer.
     let words = shell_words(&expanded)?;
-    let Some(command) = words.first().map(String::as_str) else {
+    if words.is_empty() {
         return Ok(String::new());
-    };
-
-    match command {
-        "open" => open_command(state, context, &words[1..]),
-        "activate" | "focus" => activate_command(state, &words[1..]),
-        "sketch" => sketch_command(state, &words[1..]),
-        "fetch" => fetch_command(state, &words[1..]),
-        "source" | "run" => source_command(state, context, &words[1..]),
-        "view" => view_command(state, &words[1..]),
-        "cartoon" => cartoon_command(state, &words[1..]),
-        "color" => color_command(state, &words[1..]),
-        "surface" => surface_command(state, &words[1..]),
-        "show" => show_command(state, &words[1..]),
-        "hydrogen" | "hydrogens" => hydrogen_command(state, &words[1..]),
-        "delete" => delete_command(state, &words[1..]),
-        "representation" => representation_command(state, &words[1..]),
-        "save" => save_command(state, context, &words[1..]),
-        "md" => crate::frontend::md_commands::md_command(state, &words[1..]),
-        "disorder" | "pack" => {
-            crate::frontend::disorder_commands::disorder_command(state, &words[1..])
-        }
-        "qm" => crate::frontend::qm_commands::qm_command(state, &words[1..]),
-        "dock" => crate::frontend::docking_commands::dock_command(state, &words[1..]),
-        "score" => crate::frontend::docking_commands::score_command(state, &words[1..]),
-        "help" => Ok(help_text()),
-        _ => bail!("unknown command `{command}`"),
     }
+    grammar::run(state, context, &words)
 }
 
 pub(crate) fn run_script_path_with_context(
@@ -118,7 +98,10 @@ pub(crate) fn run_script_path_with_context(
     context: &mut ScriptContext,
     path: &str,
 ) -> Result<()> {
-    let path = normalize_script_path(path)?;
+    let path = path.trim();
+    if path.is_empty() {
+        bail!("script path is empty");
+    }
     let resolved_path = context.resolve_path(path);
     if !resolved_path
         .to_string_lossy()
@@ -128,7 +111,6 @@ pub(crate) fn run_script_path_with_context(
         bail!("SilicoLab scripts use the .sls extension");
     }
     let script = std::fs::read_to_string(&resolved_path)?;
-    let mut count = 0;
     for line in script.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {
@@ -138,64 +120,13 @@ pub(crate) fn run_script_path_with_context(
         if !output.is_empty() {
             context.stdout_lines.push(output);
         }
-        count += 1;
     }
-    let _ = count;
     Ok(())
 }
 
 fn looks_like_script_path(input: &str) -> bool {
     let lower = input.to_ascii_lowercase();
     !input.contains(char::is_whitespace) && lower.ends_with(".sls")
-}
-
-fn script_source_path(input: &str) -> Option<&str> {
-    for command in ["source", "run"] {
-        if let Some(rest) = input.strip_prefix(command)
-            && rest.chars().next().is_some_and(char::is_whitespace)
-        {
-            return Some(rest.trim());
-        }
-    }
-    None
-}
-
-fn normalize_script_path(path: &str) -> Result<&str> {
-    let trimmed = path.trim();
-    if trimmed.is_empty() {
-        bail!("script path is empty");
-    }
-
-    if trimmed.starts_with('"') || trimmed.ends_with('"') {
-        let Some(inner) = trimmed
-            .strip_prefix('"')
-            .and_then(|value| value.strip_suffix('"'))
-        else {
-            bail!("double-quoted script paths must start and end with \"");
-        };
-        if inner.contains('"') {
-            bail!("script paths cannot contain quote characters");
-        }
-        return Ok(inner);
-    }
-
-    if trimmed.starts_with('\'') || trimmed.ends_with('\'') {
-        let Some(inner) = trimmed
-            .strip_prefix('\'')
-            .and_then(|value| value.strip_suffix('\''))
-        else {
-            bail!("single-quoted script paths must start and end with '");
-        };
-        if inner.contains('\'') {
-            bail!("script paths cannot contain quote characters");
-        }
-        return Ok(inner);
-    }
-
-    if trimmed.contains(char::is_whitespace) {
-        bail!("script paths with spaces must be wrapped in matching quotes");
-    }
-    Ok(trimmed)
 }
 
 fn shell_words(input: &str) -> Result<Vec<String>> {
@@ -329,35 +260,6 @@ pub fn command_catalog() -> String {
         "",
         "Tips: render commands target the active entry unless given `--global`. Call `inspect` \
          first when you are unsure what is loaded.",
-    ]
-    .join("\n")
-}
-
-fn help_text() -> String {
-    [
-        "commands:",
-        "open <path>",
-        "sketch <SMILES>   build a 3D structure from a SMILES string and add it as a new entry",
-        "activate <#id|name>   make an already-open entry active (render/md/qm target the active entry)",
-        "fetch <pdb-id> [--db <base-url>] [--dir <directory>]   download a structure by PDB id",
-        "source <script.sls>",
-        "save image <path.png>",
-        "view background <color>; view cell on|off; view water on|off; view light soft|gentle|studio",
-        "cartoon helix|sheet|coil --width n --thickness n; cartoon smoothing n; cartoon profile n",
-        "surface chain <id>; surface style fill|mesh; surface transparency <0-100>",
-        "color chain <id> <color>; color ions <color>; color hetero",
-        "show ions --within 3.5",
-        "hydrogen add",
-        "delete chain <A,B,...>",
-        "md build   wrap the active structure in a simulation box and capture its topology",
-        "md simulate [--time 1ns] [--temperature 300] [--no-relax]   run EM/NVT/NPT/production + analysis",
-        "disorder --of <entry> [--count n|--density g/cm3|--conc mol/L] --box X,Y,Z|--sphere R|--cylinder R,L   pack molecules (alias: pack)",
-        "qm energy|optimize|freq [--method b3lyp] [--basis def2-svp] [--charge 0] [--spin 1] [--properties]",
-        "qm periodic [--functional pade|lda] [--basis SZV-GTH] [--kmesh 2x2x2] [--cutoff 280] [--forces] [--stress]   periodic (crystal) DFT on the active cell",
-        "dock --receptor <entry> --ligand <entry> [--center x,y,z] [--size x,y,z] [--exhaustiveness 8] [--modes 9] [--seed 0]   dock a ligand into a receptor (Vina)",
-        "score --receptor <entry> --ligand <entry> [--center x,y,z] [--size x,y,z]   single-point score of the ligand's input pose",
-        "add --global to render commands to apply them project-wide",
-        "script variables: ${name} or ${name:-default}",
     ]
     .join("\n")
 }

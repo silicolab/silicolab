@@ -1,17 +1,17 @@
 use std::collections::BTreeSet;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 
+use super::{DeleteTarget, HydrogenAction};
 use crate::{
     domain::{Biopolymer, ChainRecord, ResidueRecord},
     domain::{Bond, Structure},
     frontend::state::AppState,
 };
 
-pub(crate) fn hydrogen_command(state: &mut AppState, args: &[String]) -> Result<String> {
-    match args.first().map(String::as_str) {
-        Some("add") | Some("fill") => add_hydrogens_command(state),
-        _ => bail!("usage: hydrogen add"),
+pub(crate) fn hydrogen_command(state: &mut AppState, action: HydrogenAction) -> Result<String> {
+    match action {
+        HydrogenAction::Add => add_hydrogens_command(state),
     }
 }
 
@@ -33,12 +33,10 @@ fn add_hydrogens_command(state: &mut AppState) -> Result<String> {
     Ok(format!("added {added} hydrogen(s)"))
 }
 
-pub(crate) fn delete_command(state: &mut AppState, args: &[String]) -> Result<String> {
-    match args.first().map(String::as_str) {
-        Some("chain") => {
-            let chains = args
-                .get(1)
-                .ok_or_else(|| anyhow!("usage: delete chain <A,B,...>"))?
+pub(crate) fn delete_command(state: &mut AppState, target: DeleteTarget) -> Result<String> {
+    match target {
+        DeleteTarget::Chain { spec } => {
+            let chains = spec
                 .split(',')
                 .filter_map(|token| token.trim().chars().next())
                 .collect::<BTreeSet<_>>();
@@ -51,7 +49,6 @@ pub(crate) fn delete_command(state: &mut AppState, args: &[String]) -> Result<St
             state.history.push_undo(before);
             Ok(format!("deleted {removed} atom(s) from chain selection"))
         }
-        _ => bail!("usage: delete chain <A,B,...>"),
     }
 }
 

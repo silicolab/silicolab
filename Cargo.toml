@@ -11,6 +11,11 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 anyhow = "1.0"
 bytemuck = { version = "1", features = ["derive"] }
+# Declarative grammar for the in-app `.sls` command console (see
+# `frontend/console/grammar.rs`): one clap derive tree is the single source of
+# truth for dispatch and help. `no_binary_name` is used because the console is a
+# REPL with no argv[0]; errors are rendered to strings, never `exit()`.
+clap = { version = "4", features = ["derive"] }
 docking = "0.1.0"
 eframe = { version = "0.34", features = ["persistence"] }
 egui-phosphor = "0.12.0"

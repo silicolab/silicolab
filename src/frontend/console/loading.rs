@@ -9,11 +9,8 @@ use crate::{frontend::state::AppState, io::pdb_fetch};
 pub(crate) fn open_command(
     state: &mut AppState,
     context: &ScriptContext,
-    args: &[String],
+    path: &str,
 ) -> Result<String> {
-    let path = args
-        .first()
-        .ok_or_else(|| anyhow!("usage: open <structure-path>"))?;
     let path = context.resolve_path(path);
     open_structure_path(state, path.clone())?;
     Ok(format!("opened {}", path.display()))
@@ -24,10 +21,7 @@ pub(crate) fn open_command(
 /// *create* a new active entry; this is the way to switch back to an existing
 /// one without re-importing it. Entry ids are shown by `inspect` and echoed by
 /// `sketch`/`open` (e.g. "entry #2").
-pub(crate) fn activate_command(state: &mut AppState, args: &[String]) -> Result<String> {
-    let reference = args
-        .first()
-        .ok_or_else(|| anyhow!("usage: activate <#id|name>"))?;
+pub(crate) fn activate_command(state: &mut AppState, reference: &str) -> Result<String> {
     let entry_id = resolve_entry_reference(state, reference)?;
     state.show_entry(entry_id);
     let name = state
@@ -80,17 +74,15 @@ fn resolve_entry_reference(state: &AppState, reference: &str) -> Result<u64> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct ParsedFetchCommand {
-    pub(crate) id: String,
-    pub(crate) base_url: String,
-    pub(crate) dir: Option<PathBuf>,
-}
-
-pub(crate) fn fetch_command(state: &mut AppState, args: &[String]) -> Result<String> {
-    let parsed = parse_fetch_command_args(args)?;
-    let target_dir = parsed.dir.unwrap_or_else(|| state.structures_dir());
-    let fetched = pdb_fetch::fetch_pdb(&parsed.id, &parsed.base_url, &target_dir)?;
+pub(crate) fn fetch_command(
+    state: &mut AppState,
+    id: &str,
+    db: Option<&str>,
+    dir: Option<PathBuf>,
+) -> Result<String> {
+    let base_url = db.unwrap_or(pdb_fetch::RCSB_DEFAULT_BASE_URL);
+    let target_dir = dir.unwrap_or_else(|| state.structures_dir());
+    let fetched = pdb_fetch::fetch_pdb(id, base_url, &target_dir)?;
     open_structure_path(state, fetched.path.clone())?;
     let verb = if fetched.downloaded {
         "fetched"
@@ -98,46 +90,6 @@ pub(crate) fn fetch_command(state: &mut AppState, args: &[String]) -> Result<Str
         "loaded cached"
     };
     Ok(format!("{verb} {}", fetched.path.display()))
-}
-
-pub(crate) fn parse_fetch_command_args(args: &[String]) -> Result<ParsedFetchCommand> {
-    let mut id: Option<String> = None;
-    let mut base_url = pdb_fetch::RCSB_DEFAULT_BASE_URL.to_string();
-    let mut dir = None;
-
-    let mut index = 0;
-    while index < args.len() {
-        match args[index].as_str() {
-            "--db" => {
-                base_url = args.get(index + 1).cloned().ok_or_else(|| {
-                    anyhow!("usage: fetch <pdb-id> [--db <base-url>] [--dir <directory>]")
-                })?;
-                index += 2;
-            }
-            "--dir" => {
-                dir = Some(args.get(index + 1).map(PathBuf::from).ok_or_else(|| {
-                    anyhow!("usage: fetch <pdb-id> [--db <base-url>] [--dir <directory>]")
-                })?);
-                index += 2;
-            }
-            flag if flag.starts_with("--") => bail!("unknown flag `{flag}` for fetch"),
-            value => {
-                if id.is_some() {
-                    bail!("unexpected extra argument `{value}`; fetch takes a single PDB id");
-                }
-                id = Some(value.to_string());
-                index += 1;
-            }
-        }
-    }
-
-    Ok(ParsedFetchCommand {
-        id: id.ok_or_else(|| {
-            anyhow!("usage: fetch <pdb-id> [--db <base-url>] [--dir <directory>]")
-        })?,
-        base_url,
-        dir,
-    })
 }
 
 /// Load a structure file at `path` into a new active entry, resetting the
@@ -162,10 +114,7 @@ fn open_structure_path(state: &mut AppState, path: PathBuf) -> Result<()> {
 /// `sketch <SMILES>` — parse a SMILES string, generate a 3D structure, and add
 /// it as a new active entry. The scriptable counterpart of the GUI sketcher's
 /// Build action; available in both the console and headless `.sls` scripts.
-pub(crate) fn sketch_command(state: &mut AppState, args: &[String]) -> Result<String> {
-    let smiles = args
-        .first()
-        .ok_or_else(|| anyhow!("usage: sketch <SMILES>"))?;
+pub(crate) fn sketch_command(state: &mut AppState, smiles: &str) -> Result<String> {
     let structure = crate::workflows::sketch_to_structure::smiles_to_structure(smiles, None)
         .with_context(|| {
             format!(
@@ -180,16 +129,4 @@ pub(crate) fn sketch_command(state: &mut AppState, args: &[String]) -> Result<St
     Ok(format!(
         "sketched {smiles} as entry #{entry_id} ({atom_count} atoms)"
     ))
-}
-
-pub(crate) fn source_command(
-    state: &mut AppState,
-    context: &mut ScriptContext,
-    args: &[String],
-) -> Result<String> {
-    let path = args
-        .first()
-        .ok_or_else(|| anyhow!("usage: source <script.sls>"))?;
-    run_script_path_with_context(state, context, path)?;
-    Ok(String::new())
 }
