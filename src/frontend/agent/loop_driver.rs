@@ -73,19 +73,21 @@ each in turn to run its calculation.
 Domain notes:
 - Diatomics need explicit SMILES: H₂ is `[H][H]`, O₂ is `O=O` (triplet ground state — set \
 `--spin 3`), N₂ is `N#N`. A bare `O` is water, `C` is methane.
-- A `qm energy` result is the electronic energy near 0 K, not an enthalpy. For reaction, \
-formation, or combustion energies, run `qm freq` on each species to add zero-point and \
-thermal corrections before comparing to an experimental ΔH, and state the method/basis \
-caveats (def2-svp is a small basis) in the result.
+- Choosing a calculation method? Consult the method-selection guide below and the \
+`recommend_method` tool; for the QM level of theory run `qm recommend <task>`. Don't pick a \
+functional/basis blind, and don't recommend a method this app can't run.
 
-The full command catalog follows.";
+The full command catalog and a method-selection guide follow.";
 
-/// The static, cacheable system prompt: persona + the `.sls` command catalog.
-/// Holds no volatile per-turn state (that flows through `inspect`), so it caches.
+/// The static, cacheable system prompt: persona + the `.sls` command catalog +
+/// the always-on method-selection table. Holds no volatile per-turn state (that
+/// flows through `inspect`), so it caches; the KB table is built from compiled-in
+/// data and is byte-stable across turns.
 fn system_prompt() -> String {
     format!(
-        "{PERSONA}\n\n{}",
-        crate::frontend::console::command_catalog()
+        "{PERSONA}\n\n{}\n\n{}",
+        crate::frontend::console::command_catalog(),
+        crate::engines::methods::kb_table()
     )
 }
 
@@ -113,6 +115,12 @@ fn describe_call(call: &crate::io::llm::types::ToolCall) -> String {
             .map(|command| command.to_string())
             .unwrap_or_else(|| "run_command".to_string()),
         "inspect" => "inspect".to_string(),
+        "recommend_method" => call
+            .input
+            .get("task")
+            .and_then(|value| value.as_str())
+            .map(|task| format!("recommend_method {task}"))
+            .unwrap_or_else(|| "recommend_method".to_string()),
         "save_script" => call
             .input
             .get("filename")

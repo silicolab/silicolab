@@ -1,0 +1,148 @@
+[
+  {
+    "name": "qm-level-of-theory",
+    "engine": "qm",
+    "description": "Choosing a QM functional/basis: run `qm recommend <task>` (general | barriers | nci | thermochemistry) for the curated level before picking by hand.",
+    "triggers": ["functional", "basis", "method", "dft", "level of theory", "accuracy", "which method", "qm", "ab initio"],
+    "command": ["qm recommend general"],
+    "caveats": [
+      "`qm recommend` is read-only and needs no structure; use it first, then run the actual qm job.",
+      "Composites (r2scan-3c, b97-3c, pbeh-3c, b3lyp-3c) bundle their own basis + dispersion - do NOT pass --basis with them.",
+      "def2-svp (the qm default basis) is only a lower bound for geometries; use >= def2-tzvp for energies."
+    ],
+    "body": "The cost/accuracy ladder SilicoLab can run: composites (r2scan-3c all-rounder; b97-3c structures/freq; pbeh-3c for SIE-prone/polar systems and TS guesses) -> hybrids (pbe0, b3lyp) -> range-separated hybrids (wb97m-v, wb97x-v; best for barriers and non-covalent interactions) -> double-hybrid (b2plyp, needs a large/QZ basis) -> wavefunction (mp2, ccsd, ccsd(t) for small references). Always keep dispersion on (wb97m-v/wb97x-v carry VV10; otherwise add a -d4 suffix or --dispersion d4). NOT available here: semi-empirical xtb/GFN, DLPNO-CCSD(T), W1/W2, and automated conformer search (CREST/CENSO) - those are external tools.",
+    "in_table": true
+  },
+  {
+    "name": "qm-geometry-and-conformers",
+    "engine": "qm",
+    "description": "Optimize a molecule / find a minimum: r2scan-3c is the all-round first choice. Optimize then run freq to confirm a true minimum.",
+    "triggers": ["geometry", "optimize", "optimization", "minimum", "conformer", "structure", "relax", "equilibrium geometry"],
+    "command": ["qm optimize --method r2scan-3c", "qm freq --method r2scan-3c"],
+    "caveats": [
+      "r2scan-3c carries its own triple-zeta basis - do NOT pass --basis.",
+      "`qm optimize` creates a NEW optimized entry and activates it; the following `qm freq`/`qm energy` then act on that optimized entry.",
+      "SilicoLab has no built-in conformer search; build or import important conformers yourself."
+    ],
+    "body": "b97-3c is a cheaper triple-zeta alternative for structures and frequencies; pbeh-3c (small basis) suits SIE-prone/polar systems and transition-state guesses but carries some BSSE. Imaginary frequencies from `qm freq` mean the geometry is not a minimum (or is a saddle point) - re-optimize.",
+    "in_table": true
+  },
+  {
+    "name": "qm-thermochemistry",
+    "engine": "qm",
+    "description": "Reaction / formation / Gibbs free energies: optimize+freq at r2scan-3c, then a wb97m-v/def2-tzvpp single point (matches `qm recommend thermochemistry`).",
+    "triggers": ["thermochemistry", "enthalpy", "free energy", "gibbs", "reaction energy", "formation", "combustion", "zpe", "delta h", "equilibrium constant"],
+    "command": ["qm optimize --method r2scan-3c", "qm freq --method r2scan-3c", "qm energy --method wb97m-v --basis def2-tzvpp"],
+    "caveats": [
+      "`qm energy` is the ~0 K electronic energy; the `qm freq` run adds ZPE + thermal (mRRHO) corrections - combine as G = E_high + (G_low - E_low).",
+      "Set --spin (2S+1) for open-shell species and --charge for ions; build each species and `activate` it before its job.",
+      "Set --symmetry-number for symmetric molecules so the rotational entropy is right."
+    ],
+    "body": "This is the standard composite free-energy protocol: cheap geometry + thermal corrections at r2scan-3c, accurate electronic energy from the range-separated hybrid. r2scan-3c opt+freq alone already gives decent thermochemistry; the wb97m-v single point is the accuracy refinement. Run `qm recommend thermochemistry` for the engine's exact recommendation and notes.",
+    "in_table": true
+  },
+  {
+    "name": "qm-barriers-kinetics",
+    "engine": "qm",
+    "description": "Reaction barriers / transition states: a range-separated hybrid is essential. Take a wb97m-v/def2-tzvpp single point on a r2scan-3c geometry (`qm recommend barriers`).",
+    "triggers": ["barrier", "transition state", "ts", "kinetics", "activation energy", "rate", "saddle"],
+    "command": ["qm optimize --method r2scan-3c", "qm energy --method wb97m-v --basis def2-tzvpp"],
+    "caveats": [
+      "GGAs and composites systematically underestimate barriers - use a (range-separated) hybrid for the energy.",
+      "Locate the transition-state geometry yourself; SilicoLab has no automated saddle-point search."
+    ],
+    "body": "wb97m-v (with VV10 nonlocal correlation) is among the most accurate functionals for kinetics. Analytic gradients are unavailable for RS hybrids, so optimize at r2scan-3c and take the wb97m-v energy on that geometry (the two-step recipe above).",
+    "in_table": true
+  },
+  {
+    "name": "qm-noncovalent",
+    "engine": "qm",
+    "description": "Non-covalent interaction energies (pi-stacking, H-bonds, vdW): wb97m-v with a triple-zeta basis on a r2scan-3c geometry; dispersion must be on (`qm recommend nci`).",
+    "triggers": ["noncovalent", "non-covalent", "nci", "dispersion", "pi stacking", "hydrogen bond", "vdw", "van der waals", "binding", "interaction energy"],
+    "command": ["qm energy --method wb97m-v --basis def2-tzvpp"],
+    "caveats": [
+      "Dispersion is essential for NCI - wb97m-v includes VV10; for other functionals add a -d4 suffix.",
+      "Basis-set superposition error matters; use >= def2-tzvpp and consider it when comparing complexes."
+    ],
+    "body": "For interaction energies of a complex, single-point both the complex and the separated fragments at the same level and take the difference. A larger basis (def2-tzvppd / def2-qzvp) reduces BSSE further at higher cost.",
+    "in_table": true
+  },
+  {
+    "name": "qm-anions-and-diffuse",
+    "engine": "qm",
+    "description": "Anions, dipole moments, polarizabilities, electron affinities: add diffuse functions - use a ma-def2 / def2...D basis such as ma-def2-tzvp.",
+    "triggers": ["anion", "diffuse", "dipole", "polarizability", "electron affinity", "negative ion", "ma-def2"],
+    "command": ["qm energy --method wb97m-v --basis ma-def2-tzvp --charge -1"],
+    "caveats": [
+      "Without diffuse functions, anion energies and electron-rich properties are unreliable.",
+      "Match --charge and --spin to the actual ion."
+    ],
+    "body": "Diffuse-augmented bases (ma-def2-TZVP, def2-TZVPD) describe the loosely bound electron density of anions and the response of dipoles/polarizabilities. For optical/response properties also pass --properties.",
+    "in_table": false
+  },
+  {
+    "name": "qm-multireference-check",
+    "engine": "qm",
+    "description": "Suspected multireference character (radicals, bond breaking, some TM complexes): run a FOD diagnostic before trusting single-reference DFT.",
+    "triggers": ["multireference", "multi-reference", "fod", "diradical", "radical", "static correlation", "open shell", "spin contamination", "bond breaking"],
+    "command": ["qm energy --method tpss --basis def2-tzvp --fod"],
+    "caveats": [
+      "A high FOD (N_FOD) flags static correlation - single-reference DFT and even CCSD(T) may be unreliable, and SilicoLab has no multireference (CASSCF) engine.",
+      "Slow SCF convergence and a small HOMO-LUMO gap are corroborating hints."
+    ],
+    "body": "The fractional-occupation-number-weighted density (FOD) is an easy DFT-based multireference indicator. Run it at a finite electronic temperature with tpss/def2-tzvp (the conventional FOD level). If N_FOD is large, treat single-reference energetics with caution.",
+    "in_table": false
+  },
+  {
+    "name": "qm-heavy-elements",
+    "engine": "qm",
+    "description": "Heavy elements (Z > 36, transition metals, lanthanides): the def2 basis family brings effective core potentials automatically; add --x2c only for explicit scalar relativity.",
+    "triggers": ["heavy element", "relativistic", "ecp", "transition metal", "lanthanide", "x2c", "zora", "gold", "platinum", "metal complex"],
+    "command": ["qm energy --method pbe0 --basis def2-tzvp"],
+    "caveats": [
+      "For Z > 36 the def2 family uses relativistic ECPs by construction - fine for most chemistry.",
+      "Use --x2c only when you need an explicit scalar-relativistic all-electron treatment (very heavy / 6th-row+ systems)."
+    ],
+    "body": "Transition-metal complexes often have multireference character - check `qm-multireference-check` (FOD) first. D4 dispersion is especially important for metal-organic and polarizable systems; add a -d4 suffix to a functional that lacks built-in dispersion.",
+    "in_table": false
+  },
+  {
+    "name": "qm-reference-energies",
+    "engine": "qm",
+    "description": "Benchmark / reference energies on a SMALL single-reference system: the MP2 -> CCSD -> CCSD(T) ladder with a large basis; CCSD(T) approaches gold standard.",
+    "triggers": ["reference", "benchmark", "gold standard", "ccsd", "ccsd(t)", "coupled cluster", "accurate energy", "mp2", "high accuracy"],
+    "command": ["qm energy --method ccsd(t) --basis def2-tzvp"],
+    "caveats": [
+      "CCSD(T) scales steeply (O(N^7)) - only for small molecules; DLPNO-CCSD(T) and W1/W2 are NOT available in SilicoLab.",
+      "Use as large a basis as you can afford (>= def2-tzvp, ideally def2-qzvp) for converged correlation; check the FOD diagnostic first - CCSD(T) assumes single-reference."
+    ],
+    "body": "Coupled-cluster energies are reference values for single-reference systems. Pair a CCSD(T) energy with a wb97m-v/def2-qzvp DFT result to gauge the DFT error for your system. ri-mp2 (--ri-mp2) speeds up the MP2 step.",
+    "in_table": false
+  },
+  {
+    "name": "qm-solvation",
+    "engine": "qm",
+    "description": "Implicit solvent: add --smd <solvent> (e.g. --smd water) for SMD, or --solvent <name> for C-PCM. COSMO-RS / DCOSMO-RS are not available here.",
+    "triggers": ["solvent", "solvation", "smd", "cpcm", "cosmo", "implicit", "water", "aqueous", "dielectric", "continuum"],
+    "command": ["qm energy --method r2scan-3c --smd water"],
+    "caveats": [
+      "SMD and C-PCM are continuum electrostatic models; COSMO-RS/DCOSMO-RS (best for solvation free energies) are not implemented in SilicoLab.",
+      "Gas-phase geometry + a solvent single point is usually enough; re-optimize in solvent only when the solvent is chemically involved."
+    ],
+    "body": "For xtb-style fast solvation, --alpb/--gbsa exist but pair with semi-empirical parameters. For accurate aqueous free energies prefer --smd water on a good DFT geometry. At most one solvation model applies per job.",
+    "in_table": false
+  },
+  {
+    "name": "qm-periodic-dft",
+    "engine": "qm-periodic",
+    "description": "Periodic / crystal DFT on a unit cell: `qm periodic` (needs a defined cell). v1 is LDA/PADE only, GTH basis (SZV-GTH), Gamma or --kmesh; no charge/spin/relaxation.",
+    "triggers": ["periodic", "crystal", "solid", "unit cell", "band", "pbc", "bulk", "kmesh", "lattice"],
+    "command": ["qm periodic --functional pade --basis SZV-GTH --kmesh 2x2x2"],
+    "caveats": [
+      "Periodic v1 supports only LDA/PADE functionals and GTH basis sets - no hybrids, no geometry relaxation, no charge or spin.",
+      "Increase --kmesh and --cutoff for convergence; the structure must carry a unit cell (see `view cell`)."
+    ],
+    "body": "Periodic DFT is for crystalline / bulk systems. For a molecule in a box, use the molecular `qm` subcommands instead. Add --forces / --stress for the corresponding derivatives.",
+    "in_table": true
+  }
+]

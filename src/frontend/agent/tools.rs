@@ -64,6 +64,27 @@ pub fn tool_defs() -> Vec<ToolDef> {
             }),
         },
         ToolDef {
+            name: "recommend_method".to_string(),
+            description: "Look up SilicoLab's method-selection guidance for a task (e.g. \
+                `thermochemistry of a reaction`, `optimize a molecule`, `dock a ligand`, \
+                `periodic DFT`, `anion energy`, `non-covalent interaction`). Returns which \
+                engine/command to use, the runnable `.sls` steps, and the caveats. Read-only \
+                (no confirmation). For the curated QM level of theory it points you to \
+                `qm recommend <task>`. Consult it before choosing a method by hand."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "description": "What you want to compute, in a few words."
+                    }
+                },
+                "required": ["task"],
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
             name: "save_script".to_string(),
             description: "Save a reusable SilicoLab `.sls` script of console commands to the \
                 project so a workflow can be replayed with `run <file>`. Use this to capture a \
@@ -117,7 +138,14 @@ pub fn needs_confirmation(call: &ToolCall) -> bool {
 /// reversible commands (view/color/surface/representation/inspect) auto-run;
 /// delete, save/overwrite, md/qm runs, and script execution are gated.
 pub fn command_needs_confirmation(command: &str) -> bool {
-    let verb = command.split_whitespace().next().unwrap_or_default();
+    let mut tokens = command.split_whitespace();
+    let verb = tokens.next().unwrap_or_default();
+    // `qm recommend` only prints hartree's level-of-theory table — it runs no
+    // calculation, so it is read-only introspection and should not be gated like
+    // an actual `qm energy|optimize|freq` job. Let the agent consult it freely.
+    if verb == "qm" && tokens.next() == Some("recommend") {
+        return false;
+    }
     matches!(
         verb,
         "delete" | "save" | "md" | "qm" | "dock" | "score" | "run" | "source"
@@ -138,6 +166,17 @@ pub fn execute_tool(state: &mut AppState, call: &ToolCall) -> ToolOutcome {
             let query = call.input.get("query").and_then(Value::as_str);
             ToolOutcome {
                 content: inspect(state, query),
+                is_error: false,
+            }
+        }
+        "recommend_method" => {
+            let task = call
+                .input
+                .get("task")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            ToolOutcome {
+                content: crate::engines::methods::recommend(task),
                 is_error: false,
             }
         }
@@ -419,6 +458,24 @@ mod tests {
             input: json!({}),
         };
         assert!(!needs_confirmation(&inspect_call));
+    }
+
+    #[test]
+    fn recommend_method_tool_is_never_gated() {
+        let recommend = ToolCall {
+            id: "t".to_string(),
+            name: "recommend_method".to_string(),
+            input: json!({ "task": "thermochemistry" }),
+        };
+        assert!(!needs_confirmation(&recommend));
+    }
+
+    #[test]
+    fn qm_recommend_is_read_only_and_not_gated() {
+        // `qm recommend` only prints the level-of-theory table — never gated,
+        // even though a real `qm` calculation is.
+        assert!(!needs_confirmation(&call("qm recommend thermochemistry")));
+        assert!(needs_confirmation(&call("qm energy --method r2scan-3c")));
     }
 
     #[test]
