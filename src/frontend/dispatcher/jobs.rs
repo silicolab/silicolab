@@ -88,10 +88,52 @@ pub(crate) fn poll_metrics(state: &mut AppState, ctx: &egui::Context) {
     };
     while let Ok(metrics) = sampler.receiver.try_recv() {
         state.ui.cpu_pct = metrics.cpu_pct;
+        state.ui.mem_pct = metrics.mem_pct;
+        // Per-card (bus_id, util) for the history — one series per GPU, not an
+        // average. Built before `metrics.gpus` is moved into state.
+        let gpu_utils: Vec<(String, Option<f32>)> = metrics
+            .gpus
+            .iter()
+            .map(|s| (s.pci_bus_id.clone(), s.util_pct))
+            .collect();
         state.ui.gpus = metrics.gpus;
+        state
+            .ui
+            .monitor_history
+            .push(metrics.cpu_pct, metrics.mem_pct, &gpu_utils);
     }
     if state.config.show_utilization_bars {
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
+    }
+}
+
+/// Drain a finished remote hardware probe into the settings cache, or report the
+/// error. Runs off the UI thread so a slow or dead host never blocks rendering.
+pub(crate) fn poll_remote_hardware(state: &mut AppState, ctx: &egui::Context) {
+    use crate::frontend::jobs::RemoteHardwareOutcome;
+
+    let Some(fetch) = state.jobs.remote_hardware.take() else {
+        return;
+    };
+    match fetch.receiver.try_recv() {
+        Ok(RemoteHardwareOutcome::Ok(info)) => {
+            state
+                .ui
+                .settings
+                .remote_hardware
+                .insert(fetch.host_id, info);
+            state.set_message("Fetched remote hardware".to_string());
+        }
+        Ok(RemoteHardwareOutcome::Failed(error)) => {
+            state.set_message(format!("Could not read remote hardware: {error}"));
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => {
+            state.jobs.remote_hardware = Some(fetch);
+            ctx.request_repaint_after(std::time::Duration::from_millis(400));
+        }
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            state.set_message("Remote hardware probe stopped unexpectedly".to_string());
+        }
     }
 }
 
@@ -111,6 +153,7 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     poll_self_update(state, ctx);
     poll_metrics(state, ctx);
     poll_remote_probe(state, ctx);
+    poll_remote_hardware(state, ctx);
     crate::frontend::agent::poll_agent_turn(state, ctx);
     crate::frontend::agent::poll_agent_heavy(state, ctx);
     crate::frontend::agent::poll_model_fetch(state, ctx);
@@ -753,6 +796,7 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         tx.send(Metrics {
             cpu_pct: 42.0,
+            mem_pct: Some(55.0),
             gpus: vec![GpuSample {
                 pci_bus_id: "01:00.0".into(),
                 util_pct: Some(50.0),
@@ -766,7 +810,18 @@ mod tests {
         let ctx = egui::Context::default();
         poll_metrics(&mut state, &ctx);
         assert_eq!(state.ui.cpu_pct, 42.0);
+        assert_eq!(state.ui.mem_pct, Some(55.0));
         assert_eq!(state.ui.gpus.len(), 1);
         assert_eq!(state.ui.gpus[0].util_pct, Some(50.0));
+        // The GPU's util is recorded in its own per-card sparkline history.
+        assert_eq!(
+            state
+                .ui
+                .monitor_history
+                .gpus
+                .get("01:00.0")
+                .and_then(|h| h.back().copied()),
+            Some(Some(50.0))
+        );
     }
 }

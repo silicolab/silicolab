@@ -535,6 +535,25 @@ pub(crate) fn detect_remote_gromacs(state: &mut AppState, id: String) {
     state.set_message("Detecting GROMACS on the remote host…".to_string());
 }
 
+/// Fetch the static hardware inventory of a remote host over SSH (CPU/memory/GPU)
+/// on a worker thread, for the Hardware ▸ Remote settings panel.
+pub(crate) fn fetch_remote_hardware(state: &mut AppState, id: String) {
+    if state.jobs.remote_hardware.is_some() {
+        state.set_message("Already fetching remote hardware…".to_string());
+        return;
+    }
+    if let Err(error) = crate::engines::remote::ensure_ssh_available() {
+        state.set_message(error.to_string());
+        return;
+    }
+    let Some(host) = state.config.remote_hosts.get(&id).cloned() else {
+        return;
+    };
+    state.ui.settings.remote_hardware_host = Some(id);
+    state.jobs.remote_hardware = Some(crate::frontend::jobs::spawn_remote_hardware_fetch(host));
+    state.set_message("Fetching remote hardware…".to_string());
+}
+
 pub(crate) fn check_remote_host(state: &mut AppState, id: String) {
     // The BatchMode test uses the dedicated key, so make sure it exists first.
     if let Err(error) = crate::engines::remote::bootstrap::ensure_key() {

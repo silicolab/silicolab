@@ -51,6 +51,10 @@ pub struct SettingsState {
     pub remote_status: BTreeMap<String, RemoteHostStatus>,
     /// When a host's passwordless setup is being shown: `(host_id, install_cmd)`.
     pub remote_bootstrap: Option<(String, String)>,
+    /// Cached remote hardware inventory, keyed by host id (Hardware ▸ Remote).
+    pub remote_hardware: BTreeMap<String, crate::engines::remote::hardware::RemoteHardwareInfo>,
+    /// Remote host currently selected in the remote-hardware panel.
+    pub remote_hardware_host: Option<String>,
 }
 
 /// State backing the Style primary view — the per-structure view and
@@ -60,6 +64,46 @@ pub struct SettingsState {
 pub struct StyleState {
     /// Free-text filter for the Style panel sections.
     pub search_query: String,
+}
+
+/// Number of recent utilization samples kept for the monitor popover sparklines.
+const MONITOR_HISTORY_LEN: usize = 120;
+
+/// Rolling per-metric history (oldest at front) feeding the monitor sparklines.
+/// Each is capped at [`MONITOR_HISTORY_LEN`]; `None` marks a sample with no
+/// reading (e.g. GPU on a machine without one). GPUs are kept per card (keyed by
+/// normalized PCI bus id) rather than averaged — multi-GPU hosts get one series
+/// per card.
+#[derive(Default, Clone)]
+pub struct MonitorHistory {
+    pub cpu: std::collections::VecDeque<Option<f32>>,
+    pub mem: std::collections::VecDeque<Option<f32>>,
+    pub gpus: BTreeMap<String, std::collections::VecDeque<Option<f32>>>,
+}
+
+impl MonitorHistory {
+    /// Append one tick to every series. `gpus` is this tick's per-card
+    /// `(bus_id, utilization)`; a card seen for the first time starts a series,
+    /// and every known card's series advances (with `None` when that card had no
+    /// reading this tick), so each series stays on the same time base.
+    pub fn push(&mut self, cpu: f32, mem: Option<f32>, gpus: &[(String, Option<f32>)]) {
+        push_capped(&mut self.cpu, Some(cpu));
+        push_capped(&mut self.mem, mem);
+        for (bus_id, _) in gpus {
+            self.gpus.entry(bus_id.clone()).or_default();
+        }
+        for (bus_id, series) in self.gpus.iter_mut() {
+            let util = gpus.iter().find(|(b, _)| b == bus_id).and_then(|(_, u)| *u);
+            push_capped(series, util);
+        }
+    }
+}
+
+fn push_capped(buf: &mut std::collections::VecDeque<Option<f32>>, value: Option<f32>) {
+    if buf.len() >= MONITOR_HISTORY_LEN {
+        buf.pop_front();
+    }
+    buf.push_back(value);
 }
 
 pub struct UiState {
@@ -156,6 +200,10 @@ pub struct UiState {
     /// could read. Empty when the sampler is off or no live backend is available
     /// (then the gauges read N/A). Joined to the GPU inventory by PCI bus id.
     pub gpus: Vec<crate::frontend::gpu_monitor::GpuSample>,
+    /// Latest memory utilization sample (0–100 %), or `None` when unavailable.
+    pub mem_pct: Option<f32>,
+    /// Rolling utilization history feeding the monitor popover sparklines.
+    pub monitor_history: MonitorHistory,
 }
 
 /// Lifecycle of a user-initiated in-place update: idle until the user clicks
@@ -229,6 +277,8 @@ impl Default for UiState {
             markdown_cache: egui_commonmark::CommonMarkCache::default(),
             cpu_pct: 0.0,
             gpus: Vec::new(),
+            mem_pct: None,
+            monitor_history: MonitorHistory::default(),
         }
     }
 }

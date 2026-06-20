@@ -40,6 +40,17 @@ pub struct LayoutState {
     /// `settings_open`: flipped directly by the menu entry points, never
     /// persisted, so the dispatcher does not mediate it.
     pub about_open: bool,
+    /// Whether the system-monitor detail popover is open. Transient chrome like
+    /// `settings_open`: flipped directly by clicking the compact monitor widget.
+    pub monitor_popover_open: bool,
+    /// Screen rect of the compact monitor widget (sidebar footer, or status-bar
+    /// fallback when the sidebar is hidden), captured each frame so the popover
+    /// can anchor itself just above it.
+    pub monitor_anchor: Option<eframe::egui::Rect>,
+    /// Measured height of the sidebar monitor footer (the CPU/Memory/GPU bar
+    /// stack), captured each frame and reserved on the next so every GPU row fits
+    /// — the row count varies by machine. Seeded with a one-GPU estimate.
+    pub monitor_footer_height: f32,
     pub primary_sidebar_width: f32,
     /// The dockable bottom panel + right sidebar: which views/panels live where,
     /// their order, the active tab per area, visibility, and the two area sizes.
@@ -90,6 +101,9 @@ impl Default for LayoutState {
             show_primary_sidebar: true,
             settings_open: false,
             about_open: false,
+            monitor_popover_open: false,
+            monitor_anchor: None,
+            monitor_footer_height: 70.0,
             primary_sidebar_width: SIDEBAR_DEFAULT_WIDTH_PRIMARY,
             dock: DockModel::default(),
         }

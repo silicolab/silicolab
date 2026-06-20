@@ -334,7 +334,32 @@ pub(crate) fn render_primary_sidebar(
             );
         }
     }
-    ui.scope(|ui| {
+    // Reserve a fixed footer for the system monitor when it is enabled, so the
+    // active view's scroll area stops above it instead of pushing it off-screen
+    // (render_pinned clips this panel to a fixed rect). The view renders into the
+    // region above the footer; the compact monitor renders into the strip below.
+    let show_monitor = state.config.show_utilization_bars;
+    // Reserve the footer height measured last frame (seeded with a one-GPU
+    // estimate). Measuring instead of guessing keeps every GPU row visible
+    // regardless of how many cards the machine has.
+    let footer_h = if show_monitor {
+        state.ui.layout.monitor_footer_height
+    } else {
+        0.0
+    };
+    let full = ui.available_rect_before_wrap();
+    let content_rect = Rect::from_min_max(
+        full.min,
+        egui::pos2(full.max.x, (full.max.y - footer_h).max(full.min.y)),
+    );
+
+    let mut content_ui = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(content_rect)
+            .layout(Layout::top_down(Align::Min)),
+    );
+    content_ui.set_clip_rect(content_rect.intersect(ui.clip_rect()));
+    content_ui.scope(|ui| {
         ui.set_opacity(appear);
         if appear < 1.0 {
             ui.add_space((1.0 - appear) * 6.0);
@@ -345,6 +370,50 @@ pub(crate) fn render_primary_sidebar(
             PrimaryView::Style => render_style_panel(state, ui, actions),
         }
     });
+
+    if show_monitor {
+        let footer_rect =
+            Rect::from_min_max(egui::pos2(full.min.x, full.max.y - footer_h), full.max);
+        let mut footer_ui = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(footer_rect)
+                .layout(Layout::top_down(Align::Min)),
+        );
+        render_sidebar_monitor_footer(state, &mut footer_ui);
+        // Cache the actual rendered height for next frame's reservation; repaint
+        // once when it changes so a newly-correct height is applied without a
+        // visible clip. The threshold avoids a perpetual repaint loop.
+        let measured = footer_ui.min_rect().height();
+        if (measured - state.ui.layout.monitor_footer_height).abs() > 0.5 {
+            state.ui.layout.monitor_footer_height = measured;
+            ui.ctx().request_repaint();
+        }
+    }
+}
+
+/// Render the system-monitor footer: a hairline divider above the full-width
+/// stack of compact utilization bars. Only called when the monitor is enabled.
+fn render_sidebar_monitor_footer(state: &mut AppState, ui: &mut egui::Ui) {
+    let pal = crate::frontend::theme::palette(ui);
+    let top = ui.max_rect().left_top();
+    let right = ui.max_rect().right_top().x;
+    ui.painter()
+        .hline(top.x..=right, top.y, Stroke::new(1.0, pal.hairline));
+    ui.add_space(9.0);
+    // Inset the right edge so the gauges sit with equal ~10px margins inside the
+    // sidebar (the panel's own inner margins are 10 left / 2 right): this keeps
+    // the right-aligned values off the border and centers the cluster — and with
+    // it the detail popover, which tracks this cluster's width.
+    egui::Frame::default()
+        .inner_margin(egui::Margin {
+            left: 0,
+            right: 8,
+            top: 0,
+            bottom: 0,
+        })
+        .show(ui, |ui| {
+            panel_bodies::render_compact_monitor(state, ui);
+        });
 }
 
 pub(crate) fn render_sidebar_search_popover(

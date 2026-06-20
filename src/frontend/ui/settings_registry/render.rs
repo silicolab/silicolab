@@ -302,21 +302,26 @@ pub fn registry() -> Vec<SettingDescriptor> {
         reset: None,
     });
 
-    // Hardware ▸ Monitoring — opt-in live utilization gauges.
+    // Hardware ▸ Monitoring — opt-in live system monitor.
     items.push(SettingDescriptor {
         id: "hardware.utilization_bars",
         category: SettingCategory::Hardware,
         group: "Monitoring",
-        title: "Show CPU/GPU utilization",
-        description: "Live gauges in the status bar. Repaints continuously while on.",
+        title: "Show system monitor (CPU / Memory / GPU)",
+        description: "Live utilization bars in the sidebar footer (or the status bar when the \
+                      sidebar is hidden); click them for sparkline details. Repaints \
+                      continuously while on.",
         keywords: &[
             "cpu",
+            "memory",
+            "ram",
             "gpu",
             "utilization",
             "usage",
             "gauge",
             "monitor",
             "bars",
+            "sparkline",
         ],
         control: Control::Toggle {
             read: utilization_bars_read,
@@ -326,6 +331,24 @@ pub fn registry() -> Vec<SettingDescriptor> {
         indent: false,
         is_default: Some(utilization_bars_is_default),
         reset: Some(utilization_bars_reset),
+    });
+
+    // Hardware ▸ Remote host — static inventory of a configured remote host,
+    // fetched on demand over SSH.
+    items.push(SettingDescriptor {
+        id: "hardware.remote",
+        category: SettingCategory::Hardware,
+        group: "Remote host",
+        title: "Remote hardware",
+        description: "Detected CPU, memory, and GPU on a configured remote host, fetched over SSH.",
+        keywords: &[
+            "remote", "ssh", "host", "hardware", "cpu", "gpu", "memory", "cluster", "linux",
+        ],
+        control: Control::Custom(crate::frontend::ui::settings_registry::remote::render),
+        enabled: None,
+        indent: false,
+        is_default: None,
+        reset: None,
     });
 
     // Advanced ▸ Configuration — meta-settings that operate on the settings file

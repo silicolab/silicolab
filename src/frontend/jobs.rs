@@ -207,6 +207,44 @@ pub fn spawn_remote_probe(
     RunningRemoteProbe { host_id, receiver }
 }
 
+/// Result of a remote hardware inventory probe (sent back from the worker thread).
+pub enum RemoteHardwareOutcome {
+    Ok(crate::engines::remote::hardware::RemoteHardwareInfo),
+    Failed(String),
+}
+
+/// An in-flight remote hardware inventory probe. Like [`RunningRemoteProbe`], the
+/// blocking SSH runs off the UI thread and the dispatcher drains it each frame.
+pub struct RunningRemoteHardwareFetch {
+    pub host_id: String,
+    pub receiver: Receiver<RemoteHardwareOutcome>,
+}
+
+/// Spawn a remote hardware probe on a worker thread: run the aggregate inventory
+/// script over SSH and parse it. The host is cloned in (only its connection
+/// fields matter; the probe uses a throwaway run anchor).
+pub fn spawn_remote_hardware_fetch(
+    host: crate::backend::config::RemoteHost,
+) -> RunningRemoteHardwareFetch {
+    use crate::engines::remote::{self, hardware};
+    use std::time::Duration;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let host_id = host.id.clone();
+    std::thread::spawn(move || {
+        let target = remote::RemoteTarget::for_run(&host, "probe");
+        let outcome = match remote::run_probe_command(
+            &target,
+            hardware::PROBE_SCRIPT,
+            Duration::from_secs(30),
+        ) {
+            Ok(stdout) => RemoteHardwareOutcome::Ok(hardware::parse_remote_hardware(&stdout)),
+            Err(error) => RemoteHardwareOutcome::Failed(error.to_string()),
+        };
+        let _ = sender.send(outcome);
+    });
+    RunningRemoteHardwareFetch { host_id, receiver }
+}
+
 /// An in-flight assistant model turn: one `provider.complete()` POST running on
 /// a worker thread (network takes seconds-to-minutes, so it must be off the UI
 /// thread). The driver drains the result in `poll_jobs` and runs any tool calls
@@ -432,12 +470,13 @@ pub fn parse_model_ids(json: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// One utilization sample: global CPU load plus a live per-GPU snapshot (one
-/// entry per GPU the sampler could read). `gpus` is empty when no live backend
-/// is available — the common case, since live GPU stats need the optional NVML
-/// feature; the gauges then read N/A.
+/// One utilization sample: global CPU load, memory load, plus a live per-GPU
+/// snapshot (one entry per GPU the sampler could read). `gpus` is empty when no
+/// live backend is available — the common case, since live GPU stats need the
+/// optional NVML feature; the gauges then read N/A.
 pub struct Metrics {
     pub cpu_pct: f32,
+    pub mem_pct: Option<f32>,
     pub gpus: Vec<crate::frontend::gpu_monitor::GpuSample>,
 }
 
@@ -461,8 +500,13 @@ pub fn spawn_metrics_sampler() -> RunningMetricsSampler {
         std::thread::sleep(Duration::from_millis(500));
         loop {
             sys.refresh_cpu_usage();
+            sys.refresh_memory();
+            let total = sys.total_memory();
+            let mem_pct =
+                (total > 0).then(|| (sys.used_memory() as f64 / total as f64 * 100.0) as f32);
             let sample = Metrics {
                 cpu_pct: sys.global_cpu_usage(),
+                mem_pct,
                 gpus: gpu_sampler.sample(),
             };
             if sender.send(sample).is_err() {
@@ -506,6 +550,8 @@ pub struct JobManager {
     pub self_update: Option<RunningSelfUpdate>,
     /// In-flight Remote Hosts settings probe (passwordless check / engine detect).
     pub remote_probe: Option<RunningRemoteProbe>,
+    /// In-flight remote hardware inventory probe (Settings ▸ Hardware ▸ Remote).
+    pub remote_hardware: Option<RunningRemoteHardwareFetch>,
     /// In-flight assistant model turn (one `provider.complete()` POST). One
     /// `RunningAgentTurn` == one model turn; the agent loop drives the next.
     pub agent: Option<RunningAgentTurn>,
