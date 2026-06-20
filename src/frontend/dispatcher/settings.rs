@@ -73,6 +73,18 @@ pub(crate) fn set_check_updates(state: &mut AppState, on: bool) {
     }
 }
 
+/// Persist whether live CPU/GPU utilization gauges are shown. Turning on
+/// spawns the sampler immediately (so the gauge animates at once); turning off
+/// drops the handle, which stops the background thread and returns to
+/// on-demand repainting.
+pub(crate) fn set_show_utilization_bars(state: &mut AppState, on: bool) {
+    state.config.show_utilization_bars = on;
+    if let Err(error) = save_config(&state.config) {
+        state.set_message(format!("Could not save utilization preference: {error}"));
+    }
+    crate::frontend::jobs::apply_metrics_sampler(&mut state.jobs, on);
+}
+
 /// Persist whether discovered updates install themselves automatically. If a
 /// newer release is already known and the install is writable, switching this
 /// on starts the download right away (unless one is already running), so the
@@ -305,6 +317,17 @@ pub(crate) fn set_glass(state: &mut AppState, on: bool) {
     state.config.glass = on;
     if let Err(error) = save_config(&state.config) {
         state.set_message(format!("Could not save glass preference: {error}"));
+    }
+}
+
+/// Persist how many cores QM jobs may use, clamped to the logical core count.
+pub(crate) fn set_compute_core_count(state: &mut AppState, cores: usize) {
+    state.config.compute_core_count = crate::backend::hardware::clamp_core_count(
+        cores,
+        crate::backend::hardware::info().logical_cores,
+    );
+    if let Err(error) = save_config(&state.config) {
+        state.set_message(format!("Could not save core-count preference: {error}"));
     }
 }
 

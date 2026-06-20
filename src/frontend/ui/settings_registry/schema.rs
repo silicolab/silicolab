@@ -20,6 +20,7 @@ pub enum SettingCategory {
     Engines,
     Assistant,
     Tasks,
+    Hardware,
     Advanced,
 }
 
@@ -33,18 +34,20 @@ impl SettingCategory {
             SettingCategory::Engines => "Engines",
             SettingCategory::Assistant => "Assistant",
             SettingCategory::Tasks => "Tasks",
+            SettingCategory::Hardware => "Hardware",
             SettingCategory::Advanced => "Advanced",
         }
     }
 }
 
 /// Stable iteration order for categories in the rendered panel and the rail.
-pub const CATEGORY_ORDER: [SettingCategory; 6] = [
+pub const CATEGORY_ORDER: [SettingCategory; 7] = [
     SettingCategory::General,
     SettingCategory::Representation,
     SettingCategory::Engines,
     SettingCategory::Assistant,
     SettingCategory::Tasks,
+    SettingCategory::Hardware,
     SettingCategory::Advanced,
 ];
 

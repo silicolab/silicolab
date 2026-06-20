@@ -62,7 +62,10 @@ pub fn spawn_heavy(
     let spawned: Result<AgentHeavyJob, String> = match kind {
         HeavyKind::Qm => crate::frontend::qm_commands::build_agent_qm_request(state, args)
             .map(|request| {
-                AgentHeavyJob::Qm(spawn_qm_job(crate::engines::qm::QmJob::Molecular(request)))
+                AgentHeavyJob::Qm(spawn_qm_job(
+                    crate::engines::qm::QmJob::Molecular(request),
+                    None,
+                ))
             })
             .map_err(|error| error.to_string()),
         HeavyKind::Md => crate::frontend::md_commands::build_agent_md_request(state, args)

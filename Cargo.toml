@@ -29,6 +29,7 @@ flate2 = "1"
 hartree = "0.1.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
 nalgebra = "0.35.0"
+rayon = "1"
 rfd = "0.17"
 rusqlite = { version = "0.40.0", features = ["bundled"] }
 sdfrust = "0.6"
@@ -43,6 +44,7 @@ self_update = { version = "0.42", default-features = false, features = [
 ] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 ureq = "3.3.0"
 uuid = { version = "1", features = ["v4"] }
 raw-window-handle = "0.6"

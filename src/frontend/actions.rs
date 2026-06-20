@@ -89,6 +89,9 @@ pub enum AppAction {
     StartOptimization,
     CancelOptimizationPrompt,
     StartQmCalculation,
+    /// Re-run the pending QM job after switching its SCF backend to
+    /// integral-direct (the memory-guard escape hatch).
+    StartQmWithDirectBackend,
     CancelQmPrompt,
     StartDocking,
     CancelDockingPrompt,
@@ -269,6 +272,8 @@ pub enum AppAction {
     ClearStoredKey(String),
     /// Fetch the active provider's live model list from its `/models` endpoint.
     RefreshModels,
+    /// Set the number of CPU cores QM jobs may use and persist it.
+    SetComputeCoreCount(usize),
     /// Set the light/dark appearance preference and persist it.
     SetThemeMode(crate::backend::config::ThemeMode),
     /// Set the accent + neutral color scheme and persist it.
@@ -295,6 +300,9 @@ pub enum AppAction {
     /// Persisted; switching it on also runs a check right away so the toggle
     /// gives immediate feedback.
     SetCheckUpdates(bool),
+    /// Show live CPU/GPU utilization gauges in the status bar. Persisted;
+    /// turning on starts the sampler immediately, turning off stops it.
+    SetShowUtilizationBars(bool),
     /// Whether a discovered update downloads and installs itself automatically
     /// (`true`) or waits for a one-click "Update" (`false`). Persisted; only
     /// acts when update checks are on and the install is writable.

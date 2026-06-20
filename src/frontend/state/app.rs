@@ -72,6 +72,9 @@ pub struct UiState {
     /// Set once at startup when the GPU molecule renderer initializes
     /// successfully; gates the GPU rendering path in the viewport.
     pub gpu_ready: bool,
+    /// Detected GPU adapter name (from the wgpu render state at startup). `None`
+    /// when the renderer doesn't expose one. Display-only.
+    pub gpu_name: Option<String>,
     /// Resolved once per frame: whether the frosted-glass material should be
     /// revealed (user enabled it, the platform supports it, and Reduce
     /// Transparency is off). Drives the transparent clear color and the
@@ -146,6 +149,11 @@ pub struct UiState {
     /// a sibling of `agent` so the transcript can be read while the cache is
     /// mutated during rendering.
     pub markdown_cache: egui_commonmark::CommonMarkCache,
+    /// Latest CPU utilization sample (0–100 %). Updated by `poll_metrics` while
+    /// the sampler is running; 0.0 when the sampler is off.
+    pub cpu_pct: f32,
+    /// Latest GPU utilization sample (0–100 %), or `None` when not available.
+    pub gpu_pct: Option<f32>,
 }
 
 /// Lifecycle of a user-initiated in-place update: idle until the user clicks
@@ -182,6 +190,7 @@ impl Default for UiState {
             camera: ViewCamera::default(),
             viewport_cache: ViewportCache::default(),
             gpu_ready: false,
+            gpu_name: None,
             glass_active: false,
             glass_alpha: None,
             hovered_atom: None,
@@ -216,6 +225,8 @@ impl Default for UiState {
             self_update: SelfUpdateStatus::default(),
             agent: crate::frontend::agent::AgentSession::default(),
             markdown_cache: egui_commonmark::CommonMarkCache::default(),
+            cpu_pct: 0.0,
+            gpu_pct: None,
         }
     }
 }

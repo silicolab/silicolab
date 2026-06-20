@@ -1,4 +1,6 @@
 use super::*;
+use crate::engines::qm::{MemoryVerdict, QmScfBackend, memory_verdict};
+use crate::frontend::actions::{Notification, NotificationButton, NotificationSeverity};
 
 pub(crate) fn build_framework_task(state: &mut AppState) {
     state.cancel_transient_jobs();
@@ -249,8 +251,19 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
             .set_message("periodic QM needs a real unit cell; this structure has none".to_string());
         return;
     }
+    // Memory guard: estimate the in-core ERI allocation for a molecular job and
+    // refuse (or offer integral-direct) before we spawn the worker and clear the
+    // prompt. Periodic jobs are exempt (no nao⁴ in-core tensor).
+    if !prompt.periodic {
+        let request = prompt.to_request(state.structure().clone());
+        let verdict = memory_verdict(&request, crate::backend::hardware::qm_incore_budget_bytes());
+        if let Some(notification) = qm_memory_notification(&verdict) {
+            state.ui.notification = Some(notification);
+            return; // leave pending_qm intact so the prompt stays open
+        }
+    }
     let job = prompt.to_job(state.structure().clone());
-    let job = spawn_qm_job(job);
+    let job = spawn_qm_job(job, Some(qm_thread_count(state)));
     state.set_source_path(None);
     state.ui.editor = None;
     state.ui.pending_qm = None;
@@ -259,6 +272,13 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
         state.tasks.mark_status(task_run_id, TaskStatus::Running);
     }
     state.set_message("QM calculation running; press Esc to stop".to_string());
+}
+
+fn qm_thread_count(state: &AppState) -> usize {
+    state
+        .config
+        .compute_core_count
+        .clamp(1, crate::backend::hardware::info().logical_cores)
 }
 
 pub(crate) fn cancel_pending_qm_request(state: &mut AppState) {
@@ -483,5 +503,107 @@ pub(crate) fn import_custom_force_field_file(state: &mut AppState) {
             prompt.custom_ff_draft_name = stem.to_string();
         }
         prompt.custom_ff_draft = text;
+    }
+}
+
+/// Build the warning shown when a pending QM job would exceed the RAM budget.
+/// `ExceedsCanDirect` offers a one-click switch to integral-direct; otherwise the
+/// only path forward is editing the job, so the warning is acknowledge-only.
+pub(crate) fn qm_memory_notification(verdict: &MemoryVerdict) -> Option<Notification> {
+    let detail = verdict.detail()?;
+    let title = "This calculation may run out of memory";
+    match verdict {
+        // Unreachable: detail()? above already returned None for Ok; arm kept for exhaustiveness.
+        MemoryVerdict::Ok => None,
+        MemoryVerdict::ExceedsCanDirect { .. } => Some(Notification {
+            severity: NotificationSeverity::Warning,
+            title: title.into(),
+            body: format!(
+                "{detail} Integral-direct SCF runs the same single point with far less memory."
+            ),
+            buttons: vec![
+                NotificationButton {
+                    label: "Run with integral-direct".into(),
+                    action: AppAction::StartQmWithDirectBackend,
+                    primary: true,
+                },
+                NotificationButton {
+                    label: "Cancel".into(),
+                    action: AppAction::DismissNotification,
+                    primary: false,
+                },
+            ],
+        }),
+        MemoryVerdict::ExceedsMustReduce { .. } => Some(Notification {
+            severity: NotificationSeverity::Warning,
+            title: title.into(),
+            body: format!(
+                "{detail} This calculation type needs in-core integrals — choose a smaller basis set or a smaller system."
+            ),
+            buttons: vec![NotificationButton {
+                label: "OK".into(),
+                action: AppAction::DismissNotification,
+                primary: true,
+            }],
+        }),
+    }
+}
+
+/// Memory-guard escape hatch: flip the pending job to integral-direct and re-run.
+pub(crate) fn start_qm_with_direct_backend(state: &mut AppState) {
+    if let Some(prompt) = state.ui.pending_qm.as_mut() {
+        prompt.options.scf_backend = QmScfBackend::Direct;
+    }
+    start_pending_qm(state);
+}
+
+#[cfg(test)]
+mod memory_guard_tests {
+    use super::*;
+    use crate::engines::qm::MemoryVerdict;
+
+    #[test]
+    fn notification_offers_direct_for_can_direct_only() {
+        let can = MemoryVerdict::ExceedsCanDirect {
+            estimate: 20_000_000_000,
+            budget: 16_000_000_000,
+        };
+        let n = qm_memory_notification(&can).expect("should warn");
+        assert_eq!(n.buttons.len(), 2);
+        assert!(matches!(
+            n.buttons[0].action,
+            AppAction::StartQmWithDirectBackend
+        ));
+        assert!(n.buttons[0].primary);
+
+        let must = MemoryVerdict::ExceedsMustReduce {
+            estimate: 20_000_000_000,
+            budget: 16_000_000_000,
+        };
+        let n = qm_memory_notification(&must).expect("should warn");
+        assert!(
+            !n.buttons
+                .iter()
+                .any(|b| matches!(b.action, AppAction::StartQmWithDirectBackend))
+        );
+
+        assert!(qm_memory_notification(&MemoryVerdict::Ok).is_none());
+    }
+
+    #[test]
+    fn start_with_direct_flips_backend_and_reruns() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let mut prompt = crate::frontend::state::QmPrompt::default();
+        prompt.options.scf_backend = crate::engines::qm::QmScfBackend::InCore;
+        state.ui.pending_qm = Some(prompt);
+        start_qm_with_direct_backend(&mut state);
+        // The handler flips the backend before re-running; with no atoms the
+        // re-run no-ops, but the backend choice must have changed.
+        // (pending_qm is cleared on a successful spawn; with an empty structure
+        // start_pending_qm returns early, leaving pending_qm intact.)
+        assert_eq!(
+            state.ui.pending_qm.as_ref().unwrap().options.scf_backend,
+            crate::engines::qm::QmScfBackend::Direct
+        );
     }
 }

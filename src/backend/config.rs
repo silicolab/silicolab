@@ -256,6 +256,17 @@ pub struct AppConfig {
     /// [`crate::frontend::state::DockModel`].
     #[serde(default)]
     pub dock_layout: DockLayoutConfig,
+    /// Number of CPU cores QM jobs may use. Sizes a rayon thread pool that wraps
+    /// each hartree run (hartree parallelises over the global rayon pool, so
+    /// `pool.install(...)` throttles it live). Defaults to the physical core
+    /// count; clamped to the logical count at use. `#[serde(default)]` so older
+    /// settings.json still parses.
+    #[serde(default = "default_compute_core_count")]
+    pub compute_core_count: usize,
+    /// Show live CPU/GPU utilization gauges in the status bar. Off by default:
+    /// while on, the app repaints continuously to animate the gauges.
+    #[serde(default)]
+    pub show_utilization_bars: bool,
 }
 
 /// Persisted state of one dock area (the bottom panel or the right sidebar). The
@@ -329,6 +340,10 @@ fn default_glass_intensity() -> f32 {
     0.35
 }
 
+fn default_compute_core_count() -> usize {
+    crate::backend::hardware::info().physical_cores.max(1)
+}
+
 impl AppConfig {
     /// A copy with every user-facing *preference* reset to its default, while
     /// preserving non-preference state: `engine_overrides` (user-configured
@@ -373,6 +388,8 @@ impl Default for AppConfig {
             representation: RepresentationPrefs::default(),
             assistant: AssistantConfig::default(),
             dock_layout: DockLayoutConfig::default(),
+            compute_core_count: default_compute_core_count(),
+            show_utilization_bars: false,
         }
     }
 }
@@ -701,6 +718,32 @@ mod tests {
     }
 
     #[test]
+    fn compute_core_count_defaults_and_back_compat() {
+        let cfg = AppConfig::default();
+        assert!(cfg.compute_core_count >= 1);
+        assert_eq!(
+            cfg.compute_core_count,
+            crate::backend::hardware::info().physical_cores.max(1)
+        );
+        // A settings.json written before this field still parses and yields the
+        // hardware default. Reuse the JSON shape from
+        // `config_parses_without_representation_field` — it includes every
+        // required non-default field and is already known to parse.
+        let json = r#"{
+            "default_project_dir": "/tmp/p",
+            "last_project_path": null,
+            "closed_to_scratch": false,
+            "assistant": { "enabled": true, "provider": "openai",
+                           "model": "gpt-5.1", "effort": "high", "base_url": null }
+        }"#;
+        let parsed: AppConfig = serde_json::from_str(json).expect("legacy config should parse");
+        assert_eq!(
+            parsed.compute_core_count,
+            crate::backend::hardware::info().physical_cores.max(1)
+        );
+    }
+
+    #[test]
     fn remember_recent_project_updates_existing() {
         let mut projects = vec![RecentProject {
             path: PathBuf::from("old"),
@@ -712,5 +755,25 @@ mod tests {
 
         assert_eq!(projects.len(), 1);
         assert_eq!(projects[0].name, "Renamed");
+    }
+
+    #[test]
+    fn show_utilization_bars_defaults_false() {
+        assert!(!AppConfig::default().show_utilization_bars);
+    }
+
+    #[test]
+    fn config_parses_without_utilization_bars_field() {
+        // A settings.json written before this field must still parse (backward
+        // compat via #[serde(default)]) and yield the default (false).
+        let json = r#"{
+            "default_project_dir": "/tmp/p",
+            "last_project_path": null,
+            "closed_to_scratch": false,
+            "assistant": { "enabled": true, "provider": "openai",
+                           "model": "gpt-5.1", "effort": "high", "base_url": null }
+        }"#;
+        let parsed: AppConfig = serde_json::from_str(json).expect("legacy config should parse");
+        assert!(!parsed.show_utilization_bars);
     }
 }

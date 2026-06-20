@@ -26,6 +26,7 @@
 
 mod accessors;
 mod custom;
+mod hardware;
 mod render;
 mod schema;
 
