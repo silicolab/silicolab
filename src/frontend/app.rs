@@ -71,6 +71,11 @@ pub fn run(structure: Structure, source_path: Option<PathBuf>) -> Result<()> {
                 app.state.ui.gpu_ready = true;
                 app.state.ui.gpu_name = Some(render_state.adapter.get_info().name);
             }
+            // Enumerate every GPU adapter (not just the LowPower render adapter,
+            // which is usually the iGPU on a dual-GPU host) so the hardware
+            // monitor can list them all. One-shot; the inventory is cached in the
+            // backend and read by the status bar and Compute Hardware panel.
+            crate::backend::hardware::set_gpu_inventory(crate::frontend::gpu_inventory::enumerate());
             crate::frontend::theme::set_preference(&cc.egui_ctx, app.state.config.theme);
             // Apply the persisted color scheme (rebuilds visuals); the default
             // (Warm) is already in place from `apply`, so this is a no-op for

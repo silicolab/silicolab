@@ -152,8 +152,10 @@ pub struct UiState {
     /// Latest CPU utilization sample (0–100 %). Updated by `poll_metrics` while
     /// the sampler is running; 0.0 when the sampler is off.
     pub cpu_pct: f32,
-    /// Latest GPU utilization sample (0–100 %), or `None` when not available.
-    pub gpu_pct: Option<f32>,
+    /// Latest per-GPU live samples (util / VRAM / temp), one per GPU the sampler
+    /// could read. Empty when the sampler is off or no live backend is available
+    /// (then the gauges read N/A). Joined to the GPU inventory by PCI bus id.
+    pub gpus: Vec<crate::frontend::gpu_monitor::GpuSample>,
 }
 
 /// Lifecycle of a user-initiated in-place update: idle until the user clicks
@@ -226,7 +228,7 @@ impl Default for UiState {
             agent: crate::frontend::agent::AgentSession::default(),
             markdown_cache: egui_commonmark::CommonMarkCache::default(),
             cpu_pct: 0.0,
-            gpu_pct: None,
+            gpus: Vec::new(),
         }
     }
 }
