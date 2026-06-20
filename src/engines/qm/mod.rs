@@ -18,6 +18,7 @@
 pub mod periodic;
 
 mod build;
+mod memory;
 mod run;
 mod summary;
 mod types;
@@ -25,6 +26,7 @@ mod types;
 pub use periodic::{KMesh, PeriodicFunctional, PeriodicQmRequest, run_periodic_qm};
 
 pub(crate) use build::*;
+pub use memory::{MemoryVerdict, estimate_incore_memory_bytes, memory_verdict};
 pub use run::*;
 pub(crate) use summary::*;
 pub use types::*;

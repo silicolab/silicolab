@@ -432,6 +432,62 @@ pub fn parse_model_ids(json: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// One utilization sample. `gpu_pct` is `None` where live GPU load isn't cheaply
+/// available (the common case — QM is CPU-only and macOS lacks a clean API).
+pub struct Metrics {
+    pub cpu_pct: f32,
+    pub gpu_pct: Option<f32>,
+}
+
+/// Handle to the live utilization sampler. Dropping it ends the thread: the next
+/// `send` fails once the receiver is gone, and the loop exits.
+pub struct RunningMetricsSampler {
+    pub receiver: std::sync::mpsc::Receiver<Metrics>,
+}
+
+// Live GPU load isn't cheaply available cross-platform (QM is CPU-only); returns None. Seam for a future NVIDIA nvml optional feature.
+fn gpu_utilization() -> Option<f32> {
+    None
+}
+
+/// Spawn a ~500 ms CPU/GPU sampler. The first CPU reading is meaningless (needs
+/// two refreshes >= MINIMUM_CPU_UPDATE_INTERVAL apart), so we prime once before
+/// the loop.
+pub fn spawn_metrics_sampler() -> RunningMetricsSampler {
+    use std::time::Duration;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut sys = sysinfo::System::new();
+        sys.refresh_cpu_usage();
+        std::thread::sleep(Duration::from_millis(500));
+        loop {
+            sys.refresh_cpu_usage();
+            let sample = Metrics {
+                cpu_pct: sys.global_cpu_usage(),
+                gpu_pct: gpu_utilization(),
+            };
+            if sender.send(sample).is_err() {
+                break; // receiver dropped (toggle turned off / app closing)
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    });
+    RunningMetricsSampler { receiver }
+}
+
+/// Start or stop the live metrics sampler on `jobs` to match `on`. Idempotent:
+/// turning on when already running does not spawn a second sampler. Separated
+/// from the settings handler so the lifecycle is testable without touching disk.
+pub(crate) fn apply_metrics_sampler(jobs: &mut JobManager, on: bool) {
+    if on {
+        if jobs.metrics.is_none() {
+            jobs.metrics = Some(spawn_metrics_sampler());
+        }
+    } else {
+        jobs.metrics = None;
+    }
+}
+
 #[derive(Default)]
 pub struct JobManager {
     pub optimizer: Option<RunningOptimization>,
@@ -460,6 +516,9 @@ pub struct JobManager {
     /// In-flight live model-list fetch for the active provider's `/models`
     /// endpoint, started by the "Refresh models" button in settings.
     pub model_fetch: Option<RunningModelFetch>,
+    /// Live CPU/GPU utilization sampler, running while `show_utilization_bars` is
+    /// on. Dropping this handle stops the background thread.
+    pub metrics: Option<RunningMetricsSampler>,
 }
 
 impl JobManager {
@@ -636,7 +695,7 @@ pub fn spawn_disorder_job(request: PackRequest) -> RunningDisorderJob {
 /// thread and return the live handle. The worker streams coarse stage updates,
 /// then a `Finished` outcome or `Failed` error. Caller stores the handle in
 /// [`JobManager`].
-pub fn spawn_qm_job(job: QmJob) -> RunningQmJob {
+pub fn spawn_qm_job(job: QmJob, threads: Option<usize>) -> RunningQmJob {
     let (sender, receiver) = std::sync::mpsc::channel();
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_for_worker = Arc::clone(&cancel);
@@ -645,6 +704,7 @@ pub fn spawn_qm_job(job: QmJob) -> RunningQmJob {
         let progress_sender = sender.clone();
         let result = run_qm_calculation(
             job,
+            threads,
             cancel_for_worker,
             move |QmCalculationProgress { stage }| {
                 let _ = progress_sender.send(QmWorkerMessage::Progress { stage });
@@ -982,6 +1042,23 @@ pub fn engine_poll_frame() -> Duration {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn apply_metrics_sampler_starts_and_stops() {
+        let mut jobs = JobManager::default();
+        apply_metrics_sampler(&mut jobs, true);
+        assert!(
+            jobs.metrics.is_some(),
+            "turning on should spawn the sampler"
+        );
+        apply_metrics_sampler(&mut jobs, true); // idempotent — no second sampler
+        assert!(jobs.metrics.is_some());
+        apply_metrics_sampler(&mut jobs, false);
+        assert!(
+            jobs.metrics.is_none(),
+            "turning off should drop the sampler"
+        );
+    }
 
     #[test]
     fn parse_model_ids_reads_data_id_list() {

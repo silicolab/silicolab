@@ -20,6 +20,7 @@ use crate::{
 
 mod about;
 mod dock;
+pub(crate) mod gauge;
 mod modal;
 mod notification;
 mod panel_bodies;

@@ -1,6 +1,7 @@
 pub mod config;
 pub mod entries;
 pub mod force_fields;
+pub mod hardware;
 pub mod history;
 pub mod housekeeping;
 pub mod project;

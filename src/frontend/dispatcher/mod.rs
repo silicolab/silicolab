@@ -157,6 +157,7 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::StartOptimization => start_pending_optimization(state),
         AppAction::CancelOptimizationPrompt => cancel_pending_optimization_request(state),
         AppAction::StartQmCalculation => start_pending_qm(state),
+        AppAction::StartQmWithDirectBackend => start_qm_with_direct_backend(state),
         AppAction::CancelQmPrompt => cancel_pending_qm_request(state),
         AppAction::StartDocking => start_pending_docking(state),
         AppAction::CancelDockingPrompt => cancel_pending_docking_request(state),
@@ -326,6 +327,7 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         }
         AppAction::ClearStoredKey(id) => crate::frontend::agent::clear_stored_key(state, &id),
         AppAction::RefreshModels => crate::frontend::agent::fetch_models(state, ctx),
+        AppAction::SetComputeCoreCount(cores) => set_compute_core_count(state, cores),
         AppAction::SetThemeMode(mode) => set_theme_mode(state, mode, ctx),
         AppAction::SetColorScheme(scheme) => set_color_scheme(state, scheme, ctx),
         AppAction::SetRepresentation(edit) => set_representation(state, edit),
@@ -334,6 +336,7 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SetGlass(on) => set_glass(state, on),
         AppAction::SetGlassIntensity { value, commit } => set_glass_intensity(state, value, commit),
         AppAction::SetCheckUpdates(on) => set_check_updates(state, on),
+        AppAction::SetShowUtilizationBars(on) => set_show_utilization_bars(state, on),
         AppAction::SetAutoInstallUpdates(on) => set_auto_install_updates(state, on),
         AppAction::SetReopenLastProject(on) => set_reopen_last_project(state, on),
         AppAction::PickDefaultProjectDir => pick_default_project_dir(state),

@@ -132,12 +132,49 @@ pub fn build_agent_qm_request(state: &AppState, args: &[String]) -> Result<QmReq
     assemble_qm_request(state, kind, &args[1..])
 }
 
+fn kind_keyword(kind: QmKind) -> &'static str {
+    match kind {
+        QmKind::SinglePoint => "energy",
+        QmKind::Optimize => "optimize",
+        QmKind::Frequencies => "freq",
+    }
+}
+
 fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
     let request = assemble_qm_request(state, kind, args)?;
 
+    // Reject in-core jobs whose ERI tensor would blow the RAM budget before we
+    // start allocating. Periodic runs go through run_periodic_command and are
+    // exempt (no nao⁴ in-core tensor).
+    let budget = crate::backend::hardware::qm_incore_budget_bytes();
+    let verdict = crate::engines::qm::memory_verdict(&request, budget);
+    match &verdict {
+        crate::engines::qm::MemoryVerdict::Ok => {}
+        crate::engines::qm::MemoryVerdict::ExceedsCanDirect { .. } => {
+            bail!(
+                "{} Re-run `qm {}` with --direct (integral-direct SCF) or --ri, \
+                 or choose a smaller basis.",
+                verdict.detail().unwrap_or_default(),
+                kind_keyword(kind),
+            );
+        }
+        crate::engines::qm::MemoryVerdict::ExceedsMustReduce { .. } => {
+            bail!(
+                "{} This calculation type needs in-core integrals; choose a smaller \
+                 basis set or a smaller system.",
+                verdict.detail().unwrap_or_default(),
+            );
+        }
+    }
+
     // Synchronous: a throwaway cancel flag and a no-op progress sink.
     let cancel = Arc::new(AtomicBool::new(false));
-    let result = run_qm_calculation(QmJob::Molecular(request), cancel, |_| {})?;
+    let result = run_qm_calculation(
+        QmJob::Molecular(request),
+        Some(state.config.compute_core_count.max(1)),
+        cancel,
+        |_| {},
+    )?;
     let outcome = result.outcome;
 
     // A QM run is a heavy calculation; surface its optimized geometry as a new
@@ -157,7 +194,12 @@ fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
 fn run_periodic_command(state: &mut AppState, args: &[String]) -> Result<String> {
     let request = assemble_periodic_request(state, args)?;
     let cancel = Arc::new(AtomicBool::new(false));
-    let result = run_qm_calculation(QmJob::Periodic(request), cancel, |_| {})?;
+    let result = run_qm_calculation(
+        QmJob::Periodic(request),
+        Some(state.config.compute_core_count.max(1)),
+        cancel,
+        |_| {},
+    )?;
     Ok(result.outcome.summary)
 }
 
@@ -513,7 +555,7 @@ mod tests {
 
         // Spawn the same job the agent's heavy path uses and poll it to
         // completion, exactly as `poll_heavy_qm` does (minus the agent loop).
-        let job = spawn_qm_job(crate::engines::qm::QmJob::Molecular(request));
+        let job = spawn_qm_job(crate::engines::qm::QmJob::Molecular(request), None);
         let deadline = Instant::now() + Duration::from_secs(120);
         let mut summary = None;
         while Instant::now() < deadline {
@@ -534,6 +576,23 @@ mod tests {
             summary.is_some(),
             "async qm job should finish with a summary"
         );
+    }
+
+    #[test]
+    fn qm_energy_small_molecule_passes_the_memory_guard() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let save_path = default_structure_save_path(&water(), None);
+        state.entries.add_entry(water(), None, save_path);
+        // sto-3g water is ~7 basis functions → kilobytes; the guard must not trip.
+        qm_command(
+            &mut state,
+            &[
+                "energy".to_string(),
+                "--basis".to_string(),
+                "sto-3g".to_string(),
+            ],
+        )
+        .expect("small in-core energy should pass the memory guard and run");
     }
 
     #[test]

@@ -284,6 +284,50 @@ pub fn registry() -> Vec<SettingDescriptor> {
         reset: None,
     });
 
+    // Hardware ▸ Compute — detected CPU/GPU/RAM inventory and the core-count cap
+    // for QM jobs.
+    items.push(SettingDescriptor {
+        id: "hardware.compute",
+        category: SettingCategory::Hardware,
+        group: "Compute",
+        title: "Compute hardware",
+        description: "Detected CPU, GPU, and memory; cap the cores QM uses.",
+        keywords: &[
+            "cpu", "gpu", "cores", "threads", "ram", "memory", "hardware", "parallel",
+        ],
+        control: Control::Custom(crate::frontend::ui::settings_registry::hardware::render),
+        enabled: None,
+        indent: false,
+        is_default: None,
+        reset: None,
+    });
+
+    // Hardware ▸ Monitoring — opt-in live utilization gauges.
+    items.push(SettingDescriptor {
+        id: "hardware.utilization_bars",
+        category: SettingCategory::Hardware,
+        group: "Monitoring",
+        title: "Show CPU/GPU utilization",
+        description: "Live gauges in the status bar. Repaints continuously while on.",
+        keywords: &[
+            "cpu",
+            "gpu",
+            "utilization",
+            "usage",
+            "gauge",
+            "monitor",
+            "bars",
+        ],
+        control: Control::Toggle {
+            read: utilization_bars_read,
+            on_change: utilization_bars_change,
+        },
+        enabled: None,
+        indent: false,
+        is_default: Some(utilization_bars_is_default),
+        reset: Some(utilization_bars_reset),
+    });
+
     // Advanced ▸ Configuration — meta-settings that operate on the settings file
     // itself. All Custom (buttons / confirmations), so none carry a reset.
     items.push(SettingDescriptor {

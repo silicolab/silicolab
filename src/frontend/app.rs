@@ -43,6 +43,11 @@ pub fn run(structure: Structure, source_path: Option<PathBuf>) -> Result<()> {
             if app.state.config.check_updates {
                 app.state.jobs.update_check = Some(crate::frontend::jobs::spawn_update_check());
             }
+            // Restart the utilization sampler when the setting was on at last exit,
+            // so the gauges animate from the first frame.
+            if app.state.config.show_utilization_bars && app.state.jobs.metrics.is_none() {
+                app.state.jobs.metrics = Some(crate::frontend::jobs::spawn_metrics_sampler());
+            }
             // Debug aid: SILICOLAB_FAKE_UPDATE=<version> (or =1 for a default)
             // injects a fake "update available" so the badge, status-bar link,
             // and message can be previewed without publishing a release.
@@ -64,6 +69,7 @@ pub fn run(structure: Structure, source_path: Option<PathBuf>) -> Result<()> {
             if let Some(render_state) = cc.wgpu_render_state.as_ref() {
                 crate::frontend::viewport::init_gpu_renderer(render_state);
                 app.state.ui.gpu_ready = true;
+                app.state.ui.gpu_name = Some(render_state.adapter.get_info().name);
             }
             crate::frontend::theme::set_preference(&cc.egui_ctx, app.state.config.theme);
             // Apply the persisted color scheme (rebuilds visuals); the default

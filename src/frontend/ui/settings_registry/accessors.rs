@@ -163,3 +163,19 @@ pub(crate) fn reopen_read(state: &AppState) -> bool {
 pub(crate) fn reopen_change(on: bool) -> AppAction {
     AppAction::SetReopenLastProject(on)
 }
+
+pub(crate) fn utilization_bars_read(state: &AppState) -> bool {
+    state.config.show_utilization_bars
+}
+
+pub(crate) fn utilization_bars_change(on: bool) -> AppAction {
+    AppAction::SetShowUtilizationBars(on)
+}
+
+pub(crate) fn utilization_bars_is_default(state: &AppState) -> bool {
+    state.config.show_utilization_bars == AppConfig::default().show_utilization_bars
+}
+
+pub(crate) fn utilization_bars_reset() -> AppAction {
+    AppAction::SetShowUtilizationBars(AppConfig::default().show_utilization_bars)
+}

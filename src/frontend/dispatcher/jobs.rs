@@ -80,6 +80,21 @@ pub(crate) fn poll_self_update(state: &mut AppState, ctx: &egui::Context) {
     }
 }
 
+/// Drain the latest utilization sample into state and keep frames coming while
+/// the gauges are shown. Mirrors the other pollers' repaint-while-active pattern.
+pub(crate) fn poll_metrics(state: &mut AppState, ctx: &egui::Context) {
+    let Some(sampler) = state.jobs.metrics.as_ref() else {
+        return;
+    };
+    while let Ok(metrics) = sampler.receiver.try_recv() {
+        state.ui.cpu_pct = metrics.cpu_pct;
+        state.ui.gpu_pct = metrics.gpu_pct;
+    }
+    if state.config.show_utilization_bars {
+        ctx.request_repaint_after(std::time::Duration::from_millis(500));
+    }
+}
+
 pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     // Resolve the assistant key availability once (it reads env + the key store),
     // so the Assistant tab's per-frame render reads a cached flag instead.
@@ -94,6 +109,7 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     poll_trajectory_jobs(state, ctx);
     poll_update_check(state, ctx);
     poll_self_update(state, ctx);
+    poll_metrics(state, ctx);
     poll_remote_probe(state, ctx);
     crate::frontend::agent::poll_agent_turn(state, ctx);
     crate::frontend::agent::poll_agent_heavy(state, ctx);
@@ -722,5 +738,27 @@ pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
             state.request_autosave(now, AUTOSAVE_DEBOUNCE_SECS);
         }
         ctx.request_repaint();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frontend::jobs::{Metrics, RunningMetricsSampler};
+
+    #[test]
+    fn poll_metrics_drains_latest_into_state() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Metrics {
+            cpu_pct: 42.0,
+            gpu_pct: None,
+        })
+        .unwrap();
+        state.jobs.metrics = Some(RunningMetricsSampler { receiver: rx });
+        let ctx = egui::Context::default();
+        poll_metrics(&mut state, &ctx);
+        assert_eq!(state.ui.cpu_pct, 42.0);
+        assert_eq!(state.ui.gpu_pct, None);
     }
 }
