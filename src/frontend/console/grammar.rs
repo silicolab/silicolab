@@ -60,7 +60,12 @@ pub(crate) enum Command {
     Activate { reference: String },
 
     /// Build a 3D structure from a SMILES string as a new entry.
-    Sketch { smiles: String },
+    Sketch {
+        smiles: String,
+        /// Name for the new entry (defaults to the SMILES text).
+        #[arg(long)]
+        name: Option<String>,
+    },
 
     /// Download a structure by PDB id.
     Fetch {
@@ -376,7 +381,9 @@ impl Command {
         match self {
             Command::Open { path } => super::open_command(state, context, &path),
             Command::Activate { reference } => super::activate_command(state, &reference),
-            Command::Sketch { smiles } => super::sketch_command(state, &smiles),
+            Command::Sketch { smiles, name } => {
+                super::sketch_command(state, &smiles, name.as_deref())
+            }
             Command::Fetch { id, db, dir } => super::fetch_command(state, &id, db.as_deref(), dir),
             Command::Source { path } => {
                 super::run_script_path_with_context(state, context, &path.display().to_string())?;

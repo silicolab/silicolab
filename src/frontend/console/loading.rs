@@ -114,8 +114,12 @@ fn open_structure_path(state: &mut AppState, path: PathBuf) -> Result<()> {
 /// `sketch <SMILES>` — parse a SMILES string, generate a 3D structure, and add
 /// it as a new active entry. The scriptable counterpart of the GUI sketcher's
 /// Build action; available in both the console and headless `.sls` scripts.
-pub(crate) fn sketch_command(state: &mut AppState, smiles: &str) -> Result<String> {
-    let structure = crate::workflows::sketch_to_structure::smiles_to_structure(smiles, None)
+pub(crate) fn sketch_command(
+    state: &mut AppState,
+    smiles: &str,
+    name: Option<&str>,
+) -> Result<String> {
+    let structure = crate::workflows::sketch_to_structure::smiles_to_structure(smiles, name)
         .with_context(|| {
             format!(
                 "could not sketch `{smiles}` — check the SMILES; diatomics need explicit \
@@ -126,7 +130,8 @@ pub(crate) fn sketch_command(state: &mut AppState, smiles: &str) -> Result<Strin
     let save_path = crate::io::structure_io::default_structure_save_path(&structure, None);
     let entry_id = state.entries.add_entry(structure, None, save_path);
     state.show_entry(entry_id);
+    let label = name.unwrap_or(smiles);
     Ok(format!(
-        "sketched {smiles} as entry #{entry_id} ({atom_count} atoms)"
+        "sketched {label} as entry #{entry_id} ({atom_count} atoms)"
     ))
 }

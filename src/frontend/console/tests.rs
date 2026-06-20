@@ -389,6 +389,27 @@ fn sketch_rejects_invalid_smiles_with_a_hint() {
     );
 }
 
+/// `sketch` parses the SMILES positionally and an optional `--name`; without the
+/// flag the entry name later defaults to the SMILES text.
+#[test]
+fn sketch_parses_optional_name_flag() {
+    match parse_command(&shell_words("sketch CCO --name ethanol").unwrap()).unwrap() {
+        Command::Sketch { smiles, name } => {
+            assert_eq!(smiles, "CCO");
+            assert_eq!(name.as_deref(), Some("ethanol"));
+        }
+        other => panic!("expected sketch, got {other:?}"),
+    }
+
+    match parse_command(&shell_words("sketch CCO").unwrap()).unwrap() {
+        Command::Sketch { smiles, name } => {
+            assert_eq!(smiles, "CCO");
+            assert_eq!(name, None);
+        }
+        other => panic!("expected sketch, got {other:?}"),
+    }
+}
+
 #[test]
 fn activate_switches_the_active_entry_by_id() {
     let mut state = AppState::scratch(Default::default(), Vec::new());
