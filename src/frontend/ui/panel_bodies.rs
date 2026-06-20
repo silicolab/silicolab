@@ -5,11 +5,13 @@ use crate::frontend::app::{ASSISTANT_CJK_FONT, CONSOLE_CJK_MONO_FONT};
 mod assistant;
 mod assistant_transcript;
 mod console;
+mod monitor;
 mod task_monitor;
 
 pub(crate) use assistant::*;
 use assistant_transcript::*;
 pub(crate) use console::*;
+pub(crate) use monitor::*;
 pub(crate) use task_monitor::*;
 
 /// Width reserved at the right edge of the log/transcript scroll areas so their

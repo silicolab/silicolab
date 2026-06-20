@@ -233,6 +233,9 @@ pub enum AppAction {
     /// Open the Settings dialog at the Remote Hosts section (from the per-task
     /// target picker's "Add host…" button).
     OpenRemoteHostsSettings,
+    /// Fetch the static hardware inventory (CPU/memory/GPU) of the host with this
+    /// id over SSH, for the Hardware ▸ Remote settings panel (worker thread).
+    FetchRemoteHardware(String),
     RunConsoleCommand(String),
     /// Send a message to the in-app assistant, kicking off an agent turn.
     SendAgentMessage(String),

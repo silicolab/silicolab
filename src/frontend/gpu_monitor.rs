@@ -62,40 +62,6 @@ pub fn live_line(s: &GpuSample) -> Option<String> {
     Some(parts.join("  ·  "))
 }
 
-/// One status-bar GPU gauge, derived from the inventory + live samples.
-pub struct GpuGaugeView {
-    /// Short in-ring label: `"GPU"` for a single GPU, `"G0"/"G1"/…` for several.
-    pub label: String,
-    pub util_pct: Option<f32>,
-    pub tooltip: String,
-}
-
-/// Build one gauge view per inventory GPU (so multi-GPU hosts show several
-/// gauges), pairing each with its live sample when one is available.
-pub fn gauge_views(inventory: &[GpuInfo], samples: &[GpuSample]) -> Vec<GpuGaugeView> {
-    let multi = inventory.len() > 1;
-    inventory
-        .iter()
-        .enumerate()
-        .map(|(i, gpu)| {
-            let sample = find_sample(samples, gpu);
-            let label = if multi {
-                format!("G{i}")
-            } else {
-                "GPU".to_string()
-            };
-            let detail = sample
-                .and_then(live_line)
-                .unwrap_or_else(|| "N/A".to_string());
-            GpuGaugeView {
-                label,
-                util_pct: sample.and_then(|s| s.util_pct),
-                tooltip: format!("{} ({}) — {}", gpu.name, gpu.kind.label(), detail),
-            }
-        })
-        .collect()
-}
-
 #[cfg(all(feature = "nvidia", any(target_os = "windows", target_os = "linux")))]
 mod backend_impl {
     use super::{GpuSample, normalize_bus_id};
@@ -203,37 +169,6 @@ mod tests {
         assert!(find_sample(&samples, &dgpu).is_some());
         let no_bus = gpu("RTX", GpuKind::Discrete, "");
         assert!(find_sample(&samples, &no_bus).is_none());
-    }
-
-    #[test]
-    fn gauge_views_label_per_gpu_and_pick_matching_util() {
-        let inv = vec![
-            gpu("Intel iGPU", GpuKind::Integrated, "0000:00:02.0"),
-            gpu("NVIDIA dGPU", GpuKind::Discrete, "0000:01:00.0"),
-        ];
-        let samples = vec![GpuSample {
-            pci_bus_id: "01:00.0".into(),
-            util_pct: Some(73.0),
-            vram_used_bytes: Some(2 * 1024 * 1024 * 1024),
-            vram_total_bytes: Some(8 * 1024 * 1024 * 1024),
-            temp_c: Some(61),
-        }];
-        let views = gauge_views(&inv, &samples);
-        assert_eq!(views.len(), 2);
-        assert_eq!(views[0].label, "G0");
-        assert_eq!(views[1].label, "G1");
-        assert_eq!(views[0].util_pct, None); // iGPU: no sample
-        assert_eq!(views[1].util_pct, Some(73.0)); // dGPU matched by bus id
-        assert!(views[1].tooltip.contains("73%"));
-        assert!(views[1].tooltip.contains("VRAM"));
-    }
-
-    #[test]
-    fn gauge_view_label_is_gpu_for_a_single_card() {
-        let inv = vec![gpu("Solo", GpuKind::Discrete, "0000:01:00.0")];
-        let views = gauge_views(&inv, &[]);
-        assert_eq!(views[0].label, "GPU");
-        assert!(views[0].tooltip.ends_with("N/A"));
     }
 
     #[test]

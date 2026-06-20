@@ -34,6 +34,7 @@
 //!    intermediate artifacts never round-trip.
 
 pub mod bootstrap;
+pub mod hardware;
 
 use std::{
     collections::HashMap,
@@ -404,6 +405,39 @@ pub fn detect_remote_engine(
         }
     }
     None
+}
+
+/// SSH-run `script` on `target` and return its stdout. Errors only when the SSH
+/// transport itself failed (connection/auth/shell): make the remote `script` end
+/// in `; true` so a missing optional tool isn't mistaken for a failure. The SSH
+/// blocks, so always call this off the UI thread. Used by settings probes such as
+/// the remote hardware inventory.
+pub fn run_probe_command(target: &RemoteTarget, script: &str, timeout: Duration) -> Result<String> {
+    // Run the host's prelude (module loads / PATH setup) first, so tools a
+    // non-login SSH shell doesn't have on PATH (e.g. `nvidia-smi` behind
+    // `module load cuda`) become reachable. Joined with `;` rather than `&&` so a
+    // prelude that errors still lets the probe — and its section markers — run;
+    // the inventory is best-effort.
+    let script = if target.prelude.is_empty() {
+        script.to_string()
+    } else {
+        format!("{}; {script}", target.prelude.join("; "))
+    };
+    let config = ssh_config(target, &script, Some(timeout));
+    let result = process::run(config)?;
+    if result.success() {
+        Ok(result.stdout)
+    } else {
+        let detail = result.stderr.trim();
+        bail!(
+            "remote command failed: {}",
+            if detail.is_empty() {
+                "connection or shell error"
+            } else {
+                detail
+            }
+        )
+    }
 }
 
 /// Write a small `remote_run.json` into the local run dir at launch, recording

@@ -19,36 +19,12 @@ pub(crate) fn render_status_bar(state: &mut AppState, ui: &mut egui::Ui) {
         ui.separator();
         ui.label(RichText::new(&state.message).color(pal.text_primary));
 
-        if state.config.show_utilization_bars {
-            let cpu_pct = state.ui.cpu_pct;
-            let views = crate::frontend::gpu_monitor::gauge_views(
-                crate::backend::hardware::gpus(),
-                &state.ui.gpus,
-            );
-            let gpu_name = state.ui.gpu_name.clone();
+        // The system monitor normally lives in the primary-sidebar footer; only
+        // fall back to the status bar when that sidebar is hidden, so the gauges
+        // stay visible without ever showing in two places at once.
+        if state.config.show_utilization_bars && !state.ui.layout.show_primary_sidebar {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if views.is_empty() {
-                    // No enumerated inventory (headless / software renderer): keep
-                    // the legacy single gauge sourced from the render-adapter name.
-                    let tip = gpu_name
-                        .map(|name| format!("{name}: N/A"))
-                        .unwrap_or_else(|| "GPU: N/A".to_string());
-                    crate::frontend::ui::gauge::utilization_gauge(ui, "GPU", None)
-                        .on_hover_text(tip);
-                } else {
-                    // right_to_left lays widgets out leftward, so reverse to keep
-                    // G0..Gn ordered left→right with CPU drawn last (leftmost).
-                    for view in views.iter().rev() {
-                        crate::frontend::ui::gauge::utilization_gauge(
-                            ui,
-                            &view.label,
-                            view.util_pct,
-                        )
-                        .on_hover_text(&view.tooltip);
-                    }
-                }
-                crate::frontend::ui::gauge::utilization_gauge(ui, "CPU", Some(cpu_pct))
-                    .on_hover_text(format!("CPU: {cpu_pct:.0}%"));
+                super::render_status_monitor(state, ui);
             });
         }
     });

@@ -83,6 +83,13 @@ pub(crate) fn set_show_utilization_bars(state: &mut AppState, on: bool) {
         state.set_message(format!("Could not save utilization preference: {error}"));
     }
     crate::frontend::jobs::apply_metrics_sampler(&mut state.jobs, on);
+    // Turning the monitor off hides the widget that owns the detail popover, so
+    // close it (and drop the stale anchor) — otherwise it would keep floating
+    // with frozen values until the user pressed Escape.
+    if !on {
+        state.ui.layout.monitor_popover_open = false;
+        state.ui.layout.monitor_anchor = None;
+    }
 }
 
 /// Persist whether discovered updates install themselves automatically. If a

@@ -469,4 +469,5 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
     render_text_viewer_window(state, &ctx);
     settings_modal::show(state, &ctx, actions);
     about::show(state, &ctx, actions);
+    panel_bodies::render_monitor_popover(state, &ctx);
 }
