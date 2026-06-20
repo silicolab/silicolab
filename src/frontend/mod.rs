@@ -8,6 +8,8 @@ mod disorder_commands;
 mod dispatcher;
 mod docking_commands;
 mod glass;
+mod gpu_inventory;
+pub(crate) mod gpu_monitor;
 mod jobs;
 mod md_commands;
 mod md_support;

@@ -88,7 +88,7 @@ pub(crate) fn poll_metrics(state: &mut AppState, ctx: &egui::Context) {
     };
     while let Ok(metrics) = sampler.receiver.try_recv() {
         state.ui.cpu_pct = metrics.cpu_pct;
-        state.ui.gpu_pct = metrics.gpu_pct;
+        state.ui.gpus = metrics.gpus;
     }
     if state.config.show_utilization_bars {
         ctx.request_repaint_after(std::time::Duration::from_millis(500));
@@ -744,6 +744,7 @@ pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frontend::gpu_monitor::GpuSample;
     use crate::frontend::jobs::{Metrics, RunningMetricsSampler};
 
     #[test]
@@ -752,13 +753,20 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::channel();
         tx.send(Metrics {
             cpu_pct: 42.0,
-            gpu_pct: None,
+            gpus: vec![GpuSample {
+                pci_bus_id: "01:00.0".into(),
+                util_pct: Some(50.0),
+                vram_used_bytes: None,
+                vram_total_bytes: None,
+                temp_c: None,
+            }],
         })
         .unwrap();
         state.jobs.metrics = Some(RunningMetricsSampler { receiver: rx });
         let ctx = egui::Context::default();
         poll_metrics(&mut state, &ctx);
         assert_eq!(state.ui.cpu_pct, 42.0);
-        assert_eq!(state.ui.gpu_pct, None);
+        assert_eq!(state.ui.gpus.len(), 1);
+        assert_eq!(state.ui.gpus[0].util_pct, Some(50.0));
     }
 }

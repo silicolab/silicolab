@@ -48,6 +48,27 @@ sysinfo = { version = "0.33", default-features = false, features = ["system"] }
 ureq = "3.3.0"
 uuid = { version = "1", features = ["v4"] }
 raw-window-handle = "0.6"
+# Blocks on wgpu's async `Instance::enumerate_adapters` during the one-shot GPU
+# inventory probe at startup (`frontend/gpu_inventory.rs`).
+pollster = "0.4"
+
+[features]
+# NVIDIA live GPU stats via NVML. On by default so release builds monitor
+# NVIDIA cards out of the box; `Nvml::init()` degrades gracefully to N/A when no
+# NVIDIA GPU/driver is present, so default-on is safe. The dependency is
+# Windows/Linux-only (see the target table below) â€” on macOS the feature is a
+# no-op and `nvml-wrapper` is never compiled.
+default = ["nvidia"]
+nvidia = ["dep:nvml-wrapper"]
+
+# Live NVIDIA GPU stats (utilization / VRAM / temperature) via NVML, surfaced in
+# the hardware monitor. Optional + Windows/Linux only: NVML doesn't exist on
+# macOS, so the dependency is never compiled there even with `--all-features`.
+# `nvml-wrapper` dlopens nvml.dll / libnvidia-ml.so at runtime, so the build
+# never link-depends on an NVML SDK and `Nvml::init()` simply Errs (no panic) on
+# non-NVIDIA or driver-absent hosts â€” the monitor then falls back to N/A.
+[target.'cfg(any(target_os = "windows", target_os = "linux"))'.dependencies]
+nvml-wrapper = { version = "0.12", optional = true }
 
 [target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
 window-vibrancy = "0.7"
@@ -64,6 +85,3 @@ objc2-foundation = "0.3"
 # winresource builds everywhere and only does work for Windows targets.
 [build-dependencies]
 winresource = "0.1"
-
-[dev-dependencies]
-pollster = "0.4"

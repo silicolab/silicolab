@@ -82,6 +82,68 @@ fn perf_efficiency_cores() -> (Option<usize>, Option<usize>) {
     (None, None)
 }
 
+/// One detected GPU adapter. The wgpu enumeration that produces these lives in
+/// the frontend (the backend stays wgpu-free); the frontend maps each adapter
+/// into this owned type and hands the list down via [`set_gpu_inventory`].
+/// Display-only — wgpu's enumeration yields names/types/ids, never live load.
+#[derive(Debug, Clone)]
+pub struct GpuInfo {
+    pub name: String,
+    pub kind: GpuKind,
+    /// PCI vendor id (`0x10DE` NVIDIA, `0x1002` AMD, `0x8086` Intel); `0` if unknown.
+    pub vendor: u32,
+    /// wgpu `device_pci_bus_id` (`bus:device.function`, e.g. `0000:01:00.0`), or
+    /// `""` when the backend doesn't expose it. Join key for live GPU samples.
+    pub pci_bus_id: String,
+    /// Graphics backend the adapter was enumerated through (`Dx12`/`Vulkan`/`Metal`).
+    pub backend: String,
+}
+
+/// Adapter class, mirroring `wgpu::DeviceType` without coupling the backend to
+/// wgpu (which lives a layer up, in the frontend).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GpuKind {
+    Discrete,
+    Integrated,
+    Virtual,
+    Cpu,
+    Other,
+}
+
+impl GpuKind {
+    /// Lower-case tag for the Compute Hardware panel (e.g. `"discrete"`).
+    pub fn label(self) -> &'static str {
+        match self {
+            GpuKind::Discrete => "discrete",
+            GpuKind::Integrated => "integrated",
+            GpuKind::Virtual => "virtual",
+            GpuKind::Cpu => "cpu",
+            GpuKind::Other => "other",
+        }
+    }
+}
+
+impl GpuInfo {
+    pub fn is_nvidia(&self) -> bool {
+        self.vendor == 0x10DE
+    }
+}
+
+static GPU_INVENTORY: OnceLock<Vec<GpuInfo>> = OnceLock::new();
+
+/// Record the detected GPU inventory. Idempotent — the first call (at startup,
+/// from the frontend that owns the wgpu instance) wins; later calls are ignored.
+pub fn set_gpu_inventory(gpus: Vec<GpuInfo>) {
+    let _ = GPU_INVENTORY.set(gpus);
+}
+
+/// The detected GPUs, or an empty slice before the inventory is recorded (e.g.
+/// headless runs, or when the renderer never initialized). Callers fall back to
+/// the render-adapter name in that case.
+pub fn gpus() -> &'static [GpuInfo] {
+    GPU_INVENTORY.get().map(Vec::as_slice).unwrap_or(&[])
+}
+
 /// Clamp a requested core count to the valid range [1, logical].
 ///
 /// Used by the compute-hardware settings handler so the pure clamping logic
@@ -145,5 +207,46 @@ mod tests {
     #[test]
     fn clamp_core_count_passes_through_valid() {
         assert_eq!(clamp_core_count(4, 10), 4);
+    }
+
+    #[test]
+    fn gpu_kind_labels_are_lowercase_tags() {
+        assert_eq!(GpuKind::Discrete.label(), "discrete");
+        assert_eq!(GpuKind::Integrated.label(), "integrated");
+        assert_eq!(GpuKind::Cpu.label(), "cpu");
+    }
+
+    #[test]
+    fn is_nvidia_matches_pci_vendor() {
+        let nv = GpuInfo {
+            name: "NVIDIA GeForce RTX".into(),
+            kind: GpuKind::Discrete,
+            vendor: 0x10DE,
+            pci_bus_id: "0000:01:00.0".into(),
+            backend: "Dx12".into(),
+        };
+        assert!(nv.is_nvidia());
+        let intel = GpuInfo {
+            vendor: 0x8086,
+            ..nv.clone()
+        };
+        assert!(!intel.is_nvidia());
+    }
+
+    // Sets the process-global inventory; the only test that does, so it can't
+    // race a test asserting the empty default (there is none).
+    #[test]
+    fn set_gpu_inventory_is_idempotent_and_readable() {
+        let first = vec![GpuInfo {
+            name: "First GPU".into(),
+            kind: GpuKind::Discrete,
+            vendor: 0x10DE,
+            pci_bus_id: "0000:01:00.0".into(),
+            backend: "Dx12".into(),
+        }];
+        set_gpu_inventory(first);
+        set_gpu_inventory(Vec::new()); // ignored — first call wins
+        assert_eq!(gpus().len(), 1);
+        assert_eq!(gpus()[0].name, "First GPU");
     }
 }

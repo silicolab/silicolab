@@ -432,11 +432,13 @@ pub fn parse_model_ids(json: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// One utilization sample. `gpu_pct` is `None` where live GPU load isn't cheaply
-/// available (the common case — QM is CPU-only and macOS lacks a clean API).
+/// One utilization sample: global CPU load plus a live per-GPU snapshot (one
+/// entry per GPU the sampler could read). `gpus` is empty when no live backend
+/// is available — the common case, since live GPU stats need the optional NVML
+/// feature; the gauges then read N/A.
 pub struct Metrics {
     pub cpu_pct: f32,
-    pub gpu_pct: Option<f32>,
+    pub gpus: Vec<crate::frontend::gpu_monitor::GpuSample>,
 }
 
 /// Handle to the live utilization sampler. Dropping it ends the thread: the next
@@ -445,26 +447,23 @@ pub struct RunningMetricsSampler {
     pub receiver: std::sync::mpsc::Receiver<Metrics>,
 }
 
-// Live GPU load isn't cheaply available cross-platform (QM is CPU-only); returns None. Seam for a future NVIDIA nvml optional feature.
-fn gpu_utilization() -> Option<f32> {
-    None
-}
-
 /// Spawn a ~500 ms CPU/GPU sampler. The first CPU reading is meaningless (needs
 /// two refreshes >= MINIMUM_CPU_UPDATE_INTERVAL apart), so we prime once before
-/// the loop.
+/// the loop. The GPU probe is built once on the sampler thread (NVML init is not
+/// cheap) and reused each tick.
 pub fn spawn_metrics_sampler() -> RunningMetricsSampler {
     use std::time::Duration;
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut sys = sysinfo::System::new();
         sys.refresh_cpu_usage();
+        let mut gpu_sampler = crate::frontend::gpu_monitor::GpuSampler::new();
         std::thread::sleep(Duration::from_millis(500));
         loop {
             sys.refresh_cpu_usage();
             let sample = Metrics {
                 cpu_pct: sys.global_cpu_usage(),
-                gpu_pct: gpu_utilization(),
+                gpus: gpu_sampler.sample(),
             };
             if sender.send(sample).is_err() {
                 break; // receiver dropped (toggle turned off / app closing)
