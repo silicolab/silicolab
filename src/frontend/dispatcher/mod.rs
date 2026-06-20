@@ -158,6 +158,7 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::CancelOptimizationPrompt => cancel_pending_optimization_request(state),
         AppAction::StartQmCalculation => start_pending_qm(state),
         AppAction::StartQmWithDirectBackend => start_qm_with_direct_backend(state),
+        AppAction::EstimateQmMemory => estimate_qm_memory(state),
         AppAction::CancelQmPrompt => cancel_pending_qm_request(state),
         AppAction::StartDocking => start_pending_docking(state),
         AppAction::CancelDockingPrompt => cancel_pending_docking_request(state),

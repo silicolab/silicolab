@@ -42,6 +42,74 @@ fn request(structure: Structure, method: QmMethod, basis: &str, kind: QmKind) ->
     }
 }
 
+/// Drift guard: every basis the molecular QM panel offers must still be an
+/// orbital set hartree can load. A hartree bump that renames or drops one trips
+/// here rather than at run time, in front of a user who picked it.
+#[test]
+fn panel_bases_are_all_loadable() {
+    for name in QM_BASIS_SETS {
+        assert!(
+            hartree::BasisSet::load(name).is_ok(),
+            "panel basis `{name}` is not a loadable hartree orbital set"
+        );
+    }
+}
+
+/// Drift guard: every DFT functional preset must still parse in hartree. Mirrors
+/// the basis guard above for the method dropdown.
+#[test]
+fn panel_functionals_are_all_recognized() {
+    for method in QmMethod::presets() {
+        if let QmMethod::Dft(name) = method {
+            assert!(
+                hartree::dft::FunctionalSpec::parse(&name).is_ok(),
+                "panel functional `{name}` is not recognized by hartree"
+            );
+        }
+    }
+}
+
+/// Locks which method/dispersion pairs hartree actually parametrizes, so the
+/// panel only ever offers a buildable combination (and a hartree bump that shifts
+/// coverage is caught here). D3(BJ) covers a small functional set; D4 adds the
+/// double hybrids; composites and post-HF carry/allow none.
+#[test]
+fn supports_dispersion_matches_hartree_coverage() {
+    use crate::engines::qm::supports_dispersion;
+    let d3 = QmDispersion::D3Bj;
+    let d4 = QmDispersion::D4;
+
+    // b3lyp: both. The default panel method, so its D3(BJ) default must build.
+    assert!(supports_dispersion(&QmMethod::Dft("b3lyp".into()), d3));
+    assert!(supports_dispersion(&QmMethod::Dft("b3lyp".into()), d4));
+    // m06-2x and the VV10 family: neither — the panel must drop a stale D3(BJ).
+    assert!(!supports_dispersion(&QmMethod::Dft("m06-2x".into()), d3));
+    assert!(!supports_dispersion(&QmMethod::Dft("m06-2x".into()), d4));
+    assert!(!supports_dispersion(&QmMethod::Dft("wb97x-v".into()), d3));
+    // b2plyp: D4 only.
+    assert!(supports_dispersion(&QmMethod::Dft("b2plyp".into()), d4));
+    assert!(!supports_dispersion(&QmMethod::Dft("b2plyp".into()), d3));
+    // HF carries dispersion; composites and post-HF do not.
+    assert!(supports_dispersion(&QmMethod::Rhf, d3));
+    assert!(!supports_dispersion(
+        &QmMethod::Composite("r2scan-3c".into()),
+        d3
+    ));
+    assert!(!supports_dispersion(&QmMethod::Mp2, d3));
+}
+
+/// The new estimate-memory path returns a sane figure for a small in-core job and
+/// labels its backend.
+#[test]
+fn estimate_request_memory_reports_incore_water() {
+    let req = request(h2(), QmMethod::Rhf, "def2-svp", QmKind::SinglePoint);
+    let report = crate::engines::qm::estimate_request_memory(&req, u64::MAX)
+        .expect("in-core RHF/def2-svp should estimate");
+    assert!(report.peak_bytes > 0);
+    assert_eq!(report.backend_label, "in-core");
+    assert!(report.fits(), "u64::MAX budget should always fit");
+}
+
 #[test]
 fn rhf_sto3g_h2_single_point_energy() {
     let outcome = run_qm(

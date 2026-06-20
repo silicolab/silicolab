@@ -56,17 +56,27 @@ impl QmMethod {
             QmMethod::Mp2,
             QmMethod::Ccsd,
             QmMethod::CcsdT,
-            // Common functionals.
+            // DFT functionals by Jacob's-ladder rung. Mirrors the keywords
+            // hartree's `FunctionalSpec::parse` accepts; the drift-guard test
+            // `panel_functionals_are_all_recognized` asserts each still parses.
             QmMethod::Dft("b3lyp".to_string()),
+            // b3lyp5 is the VWN5-correlation variant of b3lyp (vs the common
+            // VWN3); surfaced for completeness, the trailing 5 marks it niche.
+            QmMethod::Dft("b3lyp5".to_string()),
             QmMethod::Dft("pbe0".to_string()),
             QmMethod::Dft("pbe".to_string()),
             QmMethod::Dft("blyp".to_string()),
             QmMethod::Dft("tpss".to_string()),
             QmMethod::Dft("r2scan".to_string()),
             QmMethod::Dft("m06-2x".to_string()),
+            QmMethod::Dft("pw6b95".to_string()),
             QmMethod::Dft("wb97x-v".to_string()),
+            QmMethod::Dft("b97m-v".to_string()),
             QmMethod::Dft("wb97m-v".to_string()),
             QmMethod::Dft("b2plyp".to_string()),
+            QmMethod::Dft("pwpb95".to_string()),
+            QmMethod::Dft("revdsd-pbep86".to_string()),
+            QmMethod::Dft("wb97m(2)".to_string()),
             QmMethod::Dft("svwn".to_string()),
         ]
     }
@@ -128,6 +138,39 @@ impl QmMethod {
         matches!(self, QmMethod::Mp2 | QmMethod::Ccsd | QmMethod::CcsdT)
     }
 }
+
+/// Orbital basis sets the molecular QM panel offers, in the order they appear in
+/// its dropdown: by family (Pople, Dunning, Karlsruhe), then ζ-level. Mirrors the
+/// names `hartree::BasisSet::load` accepts as orbital sets — auxiliary/fitting
+/// sets and the composite-only def2-m* bases are deliberately excluded. The
+/// drift-guard test `panel_bases_are_all_loadable` asserts each still loads, so a
+/// hartree bump that drops one is caught at test time rather than at run time.
+pub const QM_BASIS_SETS: &[&str] = &[
+    // Pople.
+    "sto-3g",
+    "6-31g",
+    "6-311g",
+    "6-311g(d,p)",
+    "6-311+g(d,p)",
+    "6-311++g(d,p)",
+    // Dunning correlation-consistent.
+    "cc-pvdz",
+    "cc-pvtz",
+    "cc-pvqz",
+    "aug-cc-pvtz",
+    // Karlsruhe def2.
+    "def2-svp",
+    "def2-svpd",
+    "def2-tzvp",
+    "def2-tzvpp",
+    "def2-tzvpd",
+    "def2-tzvppd",
+    "def2-qzvp",
+    "def2-qzvpp",
+    // Minimally augmented Karlsruhe.
+    "ma-def2-svp",
+    "ma-def2-tzvp",
+];
 
 /// A `-d3`/`-d4` dispersion correction added on top of an SCF-level method.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

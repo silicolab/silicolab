@@ -273,6 +273,31 @@ fn resolve_hartree_method(
     })
 }
 
+/// Whether hartree carries a dispersion parametrization for `method` + `disp` —
+/// i.e. whether [`resolve_dispersion`] would resolve it rather than bail. The
+/// panel uses this to offer only the dispersion variants the chosen functional
+/// supports (D3(BJ) covers a small set; D4 additionally covers the double
+/// hybrids). Composites carry their own and post-HF has none, so both return
+/// false. Mirrors [`resolve_dispersion`]'s key derivation exactly.
+pub(crate) fn supports_dispersion(method: &QmMethod, disp: QmDispersion) -> bool {
+    if method.is_post_hf() {
+        return false;
+    }
+    let param_key = match method {
+        QmMethod::Hf | QmMethod::Rhf | QmMethod::Uhf | QmMethod::Rohf => "hf".to_string(),
+        QmMethod::Dft(name) => match FunctionalSpec::parse(name) {
+            Ok(spec) => spec
+                .d4_param_set()
+                .map(str::to_string)
+                .unwrap_or_else(|| spec.name().to_string()),
+            Err(_) => return false,
+        },
+        // Composites define their own dispersion; post-HF is rejected above.
+        QmMethod::Composite(_) | QmMethod::Mp2 | QmMethod::Ccsd | QmMethod::CcsdT => return false,
+    };
+    Dispersion::for_method(disp == QmDispersion::D4, &param_key).is_some()
+}
+
 /// Resolve a `-d3`/`-d4` request for a non-composite method into a hartree
 /// [`Dispersion`], keyed by the method (mirrors hartree-cli lines 613–646).
 fn resolve_dispersion(
