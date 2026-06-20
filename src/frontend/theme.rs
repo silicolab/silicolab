@@ -339,6 +339,21 @@ impl Palette {
         let [r, g, b, _] = self.selection_blue_tint.to_array();
         Color32::from_rgba_unmultiplied(r, g, b, alpha)
     }
+
+    /// A pastel form of the theme accent — same hue, roughly half the
+    /// saturation and a touch brighter. Decorative accent glyphs (e.g. the
+    /// assistant's empty-state sparkle) read as harsh at full accent
+    /// saturation; this keeps them on-theme across every scheme (blue, violet,
+    /// green, …) without a per-scheme color.
+    pub fn accent_soft(&self) -> Color32 {
+        let hsva = egui::ecolor::Hsva::from(self.accent);
+        egui::ecolor::Hsva {
+            s: hsva.s * 0.5,
+            v: (hsva.v + 0.1).min(1.0),
+            ..hsva
+        }
+        .into()
+    }
 }
 
 /// The palette for the active color scheme and the theme egui currently
@@ -346,6 +361,29 @@ impl Palette {
 /// [`set_scheme`]); the light/dark axis from the resolved visuals.
 pub fn palette(ui: &egui::Ui) -> Palette {
     Palette::for_scheme(active_scheme(ui.ctx()), ui.visuals().dark_mode)
+}
+
+/// Stop "selectable" rows (`selectable_label` / `selectable_value` / ComboBox
+/// menu rows, all backed by `egui::Button::selectable`) from jumping 1px sideways
+/// on hover. Call it on the `Ui` that *hosts the rows* — the first line inside a
+/// ComboBox `show_ui` closure, or inside a dedicated `ui.scope`/`ui.horizontal`
+/// that wraps only the selectable rows.
+///
+/// Why: egui 0.34.3 derives a selectable button's content offset from
+/// `Frame::total_margin` (= inner_margin + stroke.width + outer_margin). An
+/// unselected row at rest takes the `frame_when_inactive(false)` branch, which
+/// wraps the inner_margin — already pre-reduced by `inactive.bg_stroke.width` — in
+/// a `Frame::new()` whose stroke width is 0, so it never adds that width back. The
+/// hover/selected branch draws the styled frame and does add it back. The delta is
+/// exactly `inactive.bg_stroke.width`, so a resting row sits 1px left of its
+/// hovered self. We keep the global `inactive.bg_stroke` at 1px because that hairline
+/// is the *only* resting outline our inputs / checkboxes / radios / closed combos
+/// draw (stock egui leaves it `NONE`); zeroing it here, scoped to a row-only `Ui`,
+/// removes the jump without touching those borders. **Do not** call this on a `Ui`
+/// that also hosts a `TextEdit`/`DragValue`/`Checkbox`/plain `Button`, or those
+/// neighbors lose their resting hairline too.
+pub fn stabilize_selectable_rows(ui: &mut egui::Ui) {
+    ui.visuals_mut().widgets.inactive.bg_stroke.width = 0.0;
 }
 
 /// Context-data key holding the active [`ColorScheme`]. Stored in egui's

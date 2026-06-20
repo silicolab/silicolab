@@ -11,7 +11,13 @@ use crate::frontend::{actions::AppAction, agent::AssistantConversationId, state:
 const COMPOSER_BOTTOM_PAD: f32 = 8.0;
 const ASSISTANT_SIDE_PAD: f32 = 8.0;
 const ASSISTANT_COMPOSER_HEIGHT: f32 = 58.0;
-const ASSISTANT_TOOLBAR_BUTTON_WIDTH: f32 = 26.0;
+// Must stay >= an icon button's natural width (glyph advance + 2 * button_padding.x,
+// ~29px at the current 8px padding). This is both the buttons' `min_size` width and
+// the per-button term in `reserved_width`; keeping it >= natural makes min_size win,
+// so the rendered width equals this constant and the combo's `reserved_width` budget
+// is exact. Underestimating (the old 26) let the padded buttons overflow the row,
+// expanding the panel past its clip rect and shaving the right edge of every row.
+const ASSISTANT_TOOLBAR_BUTTON_WIDTH: f32 = 30.0;
 const ASSISTANT_TOOLBAR_BUTTON_HEIGHT: f32 = 24.0;
 const ASSISTANT_TOOLBAR_GAP: f32 = 6.0;
 
@@ -436,6 +442,7 @@ fn assistant_toolbar(
                     .width(combo_width)
                     .truncate()
                     .show_ui(ui, |ui| {
+                        crate::frontend::theme::stabilize_selectable_rows(ui);
                         ui.set_width(combo_width);
                         for (id, title) in &conversations {
                             let response = ui
@@ -536,7 +543,7 @@ fn render_assistant_empty_state(
         ui.label(
             RichText::new(egui_phosphor::regular::SPARKLE)
                 .size(28.0)
-                .color(pal.accent),
+                .color(pal.accent_soft()),
         );
         ui.add_space(6.0);
         ui.label(

@@ -123,6 +123,7 @@ pub(crate) fn render_md_system_task_panel(
             egui::ComboBox::from_id_salt("md_build_engine")
                 .selected_text(prompt.engine.label())
                 .show_ui(ui, |ui| {
+                    crate::frontend::theme::stabilize_selectable_rows(ui);
                     for engine in MdBuildEngine::all() {
                         ui.selectable_value(&mut prompt.engine, *engine, engine.label());
                     }
@@ -209,6 +210,7 @@ pub(crate) fn render_md_system_task_panel(
                                 .unwrap_or_else(|| "(built-in only)".to_string()),
                         )
                         .show_ui(ui, |ui| {
+                            crate::frontend::theme::stabilize_selectable_rows(ui);
                             if ui
                                 .selectable_label(current.is_none(), "(built-in only)")
                                 .clicked()
@@ -394,6 +396,7 @@ pub(crate) fn render_md_system_task_panel(
                 egui::ComboBox::from_id_salt("md_force_field")
                     .selected_text(molecular_dynamics::force_field_title(&prompt.force_field))
                     .show_ui(ui, |ui| {
+                        crate::frontend::theme::stabilize_selectable_rows(ui);
                         for entry in molecular_dynamics::FORCE_FIELDS {
                             ui.selectable_value(
                                 &mut prompt.force_field,
@@ -415,6 +418,7 @@ pub(crate) fn render_md_system_task_panel(
                 egui::ComboBox::from_id_salt("md_water_model")
                     .selected_text(prompt.water.label())
                     .show_ui(ui, |ui| {
+                        crate::frontend::theme::stabilize_selectable_rows(ui);
                         for model in WaterModel::all() {
                             ui.selectable_value(&mut prompt.water, *model, model.label());
                         }
@@ -554,6 +558,7 @@ pub(crate) fn md_ion_combo(
     egui::ComboBox::from_id_salt(id)
         .selected_text(ion_label(value))
         .show_ui(ui, |ui| {
+            crate::frontend::theme::stabilize_selectable_rows(ui);
             for (token, label) in options {
                 ui.selectable_value(value, (*token).to_string(), *label);
             }
@@ -697,6 +702,7 @@ pub(crate) fn compute_target_picker(
         egui::ComboBox::from_id_salt("compute_target")
             .selected_text(selected)
             .show_ui(ui, |ui| {
+                crate::frontend::theme::stabilize_selectable_rows(ui);
                 ui.selectable_value(target, ComputeTarget::Local, "This machine");
                 for (id, label) in hosts {
                     ui.selectable_value(target, ComputeTarget::Remote(id.clone()), label);

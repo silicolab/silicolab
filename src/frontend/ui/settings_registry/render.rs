@@ -593,6 +593,7 @@ fn render_descriptor_body(
                 egui::ComboBox::from_id_salt(descriptor.id)
                     .selected_text(selected)
                     .show_ui(ui, |ui| {
+                        crate::frontend::theme::stabilize_selectable_rows(ui);
                         for (index, option) in options.iter().enumerate() {
                             if ui.selectable_label(index == current, *option).clicked() {
                                 actions.push(on_change(index));

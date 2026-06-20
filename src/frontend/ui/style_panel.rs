@@ -242,6 +242,7 @@ fn scene_section(state: &mut AppState, ui: &mut egui::Ui, pal: &crate::frontend:
     egui::ComboBox::from_label("Light")
         .selected_text(state.ui.viewport.lighting.preset.label())
         .show_ui(ui, |ui| {
+            crate::frontend::theme::stabilize_selectable_rows(ui);
             for preset in LightPreset::all() {
                 ui.selectable_value(
                     &mut state.ui.viewport.lighting.preset,
@@ -268,6 +269,7 @@ fn surface_section(state: &mut AppState, ui: &mut egui::Ui, pal: &crate::fronten
     egui::ComboBox::from_label("Surface style")
         .selected_text(state.ui.viewport.surface.style.label())
         .show_ui(ui, |ui| {
+            crate::frontend::theme::stabilize_selectable_rows(ui);
             for style in SurfaceStyle::all() {
                 ui.selectable_value(&mut state.ui.viewport.surface.style, *style, style.label());
             }

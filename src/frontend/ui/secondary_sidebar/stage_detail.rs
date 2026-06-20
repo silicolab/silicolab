@@ -46,6 +46,7 @@ pub(crate) fn stage_detail_view(
                 egui::ComboBox::from_id_salt(("md_stage_groups", index))
                     .selected_text(coupling_groups_label(groups))
                     .show_ui(ui, |ui| {
+                        crate::frontend::theme::stabilize_selectable_rows(ui);
                         for option in [
                             CouplingGroups::WholeSystem,
                             CouplingGroups::SoluteSolvent,
@@ -72,6 +73,7 @@ pub(crate) fn stage_detail_view(
                 egui::ComboBox::from_id_salt(("md_stage_barostat", index))
                     .selected_text(barostat_label(barostat))
                     .show_ui(ui, |ui| {
+                        crate::frontend::theme::stabilize_selectable_rows(ui);
                         for option in [
                             BarostatKind::StochasticCellRescale,
                             BarostatKind::ParrinelloRahman,
@@ -347,6 +349,7 @@ pub(crate) fn param_row(
             egui::ComboBox::from_id_salt(("md_param_thermostat", index))
                 .selected_text(label)
                 .show_ui(ui, |ui| {
+                    crate::frontend::theme::stabilize_selectable_rows(ui);
                     ui.selectable_value(&mut selected, None, "default");
                     ui.selectable_value(
                         &mut selected,
@@ -396,6 +399,7 @@ pub(crate) fn param_row(
             egui::ComboBox::from_id_salt(("md_param_constraints", index))
                 .selected_text(label)
                 .show_ui(ui, |ui| {
+                    crate::frontend::theme::stabilize_selectable_rows(ui);
                     ui.selectable_value(&mut selected, None, "default");
                     ui.selectable_value(
                         &mut selected,
@@ -587,6 +591,7 @@ pub(crate) fn opt_bool_row(
     egui::ComboBox::from_id_salt(("md_param_bool", pid.label(), index))
         .selected_text(label)
         .show_ui(ui, |ui| {
+            crate::frontend::theme::stabilize_selectable_rows(ui);
             ui.selectable_value(&mut selected, None, "default");
             ui.selectable_value(&mut selected, Some(true), "yes");
             ui.selectable_value(&mut selected, Some(false), "no");
