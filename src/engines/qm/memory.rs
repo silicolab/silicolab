@@ -1,36 +1,34 @@
 //! Pre-run memory guard for in-core SCF. Conventional (in-core) SCF stores the
 //! full nao⁴ ERI tensor, so a routine small molecule at a modest basis can ask
-//! for tens of GB. We estimate that allocation from the basis-function count
-//! (cheaply, without running SCF) and let callers compare it to a RAM budget.
+//! for tens of GB. We ask hartree to estimate that allocation (without running
+//! SCF) and let callers compare it to a RAM budget.
 
-use super::build::molecule_from_structure;
-use super::types::{QmKind, QmMethod, QmRequest, QmScfBackend};
-use hartree::BasisSet;
-use hartree::composite::composite;
+use super::build::build_job;
+use super::types::{QmKind, QmRequest, QmScfBackend};
 
-/// Estimate the bytes a conventional in-core SCF would allocate for the 4-index
-/// ERI tensor: `nao⁴ · 8` (f64). Returns `None` for non-in-core backends, the
-/// periodic path (handled by the caller — periodic requests never reach here),
-/// or when the basis/molecule can't be built (the real run surfaces that error).
+/// Estimate the peak bytes an in-core job would allocate, via hartree's
+/// `estimate_memory` on the resolved hartree `Job`. It models the in-core ERI
+/// tensor plus the post-HF blocks a raw `nao⁴` figure misses (e.g. CCSD `vvvv`),
+/// and matches the estimate hartree's own budget guard uses. Returns `None` for
+/// non-in-core backends or when the job can't be built (the real run surfaces
+/// that error).
 pub fn estimate_incore_memory_bytes(request: &QmRequest) -> Option<u64> {
     if request.options.scf_backend != QmScfBackend::InCore {
         return None;
     }
-    // Mirror build.rs composite-basis resolution: a composite fixes its own basis.
-    let basis = match &request.method {
-        QmMethod::Composite(kw) => composite(kw)?.basis.to_string(),
-        _ => request.basis.clone(),
-    };
-    let molecule =
-        molecule_from_structure(&request.structure, request.charge, request.multiplicity).ok()?;
-    let ao = BasisSet::load(&basis).ok()?.build(&molecule).ok()?;
-    let n = ao.n_ao() as u128;
-    let bytes = n
-        .saturating_mul(n)
-        .saturating_mul(n)
-        .saturating_mul(n)
-        .saturating_mul(8);
-    Some(bytes.min(u64::MAX as u128) as u64)
+    let resolved = build_job(
+        &request.structure,
+        &request.method,
+        &request.basis,
+        request.charge,
+        request.multiplicity,
+        request.kind,
+        &request.options,
+    )
+    .ok()?;
+    hartree::estimate_memory(&resolved.job)
+        .ok()
+        .map(|estimate| estimate.peak_bytes)
 }
 
 /// Outcome of the pre-run memory check. `Exceeds*` distinguishes the case where
@@ -92,7 +90,7 @@ impl MemoryVerdict {
 mod tests {
     use super::*;
     use crate::domain::{Atom, Structure};
-    use crate::engines::qm::{QmKind, QmOptions};
+    use crate::engines::qm::{QmKind, QmMethod, QmOptions};
     use nalgebra::Point3;
 
     fn water_request(backend: QmScfBackend) -> QmRequest {

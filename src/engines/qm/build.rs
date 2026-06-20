@@ -214,6 +214,8 @@ pub(crate) fn build_job(
         ri_mp2: options.ri_mp2,
         cosx,
         x2c: options.x2c,
+        // hartree 0.1.1's TS / n_threads / mem_budget knobs default off — unused here.
+        ..Default::default()
     };
 
     Ok(ResolvedJob {
