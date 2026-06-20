@@ -44,6 +44,7 @@ pub(crate) fn render(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec<
         egui::ComboBox::from_id_salt("remote_hardware_host")
             .selected_text(selected_label)
             .show_ui(ui, |ui| {
+                crate::frontend::theme::stabilize_selectable_rows(ui);
                 for (id, label) in &hosts {
                     ui.selectable_value(
                         &mut state.ui.settings.remote_hardware_host,

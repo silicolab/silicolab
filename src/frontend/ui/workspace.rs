@@ -289,7 +289,11 @@ fn render_trajectory_controls(
         for stage in &stages {
             let active = active_source.as_deref() == Some(stage.path.as_path());
             if ui
-                .selectable_label(active, RichText::new(stage.label.as_str()).monospace())
+                .scope(|ui| {
+                    crate::frontend::theme::stabilize_selectable_rows(ui);
+                    ui.selectable_label(active, RichText::new(stage.label.as_str()).monospace())
+                })
+                .inner
                 .on_hover_text("Play this step")
                 .clicked()
             {

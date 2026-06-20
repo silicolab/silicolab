@@ -265,6 +265,7 @@ pub fn component_source_combo_box(
         egui::ComboBox::from_id_salt(label)
             .selected_text(component_label(*selected, custom_components))
             .show_ui(ui, |ui| {
+                crate::frontend::theme::stabilize_selectable_rows(ui);
                 for option in options {
                     ui.selectable_value(
                         selected,
@@ -434,6 +435,7 @@ fn optional_component_combo_box_with_id(
     egui::ComboBox::from_id_salt(id)
         .selected_text(optional_component_label(*selected, custom_components))
         .show_ui(ui, |ui| {
+            crate::frontend::theme::stabilize_selectable_rows(ui);
             for option in options {
                 ui.selectable_value(
                     selected,
@@ -460,6 +462,7 @@ pub fn atom_index_combo(
     egui::ComboBox::from_id_salt(id)
         .selected_text(atom_choice_label(structure, *selected))
         .show_ui(ui, |ui| {
+            crate::frontend::theme::stabilize_selectable_rows(ui);
             for index in 0..structure.atoms.len() {
                 ui.selectable_value(selected, index, atom_choice_label(structure, index));
             }
@@ -507,6 +510,7 @@ pub fn combo_box<T>(
         egui::ComboBox::from_id_salt(label)
             .selected_text(label_for(*selected))
             .show_ui(ui, |ui| {
+                crate::frontend::theme::stabilize_selectable_rows(ui);
                 for option in options {
                     ui.selectable_value(selected, *option, label_for(*option));
                 }

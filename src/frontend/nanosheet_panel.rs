@@ -61,6 +61,7 @@ impl NanosheetBuilderPanel {
             egui::ComboBox::from_id_salt("nanosheet-preset")
                 .selected_text(current_label)
                 .show_ui(ui, |ui| {
+                    crate::frontend::theme::stabilize_selectable_rows(ui);
                     for (label, kind) in &presets {
                         if ui
                             .selectable_label(current_label == *label, *label)

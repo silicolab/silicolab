@@ -120,20 +120,28 @@ impl BuildingBlockEditor {
                     ui.label((index + 1).to_string());
                     atom_index_combo(ui, ("leaving", index), &mut site.leaving_atom, structure);
                     if ui
-                        .selectable_label(
-                            self.pick_target == Some(BlockPickTarget::Leaving(index)),
-                            "Pick",
-                        )
+                        .scope(|ui| {
+                            crate::frontend::theme::stabilize_selectable_rows(ui);
+                            ui.selectable_label(
+                                self.pick_target == Some(BlockPickTarget::Leaving(index)),
+                                "Pick",
+                            )
+                        })
+                        .inner
                         .clicked()
                     {
                         self.pick_target = Some(BlockPickTarget::Leaving(index));
                     }
                     atom_index_combo(ui, ("binding", index), &mut site.binding_atom, structure);
                     if ui
-                        .selectable_label(
-                            self.pick_target == Some(BlockPickTarget::Binding(index)),
-                            "Pick",
-                        )
+                        .scope(|ui| {
+                            crate::frontend::theme::stabilize_selectable_rows(ui);
+                            ui.selectable_label(
+                                self.pick_target == Some(BlockPickTarget::Binding(index)),
+                                "Pick",
+                            )
+                        })
+                        .inner
                         .clicked()
                     {
                         self.pick_target = Some(BlockPickTarget::Binding(index));

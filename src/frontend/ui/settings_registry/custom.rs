@@ -85,6 +85,7 @@ pub(crate) fn render_assistant_settings(
         egui::ComboBox::from_id_salt("assistant.provider")
             .selected_text(provider.label)
             .show_ui(ui, |ui| {
+                crate::frontend::theme::stabilize_selectable_rows(ui);
                 for spec in registry::PROVIDERS {
                     if ui
                         .selectable_label(spec.id == provider.id, spec.label)
@@ -128,6 +129,7 @@ pub(crate) fn render_assistant_settings(
         egui::ComboBox::from_id_salt("assistant.model")
             .selected_text(selected_model_label)
             .show_ui(ui, |ui| {
+                crate::frontend::theme::stabilize_selectable_rows(ui);
                 for (id, label) in &models {
                     if ui.selectable_label(*id == current_model, label).clicked()
                         && *id != current_model
@@ -216,6 +218,7 @@ pub(crate) fn render_assistant_settings(
             egui::ComboBox::from_id_salt("assistant.effort").selected_text(current_effort.label());
         ui.add_enabled_ui(caps.supports_effort, |ui| {
             combo.show_ui(ui, |ui| {
+                crate::frontend::theme::stabilize_selectable_rows(ui);
                 for effort in crate::io::llm::types::Effort::all() {
                     if ui
                         .selectable_label(*effort == current_effort, effort.label())

@@ -222,6 +222,7 @@ pub(crate) fn render_qm_task_panel(
         if has_real_cell {
             ui.label("Calculation target:");
             ui.horizontal(|ui| {
+                crate::frontend::theme::stabilize_selectable_rows(ui);
                 ui.selectable_value(&mut prompt.periodic, false, "Molecular");
                 ui.selectable_value(&mut prompt.periodic, true, "Periodic (crystal)");
             });
@@ -344,6 +345,7 @@ pub(crate) fn render_docking_task_panel(
                 egui::ComboBox::from_id_salt("dock_receptor")
                     .selected_text(label_for(prompt.receptor_entry))
                     .show_ui(ui, |ui| {
+                        crate::frontend::theme::stabilize_selectable_rows(ui);
                         for (id, name) in &entries {
                             ui.selectable_value(
                                 &mut prompt.receptor_entry,
@@ -358,6 +360,7 @@ pub(crate) fn render_docking_task_panel(
                 egui::ComboBox::from_id_salt("dock_ligand")
                     .selected_text(label_for(prompt.ligand_entry))
                     .show_ui(ui, |ui| {
+                        crate::frontend::theme::stabilize_selectable_rows(ui);
                         for (id, name) in &entries {
                             ui.selectable_value(&mut prompt.ligand_entry, Some(*id), name.as_str());
                         }
@@ -469,6 +472,7 @@ fn render_molecular_qm_form(ui: &mut egui::Ui, prompt: &mut crate::frontend::sta
                     prompt.method.label()
                 })
                 .show_ui(ui, |ui| {
+                    crate::frontend::theme::stabilize_selectable_rows(ui);
                     for method in &presets {
                         let label = method.label();
                         ui.selectable_value(&mut prompt.method, method.clone(), label);
@@ -514,6 +518,7 @@ fn render_molecular_qm_form(ui: &mut egui::Ui, prompt: &mut crate::frontend::sta
                 egui::ComboBox::from_id_salt("qm_basis")
                     .selected_text(prompt.basis.clone())
                     .show_ui(ui, |ui| {
+                        crate::frontend::theme::stabilize_selectable_rows(ui);
                         // The orbital basis sets hartree accepts, kept in sync via
                         // the engine constant (and its drift-guard test).
                         for basis in crate::engines::qm::QM_BASIS_SETS {
@@ -545,6 +550,7 @@ fn render_molecular_qm_form(ui: &mut egui::Ui, prompt: &mut crate::frontend::sta
                         Some(QmDispersion::D4) => "D4",
                     })
                     .show_ui(ui, |ui| {
+                        crate::frontend::theme::stabilize_selectable_rows(ui);
                         ui.selectable_value(&mut prompt.options.dispersion, None, "none");
                         if d3_ok {
                             ui.selectable_value(
@@ -619,6 +625,7 @@ fn render_periodic_qm_form(ui: &mut egui::Ui, form: &mut crate::frontend::state:
             egui::ComboBox::from_id_salt("periodic_functional")
                 .selected_text(form.functional.label())
                 .show_ui(ui, |ui| {
+                    crate::frontend::theme::stabilize_selectable_rows(ui);
                     for functional in PeriodicFunctional::all() {
                         ui.selectable_value(&mut form.functional, functional, functional.label());
                     }
@@ -629,6 +636,7 @@ fn render_periodic_qm_form(ui: &mut egui::Ui, form: &mut crate::frontend::state:
             egui::ComboBox::from_id_salt("periodic_basis")
                 .selected_text(form.basis.clone())
                 .show_ui(ui, |ui| {
+                    crate::frontend::theme::stabilize_selectable_rows(ui);
                     for basis in periodic::PERIODIC_BASES {
                         ui.selectable_value(&mut form.basis, basis.to_string(), *basis);
                     }
@@ -759,6 +767,7 @@ fn render_qm_advanced(ui: &mut egui::Ui, prompt: &mut crate::frontend::state::Qm
                         _ => "none",
                     })
                     .show_ui(ui, |ui| {
+                        crate::frontend::theme::stabilize_selectable_rows(ui);
                         for (value, label) in [
                             (0, "none"),
                             (1, "C-PCM"),
@@ -773,6 +782,7 @@ fn render_qm_advanced(ui: &mut egui::Ui, prompt: &mut crate::frontend::state::Qm
                     egui::ComboBox::from_id_salt("qm_solv_name")
                         .selected_text(name.clone())
                         .show_ui(ui, |ui| {
+                            crate::frontend::theme::stabilize_selectable_rows(ui);
                             for s in QM_SOLVENTS {
                                 ui.selectable_value(&mut name, s.to_string(), *s);
                             }
@@ -793,6 +803,7 @@ fn render_qm_advanced(ui: &mut egui::Ui, prompt: &mut crate::frontend::state::Qm
                 egui::ComboBox::from_id_salt("qm_backend")
                     .selected_text(prompt.options.scf_backend.label())
                     .show_ui(ui, |ui| {
+                        crate::frontend::theme::stabilize_selectable_rows(ui);
                         for backend in [
                             QmScfBackend::InCore,
                             QmScfBackend::Direct,

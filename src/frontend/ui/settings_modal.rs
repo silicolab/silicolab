@@ -29,6 +29,10 @@ const PANE_HEIGHT: f32 = 440.0;
 /// categories never clip.
 const MODAL_HEIGHT: f32 = 525.0;
 const RAIL_WIDTH: f32 = 165.0;
+/// Fixed height for every category row. Pinning it (together with the rail
+/// width via the justified layout) locks each row's geometry so it can't change
+/// between rest / hover / selected — see [`render_rail`].
+const RAIL_ROW_HEIGHT: f32 = 26.0;
 const FRAME_MARGIN: i8 = 12;
 const FRAME_RIGHT_MARGIN: i8 = 6;
 
@@ -150,14 +154,21 @@ fn render_rail(
         Layout::top_down_justified(Align::Min),
         |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
+            // Rail rows are selectable buttons; stop their labels jumping 1px on
+            // hover. This scope hosts only the rows, so zeroing here is safe.
+            // (`min_size` pins the outer box, `Align::Min` left-aligns the label.)
+            crate::frontend::theme::stabilize_selectable_rows(ui);
             let selected = state.ui.settings.selected_category;
+            let row_size = egui::vec2(ui.available_width(), RAIL_ROW_HEIGHT);
             for category in settings_registry::visible_categories(search) {
                 let label = if category == selected {
                     RichText::new(category.label()).color(pal.text_strong)
                 } else {
                     RichText::new(category.label())
                 };
-                if ui.selectable_label(category == selected, label).clicked() {
+                let row = ui
+                    .add(egui::Button::selectable(category == selected, label).min_size(row_size));
+                if row.clicked() {
                     state.ui.settings.selected_category = category;
                 }
             }

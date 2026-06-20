@@ -206,7 +206,11 @@ impl StructureEditor {
                 for index in 0..self.draft.atoms.len() {
                     let selected = self.selected_atom == Some(index);
                     if ui
-                        .selectable_label(selected, (index + 1).to_string())
+                        .scope(|ui| {
+                            crate::frontend::theme::stabilize_selectable_rows(ui);
+                            ui.selectable_label(selected, (index + 1).to_string())
+                        })
+                        .inner
                         .clicked()
                     {
                         self.selected_atom = Some(index);
@@ -268,7 +272,11 @@ impl StructureEditor {
                         let selected = self.selected_bond == Some(index);
 
                         if ui
-                            .selectable_label(selected, (index + 1).to_string())
+                            .scope(|ui| {
+                                crate::frontend::theme::stabilize_selectable_rows(ui);
+                                ui.selectable_label(selected, (index + 1).to_string())
+                            })
+                            .inner
                             .clicked()
                         {
                             self.selected_bond = Some(index);
@@ -299,6 +307,7 @@ impl StructureEditor {
                         egui::ComboBox::from_id_salt(format!("bond_type_{index}"))
                             .selected_text(bond.bond_type.label())
                             .show_ui(ui, |ui| {
+                                crate::frontend::theme::stabilize_selectable_rows(ui);
                                 for bt in BondType::all() {
                                     let label = bt.label();
                                     if ui.selectable_label(bond.bond_type == *bt, label).clicked() {
@@ -351,6 +360,7 @@ impl StructureEditor {
                 egui::ComboBox::from_id_salt("add_bond_type")
                     .selected_text(self.add_bond_type.label())
                     .show_ui(ui, |ui| {
+                        crate::frontend::theme::stabilize_selectable_rows(ui);
                         for bt in BondType::all() {
                             let label = bt.label();
                             if ui

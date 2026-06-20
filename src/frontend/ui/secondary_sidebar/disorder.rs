@@ -87,6 +87,7 @@ pub(crate) fn render_disorder_task_panel(
         egui::ComboBox::from_id_salt("disorder_amount_mode")
             .selected_text(prompt.amount_mode.label())
             .show_ui(ui, |ui| {
+                crate::frontend::theme::stabilize_selectable_rows(ui);
                 for mode in [
                     DisorderAmount::Count,
                     DisorderAmount::DensityGCm3,
@@ -126,6 +127,7 @@ pub(crate) fn render_disorder_task_panel(
             egui::ComboBox::from_id_salt(("disorder_component", index))
                 .selected_text(current)
                 .show_ui(ui, |ui| {
+                    crate::frontend::theme::stabilize_selectable_rows(ui);
                     for (id, label) in &entries {
                         if ui
                             .selectable_label(component.entry_id == *id, label)
@@ -208,6 +210,7 @@ pub(crate) fn render_disorder_task_panel(
     // --- 3. Region ----------------------------------------------------------
     ui.label(RichText::new("Region").strong());
     ui.horizontal(|ui| {
+        crate::frontend::theme::stabilize_selectable_rows(ui);
         for (kind, label) in [
             (DisorderRegionKind::Box, "Box"),
             (DisorderRegionKind::Sphere, "Sphere"),
@@ -417,6 +420,7 @@ pub(crate) fn render_disorder_task_panel(
         egui::ComboBox::from_id_salt("disorder_obstacle")
             .selected_text(current)
             .show_ui(ui, |ui| {
+                crate::frontend::theme::stabilize_selectable_rows(ui);
                 if ui
                     .selectable_label(prompt.obstacle_entry_id.is_none(), "None")
                     .clicked()
