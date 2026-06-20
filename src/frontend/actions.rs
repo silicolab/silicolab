@@ -92,6 +92,9 @@ pub enum AppAction {
     /// Re-run the pending QM job after switching its SCF backend to
     /// integral-direct (the memory-guard escape hatch).
     StartQmWithDirectBackend,
+    /// Estimate the peak memory the pending molecular QM job would use and stash
+    /// the result on the prompt for display (the panel's "Estimate memory" button).
+    EstimateQmMemory,
     CancelQmPrompt,
     StartDocking,
     CancelDockingPrompt,

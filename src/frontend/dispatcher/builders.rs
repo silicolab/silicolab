@@ -557,6 +557,39 @@ pub(crate) fn start_qm_with_direct_backend(state: &mut AppState) {
     start_pending_qm(state);
 }
 
+/// Estimate the pending molecular QM job's peak memory and stash it on the prompt
+/// for the panel to display. Periodic jobs have no in-core ERI tensor to model,
+/// so the panel hides the button for them and this no-ops if one slips through.
+pub(crate) fn estimate_qm_memory(state: &mut AppState) {
+    let Some(prompt) = state.ui.pending_qm.as_ref() else {
+        return;
+    };
+    if prompt.periodic {
+        return;
+    }
+    if state.structure().atoms.is_empty() {
+        state.set_message("open a structure before estimating QM memory".to_string());
+        return;
+    }
+    let request = prompt.to_request(state.structure().clone());
+    let signature = prompt.memory_signature(state.structure());
+    let budget = crate::backend::hardware::qm_incore_budget_bytes();
+    match crate::engines::qm::estimate_request_memory(&request, budget) {
+        Ok(report) => {
+            if let Some(prompt) = state.ui.pending_qm.as_mut() {
+                prompt.memory_report =
+                    Some(crate::frontend::state::QmMemoryEstimate { report, signature });
+            }
+        }
+        Err(error) => {
+            if let Some(prompt) = state.ui.pending_qm.as_mut() {
+                prompt.memory_report = None;
+            }
+            state.set_message(format!("could not estimate QM memory: {error}"));
+        }
+    }
+}
+
 #[cfg(test)]
 mod memory_guard_tests {
     use super::*;

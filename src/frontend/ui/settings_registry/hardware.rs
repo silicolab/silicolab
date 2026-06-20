@@ -1,13 +1,14 @@
 //! `Control::Custom` body for the Compute Hardware settings panel: a read-only
-//! inventory of the detected CPU, GPU, and total RAM, followed by a slider that
-//! caps how many cores QM jobs may use.
+//! inventory of the detected CPU, GPU, and total RAM. The core-count cap for QM
+//! jobs lives next to the QM panel's Run button now, not here, so it is set where
+//! the job is launched.
 
 use eframe::egui::{self, RichText};
 
 use crate::frontend::{actions::AppAction, state::AppState};
 
 /// Render the Compute Hardware panel body.
-pub(crate) fn render(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec<AppAction>) {
+pub(crate) fn render(state: &mut AppState, ui: &mut egui::Ui, _actions: &mut Vec<AppAction>) {
     let hw = crate::backend::hardware::info();
     let pal = crate::frontend::theme::palette(ui);
 
@@ -31,14 +32,4 @@ pub(crate) fn render(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec<
 
     let ram_gib = hw.total_ram_bytes as f64 / 1024.0_f64.powi(3);
     ui.label(RichText::new(format!("Memory: {ram_gib:.1} GiB")).color(pal.text_tertiary));
-
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        ui.label("Cores for QM:");
-        let mut cores = state.config.compute_core_count as f32;
-        let resp = ui.add(egui::Slider::new(&mut cores, 1.0..=hw.logical_cores as f32).integer());
-        if resp.changed() {
-            actions.push(AppAction::SetComputeCoreCount(cores.round() as usize));
-        }
-    });
 }

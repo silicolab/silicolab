@@ -3,6 +3,8 @@
 //! for tens of GB. We ask hartree to estimate that allocation (without running
 //! SCF) and let callers compare it to a RAM budget.
 
+use hartree::EstimateBackend;
+
 use super::build::build_job;
 use super::types::{QmKind, QmRequest, QmScfBackend};
 
@@ -29,6 +31,66 @@ pub fn estimate_incore_memory_bytes(request: &QmRequest) -> Option<u64> {
     hartree::estimate_memory(&resolved.job)
         .ok()
         .map(|estimate| estimate.peak_bytes)
+}
+
+/// An on-demand peak-memory estimate for the current molecular configuration,
+/// shown by the QM panel's "Estimate memory" button. Unlike the pre-run guard,
+/// this reports for whatever SCF backend the form selected (in-core, direct, or
+/// RI), so the user can see what each choice would cost before launching.
+#[derive(Debug, Clone)]
+pub struct QmMemoryReport {
+    /// Estimated peak working set, in bytes (hartree's `MemoryEstimate::peak_bytes`).
+    pub peak_bytes: u64,
+    /// The safe RAM budget this was compared against.
+    pub budget_bytes: u64,
+    /// The integral backend the estimate assumed.
+    pub backend_label: String,
+    /// The method label, for a self-describing display line.
+    pub method_label: String,
+    /// The basis actually used (composite-resolved), for the display line.
+    pub basis_label: String,
+}
+
+impl QmMemoryReport {
+    /// Whether the estimate sits within the safe budget.
+    pub fn fits(&self) -> bool {
+        self.peak_bytes <= self.budget_bytes
+    }
+}
+
+/// Estimate the peak memory the current molecular `request` would use, for its
+/// chosen backend, and pair it with `budget_bytes`. Returns `Err` for the same
+/// up-front reasons a real run would reject the job (unknown element/basis, bad
+/// charge/spin), so the panel can surface that message instead of a number.
+pub fn estimate_request_memory(
+    request: &QmRequest,
+    budget_bytes: u64,
+) -> Result<QmMemoryReport, String> {
+    let resolved = build_job(
+        &request.structure,
+        &request.method,
+        &request.basis,
+        request.charge,
+        request.multiplicity,
+        request.kind,
+        &request.options,
+    )
+    .map_err(|error| error.to_string())?;
+    let estimate = hartree::estimate_memory(&resolved.job)?;
+    let backend_label = match estimate.backend {
+        EstimateBackend::Conventional => "in-core".to_string(),
+        EstimateBackend::Direct => "integral-direct".to_string(),
+        EstimateBackend::Ri => "RI-JK density fitting".to_string(),
+        // `EstimateBackend` is #[non_exhaustive]; fall back to its own name.
+        other => other.to_string(),
+    };
+    Ok(QmMemoryReport {
+        peak_bytes: estimate.peak_bytes,
+        budget_bytes,
+        backend_label,
+        method_label: request.method.label(),
+        basis_label: resolved.basis,
+    })
 }
 
 /// Outcome of the pre-run memory check. `Exceeds*` distinguishes the case where

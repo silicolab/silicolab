@@ -202,6 +202,19 @@ pub(crate) fn render_qm_task_panel(
         .as_ref()
         .is_some_and(|cell| !cell.is_placeholder());
 
+    // Compute-control inputs, read before the prompt is borrowed mutably.
+    let logical_cores = crate::backend::hardware::info().logical_cores.max(1);
+    let mut core_count = state.config.compute_core_count.clamp(1, logical_cores);
+    let structure_is_empty = state.structure().atoms.is_empty();
+    // Fingerprint of the live config, to hide a memory estimate once the form or
+    // structure has drifted from what it was computed for.
+    let current_memory_sig = state
+        .ui
+        .pending_qm
+        .as_ref()
+        .map(|prompt| prompt.memory_signature(state.structure()));
+    let pal = crate::frontend::theme::palette(ui);
+
     if let Some(prompt) = &mut state.ui.pending_qm {
         // Offer molecular vs. periodic only when a cell is present; without one,
         // force the form back to molecular so a stale periodic selection (left
@@ -221,6 +234,49 @@ pub(crate) fn render_qm_task_panel(
             render_periodic_qm_form(ui, &mut prompt.periodic_form);
         } else {
             render_molecular_qm_form(ui, prompt);
+        }
+
+        ui.separator();
+        // Compute controls sit by Run, not in Settings: cores and the memory
+        // estimate are decisions made when launching this specific job.
+        ui.horizontal(|ui| {
+            ui.label(format!("{}  Cores:", egui_phosphor::regular::CPU));
+            if ui
+                .add(egui::DragValue::new(&mut core_count).range(1..=logical_cores))
+                .on_hover_text(format!(
+                    "How many CPU cores this QM job may use ({logical_cores} available)"
+                ))
+                .changed()
+            {
+                actions.push(AppAction::SetComputeCoreCount(core_count));
+            }
+            ui.label(RichText::new(format!("/ {logical_cores}")).color(pal.text_tertiary));
+
+            // The memory estimate models the molecular in-core ERI tensor; a
+            // periodic GPW run has none, so the button is molecular-only.
+            if !prompt.periodic {
+                ui.add_space(8.0);
+                if ui
+                    .add_enabled(
+                        !structure_is_empty,
+                        egui::Button::new(format!(
+                            "{}  Estimate memory",
+                            egui_phosphor::regular::MEMORY
+                        )),
+                    )
+                    .on_hover_text("Predict peak RAM for the current method, basis, and backend")
+                    .clicked()
+                {
+                    actions.push(AppAction::EstimateQmMemory);
+                }
+            }
+        });
+        // Show the estimate only while it still matches the live config; a drifted
+        // one stays in state (cheap to keep) but is hidden until re-estimated.
+        if let Some(estimate) = &prompt.memory_report
+            && current_memory_sig == Some(estimate.signature)
+        {
+            render_qm_memory_report(ui, &estimate.report);
         }
 
         ui.separator();
@@ -393,13 +449,12 @@ pub(crate) fn render_docking_task_panel(
     }
 }
 
-/// The molecular QM form: method, basis, charge/spin, the calculation kind, the
-/// properties toggle, and the advanced hartree options.
+/// The molecular QM form: method, basis, dispersion, charge/spin, the calculation
+/// kind, the properties toggle, and the advanced options.
 fn render_molecular_qm_form(ui: &mut egui::Ui, prompt: &mut crate::frontend::state::QmPrompt) {
-    use crate::engines::qm::{QmKind, QmMethod};
+    use crate::engines::qm::{QmDispersion, QmKind, QmMethod, supports_dispersion};
 
     let presets = QmMethod::presets();
-    let method_is_composite = matches!(prompt.method, QmMethod::Composite(_));
 
     egui::Grid::new("sidebar_qm_options")
         .num_columns(2)
@@ -432,6 +487,9 @@ fn render_molecular_qm_form(ui: &mut egui::Ui, prompt: &mut crate::frontend::sta
                     }
                 });
             ui.end_row();
+            // Read live, after the dropdown, so the rows below react to a method
+            // change in the same frame it is made.
+            let method_is_composite = matches!(prompt.method, QmMethod::Composite(_));
 
             // Free-text functional name, shown when the method is a DFT
             // functional outside the preset list.
@@ -456,24 +514,55 @@ fn render_molecular_qm_form(ui: &mut egui::Ui, prompt: &mut crate::frontend::sta
                 egui::ComboBox::from_id_salt("qm_basis")
                     .selected_text(prompt.basis.clone())
                     .show_ui(ui, |ui| {
-                        // hartree's bundled basis sets, smallest to largest.
-                        for basis in [
-                            "sto-3g",
-                            "6-31g",
-                            "6-311g(d,p)",
-                            "cc-pvdz",
-                            "cc-pvtz",
-                            "cc-pvqz",
-                            "def2-svp",
-                            "def2-tzvp",
-                            "def2-tzvpp",
-                            "def2-qzvp",
-                        ] {
-                            ui.selectable_value(&mut prompt.basis, basis.to_string(), basis);
+                        // The orbital basis sets hartree accepts, kept in sync via
+                        // the engine constant (and its drift-guard test).
+                        for basis in crate::engines::qm::QM_BASIS_SETS {
+                            ui.selectable_value(&mut prompt.basis, basis.to_string(), *basis);
                         }
                     });
             }
             ui.end_row();
+
+            // Dispersion is a primary level-of-theory choice (the default is
+            // B3LYP-D3(BJ)), so it lives here, not under Advanced. Offer only the
+            // variants hartree parametrizes for the chosen functional, and drop a
+            // stale value the new method can't carry — otherwise the run (and the
+            // memory estimate) would bail. Composites (own dispersion) and post-HF
+            // (none) report no support, so the row hides and any value is cleared.
+            let d3_ok = supports_dispersion(&prompt.method, QmDispersion::D3Bj);
+            let d4_ok = supports_dispersion(&prompt.method, QmDispersion::D4);
+            match prompt.options.dispersion {
+                Some(QmDispersion::D3Bj) if !d3_ok => prompt.options.dispersion = None,
+                Some(QmDispersion::D4) if !d4_ok => prompt.options.dispersion = None,
+                _ => {}
+            }
+            if d3_ok || d4_ok {
+                ui.label("Dispersion:");
+                egui::ComboBox::from_id_salt("qm_disp")
+                    .selected_text(match prompt.options.dispersion {
+                        None => "none",
+                        Some(QmDispersion::D3Bj) => "D3(BJ)",
+                        Some(QmDispersion::D4) => "D4",
+                    })
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut prompt.options.dispersion, None, "none");
+                        if d3_ok {
+                            ui.selectable_value(
+                                &mut prompt.options.dispersion,
+                                Some(QmDispersion::D3Bj),
+                                "D3(BJ)",
+                            );
+                        }
+                        if d4_ok {
+                            ui.selectable_value(
+                                &mut prompt.options.dispersion,
+                                Some(QmDispersion::D4),
+                                "D4",
+                            );
+                        }
+                    });
+                ui.end_row();
+            }
 
             ui.label("Charge:");
             ui.add(egui::DragValue::new(&mut prompt.charge).range(-10..=10));
@@ -513,7 +602,7 @@ fn render_molecular_qm_form(ui: &mut egui::Ui, prompt: &mut crate::frontend::sta
         prompt.options.compute_properties = !prompt.options.compute_properties;
     }
 
-    render_qm_advanced(ui, prompt, method_is_composite);
+    render_qm_advanced(ui, prompt);
 }
 
 /// The periodic (crystalline) QM form: the LDA functional, GTH basis, k-point
@@ -581,6 +670,44 @@ fn render_periodic_qm_form(ui: &mut egui::Ui, form: &mut crate::frontend::state:
     );
 }
 
+/// Render the on-demand memory estimate from the "Estimate memory" button: a peak
+/// figure with its backend and level of theory, colored by whether it fits the
+/// machine's safe RAM budget.
+fn render_qm_memory_report(ui: &mut egui::Ui, report: &crate::engines::qm::QmMemoryReport) {
+    let pal = crate::frontend::theme::palette(ui);
+    let gib = |bytes: u64| bytes as f64 / 1024.0_f64.powi(3);
+    let fits = report.fits();
+    let color = if fits {
+        pal.status_green
+    } else {
+        pal.status_amber
+    };
+
+    ui.horizontal_wrapped(|ui| {
+        ui.label(
+            RichText::new(format!("≈ {:.2} GiB peak", gib(report.peak_bytes)))
+                .strong()
+                .color(color),
+        );
+        ui.label(
+            RichText::new(format!(
+                "· {} · {}/{}",
+                report.backend_label, report.method_label, report.basis_label
+            ))
+            .color(pal.text_tertiary),
+        );
+    });
+    let verdict = if fits { "fits the" } else { "exceeds the" };
+    ui.label(
+        RichText::new(format!(
+            "{verdict} {:.1} GiB safe budget on this machine",
+            gib(report.budget_bytes)
+        ))
+        .small()
+        .color(color),
+    );
+}
+
 /// Common implicit-solvation solvent names offered in the panel dropdown. hartree
 /// accepts more (especially for SMD); the console `qm` command takes any name.
 const QM_SOLVENTS: &[&str] = &[
@@ -597,16 +724,11 @@ const QM_SOLVENTS: &[&str] = &[
     "chloroform",
 ];
 
-/// The "Advanced (hartree 0.1)" collapsing section of the QM panel: dispersion,
-/// solvation, SCF backend, relativity, smearing, FOD, and thermochemistry knobs.
-/// Options that do not apply to the chosen method are hidden rather than shown
-/// disabled.
-fn render_qm_advanced(
-    ui: &mut egui::Ui,
-    prompt: &mut crate::frontend::state::QmPrompt,
-    method_is_composite: bool,
-) {
-    use crate::engines::qm::{CpcmDielectric, QmDispersion, QmMethod, QmScfBackend, QmSolvation};
+/// The "Advanced" collapsing section of the QM panel: solvation, SCF backend,
+/// relativity, smearing, FOD, and thermochemistry knobs. Options that do not
+/// apply to the chosen method are hidden rather than shown disabled.
+fn render_qm_advanced(ui: &mut egui::Ui, prompt: &mut crate::frontend::state::QmPrompt) {
+    use crate::engines::qm::{CpcmDielectric, QmMethod, QmScfBackend, QmSolvation};
 
     let method_is_post_hf = matches!(
         prompt.method,
@@ -614,35 +736,9 @@ fn render_qm_advanced(
     );
     let method_is_mp2 = matches!(prompt.method, QmMethod::Mp2);
 
-    egui::CollapsingHeader::new("Advanced (hartree 0.1)")
+    egui::CollapsingHeader::new("Advanced")
         .default_open(false)
         .show(ui, |ui| {
-            // Dispersion — composites carry their own; post-HF has none.
-            if !method_is_composite && !method_is_post_hf {
-                ui.horizontal(|ui| {
-                    ui.label("Dispersion:");
-                    egui::ComboBox::from_id_salt("qm_disp")
-                        .selected_text(match prompt.options.dispersion {
-                            None => "none",
-                            Some(QmDispersion::D3Bj) => "D3(BJ)",
-                            Some(QmDispersion::D4) => "D4",
-                        })
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut prompt.options.dispersion, None, "none");
-                            ui.selectable_value(
-                                &mut prompt.options.dispersion,
-                                Some(QmDispersion::D3Bj),
-                                "D3(BJ)",
-                            );
-                            ui.selectable_value(
-                                &mut prompt.options.dispersion,
-                                Some(QmDispersion::D4),
-                                "D4",
-                            );
-                        });
-                });
-            }
-
             // Solvation: model + solvent name, reassembled each frame.
             let (mut model, mut name) = match &prompt.options.solvation {
                 None => (0u8, "water".to_string()),

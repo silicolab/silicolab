@@ -19,8 +19,9 @@
 //! [`MethodRule`] schema and [`validate_rule`] are intentionally reusable by a
 //! future on-disk overlay; the consistency tests below are the correctness gate
 //! that both the embedded core and any overlay must pass — in particular every
-//! pinned `--method`/`--basis` is checked against the *live* engine capability
-//! tables, so a rule can never name a molecular method this build can't run.
+//! pinned `--method`/`--basis` is checked against the curated
+//! [`VETTED_FUNCTIONALS`]/[`VETTED_BASES`] allowlists, so a rule can never name a
+//! molecular method or basis this build can't run.
 
 use std::sync::OnceLock;
 
@@ -326,16 +327,40 @@ fn validate_command(rule: &MethodRule, command: &str) -> Result<bool, String> {
     Ok(pins)
 }
 
+/// Curated allowlist of DFT functionals a rule may pin via `--method`. Kept
+/// separate from the panel's [`QmMethod::presets`] picker — that is a UI choice,
+/// this is a content gate, and surfacing a niche functional in the dropdown must
+/// not silently widen what canned guidance may recommend. Additions are a
+/// conscious diff, exactly like [`VETTED_BASES`].
+const VETTED_FUNCTIONALS: &[&str] = &[
+    "pbe",
+    "pbe0",
+    "blyp",
+    "b3lyp",
+    "tpss",
+    "r2scan",
+    "m06-2x",
+    "pw6b95",
+    "wb97x-v",
+    "b97m-v",
+    "wb97m-v",
+    "b2plyp",
+    "pwpb95",
+    "revdsd-pbep86",
+    "wb97m(2)",
+    "svwn",
+];
+
 /// A molecular `--method` token is vetted when it is a wavefunction method, a
-/// composite, or a DFT functional in [`QmMethod::presets`] — never the free-text
+/// composite, or a DFT functional on [`VETTED_FUNCTIONALS`] — never the free-text
 /// `Dft(_)` fallback (which `QmMethod::parse` produces for typos, since it never
 /// rejects). A trailing `-d3`/`-d4` dispersion suffix is allowed.
 fn is_vetted_qm_method(token: &str) -> bool {
     let (method, _dispersion) = QmMethod::parse(token);
     match method {
-        QmMethod::Dft(name) => QmMethod::presets().iter().any(
-            |preset| matches!(preset, QmMethod::Dft(known) if known.eq_ignore_ascii_case(&name)),
-        ),
+        QmMethod::Dft(name) => VETTED_FUNCTIONALS
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(&name)),
         // HF/RHF/UHF/ROHF/MP2/CCSD/CCSD(T)/Composite are all vetted.
         _ => true,
     }
@@ -392,18 +417,30 @@ mod tests {
 
     #[test]
     fn method_vetting_rejects_typos_and_accepts_known() {
-        // `QmMethod::parse` never fails, so a typo'd functional must be caught
-        // by the presets allowlist, not by parse.
+        // `QmMethod::parse` never fails (a typo becomes a free-text `Dft`), so the
+        // allowlist — not parse — is what rejects an unknown functional.
         assert!(!is_vetted_qm_method("b3lpy"), "typo should be rejected");
+
+        // The recommend-allowlist is intentionally narrower than the picker: a
+        // functional can be selectable in the UI yet off-limits for canned
+        // guidance. b3lyp5 is exactly that case, and this pins the decoupling so a
+        // future re-coupling to `presets()` would fail here.
         assert!(
-            !is_vetted_qm_method("pw6b95"),
-            "non-preset functional rejected"
+            QmMethod::presets().contains(&QmMethod::Dft("b3lyp5".to_string())),
+            "b3lyp5 is offered in the picker"
         );
-        assert!(is_vetted_qm_method("r2scan-3c"));
+        assert!(
+            !is_vetted_qm_method("b3lyp5"),
+            "but it is not on the KB recommend-allowlist"
+        );
+
+        // Curated functionals, composites, and wavefunction methods are vetted;
+        // a `-d3`/`-d4` suffix is allowed.
+        assert!(is_vetted_qm_method("b3lyp"));
         assert!(is_vetted_qm_method("wb97m-v"));
         assert!(is_vetted_qm_method("wb97m-v-d4"));
+        assert!(is_vetted_qm_method("r2scan-3c"));
         assert!(is_vetted_qm_method("ccsd(t)"));
-        assert!(is_vetted_qm_method("b3lyp"));
     }
 
     #[test]
