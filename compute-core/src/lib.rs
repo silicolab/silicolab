@@ -15,4 +15,5 @@ pub mod engines;
 pub mod hosts;
 pub mod io;
 pub mod payload;
+pub mod wire;
 pub mod workflows;
