@@ -9,7 +9,11 @@ use crate::{
     },
 };
 
-pub(crate) fn render_status_bar(state: &mut AppState, ui: &mut egui::Ui) {
+pub(crate) fn render_status_bar(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+) {
     let pal = crate::frontend::theme::palette(ui);
     ui.horizontal(|ui| {
         ui.label(
@@ -24,7 +28,7 @@ pub(crate) fn render_status_bar(state: &mut AppState, ui: &mut egui::Ui) {
         // stay visible without ever showing in two places at once.
         if state.config.show_utilization_bars && !state.ui.layout.show_primary_sidebar {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                super::render_status_monitor(state, ui);
+                super::render_status_monitor(state, ui, actions);
             });
         }
     });

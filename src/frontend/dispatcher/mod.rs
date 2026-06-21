@@ -288,6 +288,7 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SetupRemoteHostKey(id) => setup_remote_host_key(state, id),
         AppAction::OpenRemoteHostsSettings => open_remote_hosts_settings(state),
         AppAction::FetchRemoteHardware(id) => fetch_remote_hardware(state, id),
+        AppAction::SetMonitorSource(src) => set_monitor_source(state, src),
         AppAction::RunConsoleCommand(command) => run_console_command(state, &command),
         AppAction::SendAgentMessage(text) => {
             crate::frontend::agent::send_agent_message(state, &text, ctx)

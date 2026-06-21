@@ -103,6 +103,59 @@ fn parse_free_total(free: &str) -> Option<u64> {
     })
 }
 
+/// Dynamic per-GPU stats for the live remote monitor. `nounits` → bare numbers;
+/// `[N/A]` → `None`. The trailing `; true` makes a missing `nvidia-smi` an empty
+/// result rather than a non-zero exit (which `run_probe_command` treats as a
+/// transport error).
+pub const GPU_STATS_SCRIPT: &str = "nvidia-smi --query-gpu=index,name,utilization.gpu,memory.used,memory.total,\
+     temperature.gpu,power.draw --format=csv,noheader,nounits 2>/dev/null; true";
+
+/// One remote GPU's live reading (parsed from one `GPU_STATS_SCRIPT` row).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoteGpuStat {
+    pub index: u32,
+    pub name: String,
+    pub util_pct: Option<f32>,
+    pub vram_used_mib: Option<u64>,
+    pub vram_total_mib: Option<u64>,
+    pub temp_c: Option<u32>,
+    pub power_w: Option<f32>,
+}
+
+/// Parse the CSV output of [`GPU_STATS_SCRIPT`] (one GPU per line). Tolerant: a row
+/// without a parseable leading index is skipped (banner/warning lines); each field
+/// is parsed independently with `[N/A]`/empty → `None`.
+pub fn parse_remote_gpu_stats(stdout: &str) -> Vec<RemoteGpuStat> {
+    stdout
+        .lines()
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split(',').map(str::trim).collect();
+            if fields.len() < 7 {
+                return None;
+            }
+            let index = fields[0].parse::<u32>().ok()?;
+            Some(RemoteGpuStat {
+                index,
+                name: fields[1].to_string(),
+                util_pct: parse_gpu_field(fields[2]),
+                vram_used_mib: parse_gpu_field(fields[3]),
+                vram_total_mib: parse_gpu_field(fields[4]),
+                temp_c: parse_gpu_field(fields[5]),
+                power_w: parse_gpu_field(fields[6]),
+            })
+        })
+        .collect()
+}
+
+/// Parse one `nounits` field; `[N/A]`/`N/A`/empty → `None`.
+fn parse_gpu_field<T: std::str::FromStr>(field: &str) -> Option<T> {
+    let f = field.trim();
+    if f.is_empty() || f.eq_ignore_ascii_case("[n/a]") || f.eq_ignore_ascii_case("n/a") {
+        return None;
+    }
+    f.parse::<T>().ok()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,5 +216,49 @@ Mem:     16000000000  1000000000 15000000000
         assert_eq!(info.threads, None);
         assert_eq!(info.ram_bytes, None);
         assert!(info.gpus.is_empty());
+    }
+
+    #[test]
+    fn parses_single_gpu_stats() {
+        let out = "0, NVIDIA GeForce RTX 0000, 23, 436, 8192, 50, 17.66\n";
+        let gpus = parse_remote_gpu_stats(out);
+        assert_eq!(gpus.len(), 1);
+        let g = &gpus[0];
+        assert_eq!(g.index, 0);
+        assert_eq!(g.name, "NVIDIA GeForce RTX 0000");
+        assert_eq!(g.util_pct, Some(23.0));
+        assert_eq!(g.vram_used_mib, Some(436));
+        assert_eq!(g.vram_total_mib, Some(8192));
+        assert_eq!(g.temp_c, Some(50));
+        assert_eq!(g.power_w, Some(17.66));
+    }
+
+    #[test]
+    fn parses_multi_gpu_and_na_fields() {
+        let out = "0, GPU A, 10, 100, 8192, 40, 15.0\n\
+                   1, GPU B, [N/A], [N/A], 16384, [N/A], [N/A]\n";
+        let gpus = parse_remote_gpu_stats(out);
+        assert_eq!(gpus.len(), 2);
+        assert_eq!(gpus[1].index, 1);
+        assert_eq!(gpus[1].name, "GPU B");
+        assert_eq!(gpus[1].util_pct, None);
+        assert_eq!(gpus[1].vram_used_mib, None);
+        assert_eq!(gpus[1].vram_total_mib, Some(16384));
+        assert_eq!(gpus[1].temp_c, None);
+        assert_eq!(gpus[1].power_w, None);
+    }
+
+    #[test]
+    fn empty_or_no_nvidia_smi_yields_no_gpus() {
+        assert!(parse_remote_gpu_stats("").is_empty());
+        assert!(parse_remote_gpu_stats("\n  \n").is_empty());
+    }
+
+    #[test]
+    fn skips_rows_with_unparseable_index() {
+        let out = "some warning line\n0, GPU A, 5, 100, 8192, 30, 10.0\n";
+        let gpus = parse_remote_gpu_stats(out);
+        assert_eq!(gpus.len(), 1);
+        assert_eq!(gpus[0].index, 0);
     }
 }

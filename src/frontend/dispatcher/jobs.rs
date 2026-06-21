@@ -156,6 +156,40 @@ pub(crate) fn poll_remote_hardware(state: &mut AppState, ctx: &egui::Context) {
     }
 }
 
+/// Drain live remote-GPU samples into `remote_gpu_live`, then keep frames coming
+/// while the monitor runs. The sampler thread polls the host every ~15 s; this just
+/// applies whatever has arrived and requests a near-term repaint to render it.
+pub(crate) fn poll_remote_gpu_monitor(state: &mut AppState, ctx: &egui::Context) {
+    if state.jobs.remote_gpu_monitor.is_none() {
+        return;
+    }
+    let mut disconnected = false;
+    while let Some(monitor) = state.jobs.remote_gpu_monitor.as_ref() {
+        match monitor.receiver.try_recv() {
+            Ok(Ok(stats)) => {
+                if let Some(live) = state.ui.settings.remote_gpu_live.as_mut() {
+                    live.apply(stats);
+                }
+            }
+            Ok(Err(error)) => {
+                if let Some(live) = state.ui.settings.remote_gpu_live.as_mut() {
+                    live.last_error = Some(error);
+                }
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => break,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                disconnected = true;
+                break;
+            }
+        }
+    }
+    if disconnected {
+        state.jobs.remote_gpu_monitor = None;
+        return;
+    }
+    ctx.request_repaint_after(std::time::Duration::from_millis(500));
+}
+
 pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     // Resolve the assistant key availability once (it reads env + the key store),
     // so the Assistant tab's per-frame render reads a cached flag instead.
@@ -173,6 +207,7 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     poll_metrics(state, ctx);
     poll_remote_probe(state, ctx);
     poll_remote_hardware(state, ctx);
+    poll_remote_gpu_monitor(state, ctx);
     crate::frontend::agent::poll_agent_turn(state, ctx);
     crate::frontend::agent::poll_agent_heavy(state, ctx);
     crate::frontend::agent::poll_model_fetch(state, ctx);
@@ -808,6 +843,96 @@ mod tests {
     use super::*;
     use crate::frontend::gpu_monitor::GpuSample;
     use crate::frontend::jobs::{Metrics, RunningMetricsSampler};
+
+    #[test]
+    fn poll_remote_gpu_monitor_drains_sample_into_state() {
+        use crate::engines::remote::hardware::RemoteGpuStat;
+        use crate::frontend::jobs::RunningRemoteGpuMonitor;
+        use crate::frontend::state::RemoteGpuLive;
+
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        state.ui.settings.remote_gpu_live = Some(RemoteGpuLive {
+            host_id: "h".into(),
+            gpus: Vec::new(),
+            last_error: None,
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok(vec![RemoteGpuStat {
+            index: 0,
+            name: "GPU A".into(),
+            util_pct: Some(33.0),
+            vram_used_mib: Some(512),
+            vram_total_mib: Some(8192),
+            temp_c: Some(45),
+            power_w: Some(60.0),
+        }]))
+        .unwrap();
+        state.jobs.remote_gpu_monitor = Some(RunningRemoteGpuMonitor {
+            host_id: "h".into(),
+            receiver: rx,
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        });
+
+        let ctx = egui::Context::default();
+        poll_remote_gpu_monitor(&mut state, &ctx);
+
+        let live = state.ui.settings.remote_gpu_live.as_ref().unwrap();
+        assert_eq!(live.gpus.len(), 1);
+        assert_eq!(live.gpus[0].latest.util_pct, Some(33.0));
+        assert_eq!(live.gpus[0].util_history.back().copied(), Some(Some(33.0)));
+        assert!(live.last_error.is_none());
+    }
+
+    #[test]
+    fn poll_remote_gpu_monitor_drains_all_queued_and_clears_handle_on_disconnect() {
+        use crate::engines::remote::hardware::RemoteGpuStat;
+        use crate::frontend::jobs::RunningRemoteGpuMonitor;
+        use crate::frontend::state::RemoteGpuLive;
+
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        state.ui.settings.remote_gpu_live = Some(RemoteGpuLive {
+            host_id: "h".into(),
+            gpus: Vec::new(),
+            last_error: None,
+        });
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok(vec![RemoteGpuStat {
+            index: 0,
+            name: "GPU A".into(),
+            util_pct: Some(10.0),
+            vram_used_mib: None,
+            vram_total_mib: None,
+            temp_c: None,
+            power_w: None,
+        }]))
+        .unwrap();
+        tx.send(Ok(vec![RemoteGpuStat {
+            index: 0,
+            name: "GPU A".into(),
+            util_pct: Some(80.0),
+            vram_used_mib: None,
+            vram_total_mib: None,
+            temp_c: None,
+            power_w: None,
+        }]))
+        .unwrap();
+        drop(tx);
+        state.jobs.remote_gpu_monitor = Some(RunningRemoteGpuMonitor {
+            host_id: "h".into(),
+            receiver: rx,
+            cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        });
+
+        let ctx = egui::Context::default();
+        poll_remote_gpu_monitor(&mut state, &ctx);
+
+        {
+            let live = state.ui.settings.remote_gpu_live.as_ref().unwrap();
+            assert_eq!(live.gpus[0].latest.util_pct, Some(80.0));
+            assert_eq!(live.gpus[0].util_history.len(), 2);
+        }
+        assert!(state.jobs.remote_gpu_monitor.is_none());
+    }
 
     #[test]
     fn poll_metrics_drains_latest_into_state() {

@@ -26,6 +26,18 @@ pub struct EntryListState {
     pub rename_group_focus_requested: bool,
 }
 
+/// Which machine the sidebar system monitor shows. Transient session chrome (part
+/// of [`LayoutState`], which is never persisted), so it defaults to `Local` every
+/// launch and never auto-starts a remote SSH sampler on startup.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum MonitorSource {
+    /// Local machine: the live CPU / memory / GPU sampler.
+    #[default]
+    Local,
+    /// A configured remote host (by id): its live GPU stats over SSH.
+    Remote(String),
+}
+
 #[derive(Debug, Clone)]
 pub struct LayoutState {
     pub active_primary_view: PrimaryView,
@@ -51,6 +63,10 @@ pub struct LayoutState {
     /// stack), captured each frame and reserved on the next so every GPU row fits
     /// — the row count varies by machine. Seeded with a one-GPU estimate.
     pub monitor_footer_height: f32,
+    /// Which machine the monitor footer/popover shows: the local sampler or a
+    /// remote host's live GPU stats. Selected from the footer's source dropdown;
+    /// switching it reconciles the SSH sampler (see `SetMonitorSource`).
+    pub monitor_source: MonitorSource,
     pub primary_sidebar_width: f32,
     /// The dockable bottom panel + right sidebar: which views/panels live where,
     /// their order, the active tab per area, visibility, and the two area sizes.
@@ -104,6 +120,7 @@ impl Default for LayoutState {
             monitor_popover_open: false,
             monitor_anchor: None,
             monitor_footer_height: 70.0,
+            monitor_source: MonitorSource::Local,
             primary_sidebar_width: SIDEBAR_DEFAULT_WIDTH_PRIMARY,
             dock: DockModel::default(),
         }

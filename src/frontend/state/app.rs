@@ -55,6 +55,9 @@ pub struct SettingsState {
     pub remote_hardware: BTreeMap<String, crate::engines::remote::hardware::RemoteHardwareInfo>,
     /// Remote host currently selected in the remote-hardware panel.
     pub remote_hardware_host: Option<String>,
+    /// Live remote-GPU monitoring data for the host currently being watched
+    /// (Hardware ▸ Remote host ▸ Live GPU). `None` when no monitor is running.
+    pub remote_gpu_live: Option<RemoteGpuLive>,
 }
 
 /// State backing the Style primary view — the per-structure view and
@@ -104,6 +107,55 @@ fn push_capped(buf: &mut std::collections::VecDeque<Option<f32>>, value: Option<
         buf.pop_front();
     }
     buf.push_back(value);
+}
+
+/// Live remote-GPU monitoring data for the one host currently being watched.
+#[derive(Debug, Default, Clone)]
+pub struct RemoteGpuLive {
+    pub host_id: String,
+    pub gpus: Vec<RemoteGpuView>,
+    /// Last transport error, kept while the sampler retries; cleared on a good sample.
+    pub last_error: Option<String>,
+}
+
+/// One remote GPU's latest reading plus its utilization sparkline history.
+#[derive(Debug, Clone)]
+pub struct RemoteGpuView {
+    pub index: u32,
+    pub name: String,
+    pub latest: crate::engines::remote::hardware::RemoteGpuStat,
+    pub util_history: std::collections::VecDeque<Option<f32>>,
+}
+
+impl RemoteGpuLive {
+    /// Apply one fresh batch of per-GPU stats: update each GPU's latest reading and
+    /// push its utilization onto the (capped) sparkline history, creating a view for
+    /// a newly-seen GPU and dropping views for GPUs no longer reported.
+    pub fn apply(&mut self, stats: Vec<crate::engines::remote::hardware::RemoteGpuStat>) {
+        self.gpus
+            .retain(|v| stats.iter().any(|s| s.index == v.index));
+        for stat in stats {
+            match self.gpus.iter_mut().find(|v| v.index == stat.index) {
+                Some(view) => {
+                    push_capped(&mut view.util_history, stat.util_pct);
+                    view.name = stat.name.clone();
+                    view.latest = stat;
+                }
+                None => {
+                    let mut util_history = std::collections::VecDeque::new();
+                    push_capped(&mut util_history, stat.util_pct);
+                    self.gpus.push(RemoteGpuView {
+                        index: stat.index,
+                        name: stat.name.clone(),
+                        latest: stat,
+                        util_history,
+                    });
+                }
+            }
+        }
+        self.gpus.sort_by_key(|v| v.index);
+        self.last_error = None;
+    }
 }
 
 pub struct UiState {
@@ -766,5 +818,39 @@ impl AppState {
         // no tab to reach it.
         self.tasks.panels.clear();
         self.tasks.active_panel = None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_gpu_live_apply_tracks_latest_and_history() {
+        use crate::engines::remote::hardware::RemoteGpuStat;
+        let mut live = RemoteGpuLive::default();
+        live.apply(vec![RemoteGpuStat {
+            index: 0,
+            name: "GPU A".into(),
+            util_pct: Some(10.0),
+            vram_used_mib: Some(100),
+            vram_total_mib: Some(8192),
+            temp_c: Some(40),
+            power_w: Some(15.0),
+        }]);
+        live.apply(vec![RemoteGpuStat {
+            index: 0,
+            name: "GPU A".into(),
+            util_pct: Some(80.0),
+            vram_used_mib: Some(200),
+            vram_total_mib: Some(8192),
+            temp_c: Some(55),
+            power_w: Some(120.0),
+        }]);
+        assert_eq!(live.gpus.len(), 1);
+        assert_eq!(live.gpus[0].latest.util_pct, Some(80.0));
+        assert_eq!(live.gpus[0].util_history.len(), 2);
+        assert_eq!(live.gpus[0].util_history.back().copied(), Some(Some(80.0)));
+        assert!(live.last_error.is_none());
     }
 }
