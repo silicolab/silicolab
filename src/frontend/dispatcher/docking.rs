@@ -68,13 +68,21 @@ pub(crate) fn start_pending_docking(state: &mut AppState) {
         },
     };
 
-    let job = spawn_docking_job(request);
     state.ui.pending_docking = None;
-    state.jobs.set_docking(job);
-    if let Some(task_run_id) = state.active_task_run {
-        state.tasks.mark_status(task_run_id, TaskStatus::Running);
+    match resolve_remote_compute_host(state) {
+        // A configured remote target: deploy + submit detached, tracked via the
+        // job registry and the opt-in refresh. Docking is single-threaded, so no
+        // core count rides along.
+        Some(host) => start_remote_engine(state, host, crate::wire::Engine::Docking(request), None),
+        None => {
+            let job = spawn_docking_job(request);
+            state.jobs.set_docking(job);
+            if let Some(task_run_id) = state.active_task_run {
+                state.tasks.mark_status(task_run_id, TaskStatus::Running);
+            }
+            state.set_message("docking running; press Esc to stop".to_string());
+        }
     }
-    state.set_message("docking running; press Esc to stop".to_string());
 }
 
 fn entry_structure(state: &mut AppState, entry_id: u64) -> Option<Structure> {
@@ -157,6 +165,72 @@ pub(crate) fn poll_docking_job(state: &mut AppState, ctx: &egui::Context) {
     }
 }
 
+/// Apply a retrieved remote docking outcome: log the summary, save the poses
+/// beside the run, add a pose entry per pose (only when the job belongs to the
+/// open project), and mark the task complete. The detached analogue of the local
+/// `poll_docking_job` finish path; mirrors `apply_remote_qm_outcome`.
+pub(crate) fn apply_remote_docking_outcome(
+    state: &mut AppState,
+    row: &crate::backend::storage::jobs::RemoteJob,
+    outcome: DockingOutcome,
+) {
+    for line in outcome.summary.lines() {
+        state.output_log.push(line.to_string());
+    }
+    let run_dir = PathBuf::from(&row.local_run_dir);
+    let _ = std::fs::create_dir_all(&run_dir);
+    let poses_path = if outcome.poses.is_empty() {
+        None
+    } else {
+        let path = run_dir.join(DOCK_POSES_FILE);
+        std::fs::write(&path, dock_poses_pdbqt(&outcome))
+            .ok()
+            .map(|()| path)
+    };
+
+    let current_root = state
+        .workspace
+        .project()
+        .map(|project| project.root.to_string_lossy().to_string());
+    let same_project = row.project_root.is_some() && row.project_root == current_root;
+    let task_id = state
+        .tasks
+        .task_run_by_uuid(&row.run_uuid)
+        .map(|task| task.id);
+
+    if same_project {
+        add_dock_pose_entries(state, &outcome, task_id, poses_path);
+    }
+    if let Some(task_id) = task_id {
+        mark_task_status(state, task_id, TaskStatus::Completed);
+    }
+    let best = outcome
+        .poses
+        .first()
+        .map(|pose| pose.affinity)
+        .unwrap_or(0.0);
+    state.set_message(format!(
+        "Remote docking complete: {} pose(s), best {:+.2} kcal/mol",
+        outcome.poses.len(),
+        best
+    ));
+}
+
+/// Format every pose as one multi-`MODEL` PDBQT document — the saved run artifact,
+/// shared by the local and remote result paths.
+fn dock_poses_pdbqt(outcome: &DockingOutcome) -> String {
+    let mut text = String::new();
+    for (index, pose) in outcome.poses.iter().enumerate() {
+        let _ = writeln!(text, "MODEL {}", index + 1);
+        text.push_str(&pose.pdbqt);
+        if !pose.pdbqt.ends_with('\n') {
+            text.push('\n');
+        }
+        text.push_str("ENDMDL\n");
+    }
+    text
+}
+
 /// Persist all poses as one multi-`MODEL` PDBQT in the task's run directory, the
 /// way the QM run saves its report. Failures are logged but never abort result
 /// handling. Returns the written path.
@@ -170,17 +244,8 @@ fn save_dock_poses(state: &mut AppState, outcome: &DockingOutcome) -> Option<Pat
             return None;
         }
     };
-    let mut text = String::new();
-    for (index, pose) in outcome.poses.iter().enumerate() {
-        let _ = writeln!(text, "MODEL {}", index + 1);
-        text.push_str(&pose.pdbqt);
-        if !pose.pdbqt.ends_with('\n') {
-            text.push('\n');
-        }
-        text.push_str("ENDMDL\n");
-    }
     let path = run_dir.join(DOCK_POSES_FILE);
-    match std::fs::write(&path, text) {
+    match std::fs::write(&path, dock_poses_pdbqt(outcome)) {
         Ok(()) => {
             state
                 .output_log
