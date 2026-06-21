@@ -38,9 +38,10 @@ struct RemoteRow {
     name: String,
     /// Live utilization percentage (0–100), `None` when the card didn't report it.
     util: Option<f32>,
-    /// Right-hand detail line: "pct%  ·  VRAM u/t MiB  ·  T °C  ·  P W" (parts the
-    /// host didn't report are dropped).
-    detail: String,
+    /// Optional second detail line: "VRAM u/t MiB  ·  T °C  ·  P W" (parts the host
+    /// didn't report are dropped; `None` when none are present). The utilization `%`
+    /// is carried by [`RemoteRow::util`] and shown on the headline line instead.
+    detail: Option<String>,
     /// Utilization sparkline history (oldest at front).
     history: VecDeque<Option<f32>>,
 }
@@ -83,10 +84,12 @@ fn remote_rows(live: Option<&RemoteGpuLive>, host_id: &str) -> (Vec<RemoteRow>, 
     (rows, status)
 }
 
-/// "pct%  ·  VRAM u/t MiB  ·  T °C  ·  P W", dropping any field the host didn't
-/// report. The percentage is always present ("N/A" when unknown).
-fn remote_gpu_detail(stat: &crate::engines::remote::hardware::RemoteGpuStat) -> String {
-    let mut bits = vec![pct_text(stat.util_pct)];
+/// Second-line detail for a remote GPU: "VRAM u/t MiB  ·  T °C  ·  P W", dropping
+/// any field the host didn't report, or `None` when none are present. The
+/// utilization `%` is shown separately on the chart's headline line, so it is
+/// intentionally not repeated here.
+fn remote_gpu_detail(stat: &crate::engines::remote::hardware::RemoteGpuStat) -> Option<String> {
+    let mut bits = Vec::new();
     if let (Some(used), Some(total)) = (stat.vram_used_mib, stat.vram_total_mib) {
         bits.push(format!("VRAM {used} / {total} MiB"));
     }
@@ -96,7 +99,7 @@ fn remote_gpu_detail(stat: &crate::engines::remote::hardware::RemoteGpuStat) -> 
     if let Some(p) = stat.power_w {
         bits.push(format!("{p:.0} W"));
     }
-    bits.join("  ·  ")
+    (!bits.is_empty()).then(|| bits.join("  ·  "))
 }
 
 /// One GPU's display data — one row/chart per card, never averaged.
@@ -404,6 +407,7 @@ pub(crate) fn render_monitor_popover(state: &mut AppState, ctx: &egui::Context) 
                                 "CPU",
                                 None,
                                 &format!("{cpu:.0}%"),
+                                None,
                                 cpu_hist,
                                 Some(cpu),
                             );
@@ -413,6 +417,7 @@ pub(crate) fn render_monitor_popover(state: &mut AppState, ctx: &egui::Context) 
                                 "Memory",
                                 None,
                                 &memory_detail(mem, total_ram),
+                                None,
                                 mem_hist,
                                 mem,
                             );
@@ -423,7 +428,8 @@ pub(crate) fn render_monitor_popover(state: &mut AppState, ctx: &egui::Context) 
                                     ui,
                                     &row.short,
                                     Some(&row.name),
-                                    &gpu_detail(row),
+                                    &pct_text(row.util),
+                                    gpu_detail(row).as_deref(),
                                     hist,
                                     row.util,
                                 );
@@ -438,7 +444,8 @@ pub(crate) fn render_monitor_popover(state: &mut AppState, ctx: &egui::Context) 
                                     ui,
                                     &row.short,
                                     Some(&row.name),
-                                    &row.detail,
+                                    &pct_text(row.util),
+                                    row.detail.as_deref(),
                                     &row.history,
                                     row.util,
                                 );
@@ -521,22 +528,17 @@ fn memory_detail(mem_pct: Option<f32>, total_ram: f64) -> String {
     }
 }
 
-/// "pct%   VRAM used/total GiB" (VRAM only when the backend reports it), or "N/A".
-fn gpu_detail(row: &GpuRow) -> String {
-    match row.util {
-        Some(pct) => {
-            let mut s = format!("{pct:.0}%");
-            if let Some((used, total)) = row.vram {
-                s.push_str(&format!(
-                    "   VRAM {:.1} / {:.1} GiB",
-                    used as f64 / GIB,
-                    total as f64 / GIB
-                ));
-            }
-            s
-        }
-        None => "N/A".to_string(),
-    }
+/// Second-line detail for a local GPU: "VRAM used / total GiB", or `None` when the
+/// backend didn't report VRAM. The utilization `%` is shown separately on the
+/// chart's headline line, so it is intentionally not repeated here.
+fn gpu_detail(row: &GpuRow) -> Option<String> {
+    row.vram.map(|(used, total)| {
+        format!(
+            "VRAM {:.1} / {:.1} GiB",
+            used as f64 / GIB,
+            total as f64 / GIB
+        )
+    })
 }
 
 #[cfg(test)]
@@ -648,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_rows_detail_includes_vram_temp_power() {
+    fn remote_rows_detail_has_vram_temp_power_but_not_pct() {
         let mut s = stat(0, "A", Some(50.0));
         s.vram_used_mib = Some(512);
         s.vram_total_mib = Some(8192);
@@ -656,11 +658,48 @@ mod tests {
         s.power_w = Some(60.0);
         let live = remote_live("h", vec![view(s)]);
         let (rows, _) = remote_rows(Some(&live), "h");
-        let detail = &rows[0].detail;
-        assert!(detail.contains("50%"), "detail = {detail:?}");
+        // The utilization % is carried by `util` (shown on the headline line), so the
+        // detail line must NOT repeat it — that double-render plus the long string is
+        // what overflowed and overlapped the label in a narrow popover.
+        assert_eq!(rows[0].util, Some(50.0));
+        let detail = rows[0].detail.as_deref().expect("detail present");
+        assert!(
+            !detail.contains('%'),
+            "detail must omit the pct: {detail:?}"
+        );
         assert!(detail.contains("512 / 8192 MiB"), "detail = {detail:?}");
         assert!(detail.contains("45 °C"), "detail = {detail:?}");
         assert!(detail.contains("60 W"), "detail = {detail:?}");
+    }
+
+    #[test]
+    fn remote_rows_detail_is_none_when_only_util_reported() {
+        // util present but no VRAM/temp/power → no second line at all (not an empty
+        // string), so the chart skips the detail row.
+        let live = remote_live("h", vec![view(stat(0, "A", Some(50.0)))]);
+        let (rows, _) = remote_rows(Some(&live), "h");
+        assert_eq!(rows[0].util, Some(50.0));
+        assert_eq!(rows[0].detail, None);
+    }
+
+    #[test]
+    fn gpu_detail_is_vram_only_or_none() {
+        let mut row = GpuRow {
+            short: "GPU".into(),
+            name: "RTX".into(),
+            util: Some(30.0),
+            bus_id: String::new(),
+            vram: Some((6 * 1024 * 1024 * 1024, 8 * 1024 * 1024 * 1024)),
+        };
+        let detail = gpu_detail(&row).expect("vram present");
+        assert!(detail.starts_with("VRAM "), "detail = {detail:?}");
+        assert!(
+            !detail.contains('%'),
+            "detail must omit the pct: {detail:?}"
+        );
+        // No VRAM reported → no detail line.
+        row.vram = None;
+        assert_eq!(gpu_detail(&row), None);
     }
 
     #[test]

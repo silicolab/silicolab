@@ -81,14 +81,20 @@ pub(crate) fn utilization_row_inline(
     }
 }
 
-/// A two-line utilization chart (the detail-popover style): `label` on the left
-/// and `value` on the right, with a time-series sparkline beneath. `history` is
+/// A utilization chart (the detail-popover style): `label` on the left with a
+/// short `headline` (e.g. the utilization `%`) on the right, an optional `detail`
+/// line that wraps full-width beneath, then a time-series sparkline. `history` is
 /// oldest-first (newest on the right); `current` colors the line by threshold.
+///
+/// `headline` stays short so it always fits to the right of the label; the verbose
+/// `detail` (VRAM/temperature/power) goes on its own wrapping line so a long string
+/// can't overflow left and overlap the label in a narrow popover.
 pub(crate) fn utilization_chart(
     ui: &mut egui::Ui,
     label: &str,
     tooltip: Option<&str>,
-    value: &str,
+    headline: &str,
+    detail: Option<&str>,
     history: &VecDeque<Option<f32>>,
     current: Option<f32>,
 ) {
@@ -99,9 +105,16 @@ pub(crate) fn utilization_chart(
             label.on_hover_text(tooltip);
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.label(RichText::new(value).color(pal.text_muted));
+            ui.label(RichText::new(headline).color(pal.text_muted));
         });
     });
+    if let Some(detail) = detail {
+        ui.add_space(2.0);
+        ui.add(
+            egui::Label::new(RichText::new(detail).small().color(pal.text_muted))
+                .wrap_mode(egui::TextWrapMode::Wrap),
+        );
+    }
     ui.add_space(6.0);
     let color = current.map_or(pal.text_tertiary, |pct| gauge_color(&pal, pct));
     sparkline(ui, history, 36.0, color);
