@@ -7,6 +7,7 @@ use crate::{
 
 mod entries;
 mod history;
+pub mod jobs;
 mod project;
 mod render_overrides;
 mod schema;

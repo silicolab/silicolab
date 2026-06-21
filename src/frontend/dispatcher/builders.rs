@@ -263,15 +263,23 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
         }
     }
     let job = prompt.to_job(state.structure().clone());
-    let job = spawn_qm_job(job, Some(qm_thread_count(state)));
+    let remote_host = resolve_qm_remote_host(state);
     state.set_source_path(None);
     state.ui.editor = None;
     state.ui.pending_qm = None;
-    state.jobs.set_qm(job);
-    if let Some(task_run_id) = state.active_task_run {
-        state.tasks.mark_status(task_run_id, TaskStatus::Running);
+    match remote_host {
+        // A configured remote target: deploy + submit detached, tracked via the
+        // job registry and the opt-in refresh — not the in-process worker.
+        Some(host) => start_remote_qm(state, job, host),
+        None => {
+            let running = spawn_qm_job(job, Some(qm_thread_count(state)));
+            state.jobs.set_qm(running);
+            if let Some(task_run_id) = state.active_task_run {
+                state.tasks.mark_status(task_run_id, TaskStatus::Running);
+            }
+            state.set_message("QM calculation running; press Esc to stop".to_string());
+        }
     }
-    state.set_message("QM calculation running; press Esc to stop".to_string());
 }
 
 fn qm_thread_count(state: &AppState) -> usize {
@@ -279,6 +287,68 @@ fn qm_thread_count(state: &AppState) -> usize {
         .config
         .compute_core_count
         .clamp(1, crate::backend::hardware::info().logical_cores)
+}
+
+/// The remote host a QM job should run on, or `None` for local. Resolves the
+/// app-wide compute target leniently: a dangling host id falls back to local,
+/// mirroring the MD path's `resolve_md_compute`.
+fn resolve_qm_remote_host(state: &AppState) -> Option<crate::backend::config::RemoteHost> {
+    use crate::backend::config::ComputeTarget;
+    match &state.config.default_compute_target {
+        ComputeTarget::Local => None,
+        ComputeTarget::Remote(host_id) => state.config.remote_hosts.get(host_id).cloned(),
+    }
+}
+
+/// Launch a detached remote QM job: ensure the worker is deployed, stage the
+/// bundle, and submit — all off the UI thread. The durable handle is recorded in
+/// the registry when the submission returns; status is tracked via the opt-in
+/// refresh, so the run survives an app restart.
+fn start_remote_qm(
+    state: &mut AppState,
+    job: crate::engines::qm::QmJob,
+    host: crate::backend::config::RemoteHost,
+) {
+    let Some(task_run_id) = state.active_task_run else {
+        state.set_message("no active task to run remotely".to_string());
+        return;
+    };
+    let Some(task) = state.tasks.task_run(task_run_id).cloned() else {
+        return;
+    };
+    if let Err(error) = crate::engines::remote::ensure_ssh_available() {
+        state.set_message(format!("remote QM unavailable: {error}"));
+        complete_active_qm_task(state, TaskStatus::Failed);
+        return;
+    }
+    let local_run_dir = match ensure_active_task_run_dir(state, task.kind, None) {
+        Ok(dir) => dir,
+        Err(error) => {
+            state.set_message(format!("could not create run directory: {error}"));
+            complete_active_qm_task(state, TaskStatus::Failed);
+            return;
+        }
+    };
+    let project_root = state
+        .workspace
+        .project()
+        .map(|project| project.root.to_string_lossy().to_string());
+    let handle = crate::frontend::remote_jobs::spawn_remote_qm_submit(
+        host.clone(),
+        job,
+        Some(state.config.compute_core_count),
+        task.run_uuid.clone(),
+        Some(task_run_id),
+        task.controller_id.to_string(),
+        project_root,
+        local_run_dir,
+    );
+    state.jobs.remote_qm_submit = Some(handle);
+    mark_task_status(state, task_run_id, TaskStatus::Running);
+    state.set_message(format!(
+        "Deploying & submitting QM to {} (use Refresh Remote to track it)…",
+        host.label
+    ));
 }
 
 pub(crate) fn cancel_pending_qm_request(state: &mut AppState) {

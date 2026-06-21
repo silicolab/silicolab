@@ -1,0 +1,14 @@
+[package]
+name = "silicolab-compute"
+version.workspace = true
+authors = ["Jiekang Tian"]
+edition = "2024"
+description = "Headless compute worker for SilicoLab: runs an engine job from a staged request and writes its outcome."
+license = "GPL-3.0-or-later"
+
+# A deliberately thin binary that depends ONLY on `compute-core`, with its
+# networking stack switched off, so the static `x86_64-unknown-linux-musl` build
+# pulls no GUI crates and no C toolchain â€” the compute subtree is pure Rust.
+[dependencies]
+anyhow = "1.0"
+compute-core = { path = "../compute-core", default-features = false }

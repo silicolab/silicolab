@@ -256,6 +256,10 @@ pub struct UiState {
     pub mem_pct: Option<f32>,
     /// Rolling utilization history feeding the monitor popover sparklines.
     pub monitor_history: MonitorHistory,
+    /// Snapshot of the global remote-job registry for display in the task
+    /// monitor. Refreshed from `jobs.db` on submit, on an opt-in refresh, and
+    /// after a scratch cleanup — never polled automatically.
+    pub remote_jobs: Vec<crate::backend::storage::jobs::RemoteJob>,
 }
 
 /// Lifecycle of a user-initiated in-place update: idle until the user clicks
@@ -331,6 +335,7 @@ impl Default for UiState {
             gpus: Vec::new(),
             mem_pct: None,
             monitor_history: MonitorHistory::default(),
+            remote_jobs: Vec::new(),
         }
     }
 }

@@ -1,9 +1,15 @@
 [workspace]
-members = ["compute-core"]
+members = ["compute-core", "silicolab-compute"]
+
+# Single source of truth for the version shared across the GUI, the headless
+# worker, and `compute-core`. The deploy version pin and release tag require all
+# three to report the same version, so they inherit it from here.
+[workspace.package]
+version = "0.1.0"
 
 [package]
 name = "silicolab"
-version = "0.1.0"
+version.workspace = true
 authors = ["Jiekang Tian", "Dongcheng Lin"]
 edition = "2024"
 description = "Computational environment for chemistry, biology & materials research."

@@ -1,6 +1,6 @@
 [package]
 name = "compute-core"
-version = "0.1.1"
+version.workspace = true
 authors = ["Jiekang Tian"]
 edition = "2024"
 description = "Compute engines, workflows, and the engine-job wire contract for SilicoLab."
@@ -13,14 +13,34 @@ hartree = "0.1.1"
 nalgebra = "0.35.0"
 rayon = "1"
 sdfrust = "0.6"
-self_update = { version = "0.42", default-features = false, features = [
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1", features = ["v4"] }
+
+# Networking stack, behind the default-on `network` feature. It pulls a TLS
+# implementation (and through it a C toolchain), so the headless worker â€” which
+# never reaches the network â€” builds `compute-core` with `default-features =
+# false` to stay a self-contained, pure-Rust static binary.
+self_update = { version = "0.42", optional = true, default-features = false, features = [
     "rustls",
     "archive-tar",
     "archive-zip",
     "compression-flate2",
     "compression-zip-deflate",
 ] }
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-ureq = "3.3.0"
+ureq = { version = "3.3.0", optional = true }
+# SHA-256 of the published worker asset, verified before install. Pure Rust (no C
+# toolchain) and used only by the client deploy path, so it rides `network`.
+sha2 = { version = "0.10", optional = true }
+
+[features]
+default = ["network"]
+# HTTP/TLS-backed IO: update checks, self-update, PDB fetch, the LLM transports,
+# and worker deployment. Off for the headless worker so it pulls no C toolchain.
+network = ["dep:ureq", "dep:self_update", "dep:sha2"]
+
+[dev-dependencies]
+# For the env-gated remote end-to-end integration test (skips unless a test SSH
+# host is configured), which builds a `Structure` and a run UUID directly.
+nalgebra = "0.35.0"
 uuid = { version = "1", features = ["v4"] }
