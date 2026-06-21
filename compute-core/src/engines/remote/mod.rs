@@ -50,9 +50,9 @@ use std::{
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::backend::config::RemoteHost;
 use crate::engines::process::{self, ProcessConfig, ProcessResult};
 use crate::engines::registry::EngineLaunch;
+use crate::hosts::RemoteHost;
 
 /// Where an engine command runs. Plain data; cheaply `Clone` (so the per-stage
 /// clone in `run_pipeline` is just a refcount-free copy of small fields).
@@ -958,7 +958,7 @@ mod tests {
 
     #[test]
     fn remote_target_anchors_dir_at_run_uuid() {
-        use crate::backend::config::RemoteHost;
+        use crate::hosts::RemoteHost;
         let host = RemoteHost {
             id: "h".to_string(),
             label: "H".to_string(),

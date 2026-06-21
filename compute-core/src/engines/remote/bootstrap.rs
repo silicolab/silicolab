@@ -21,8 +21,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 
-use crate::backend::config::config_dir;
 use crate::engines::process::{self, ProcessConfig};
+use crate::hosts::config_dir;
 
 /// Directory holding SilicoLab's dedicated SSH key and its app-owned
 /// `known_hosts` (kept separate from `~/.ssh` so we never clobber user state).

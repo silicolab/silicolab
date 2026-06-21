@@ -279,7 +279,7 @@ fn resolve_hartree_method(
 /// supports (D3(BJ) covers a small set; D4 additionally covers the double
 /// hybrids). Composites carry their own and post-HF has none, so both return
 /// false. Mirrors [`resolve_dispersion`]'s key derivation exactly.
-pub(crate) fn supports_dispersion(method: &QmMethod, disp: QmDispersion) -> bool {
+pub fn supports_dispersion(method: &QmMethod, disp: QmDispersion) -> bool {
     if method.is_post_hf() {
         return false;
     }

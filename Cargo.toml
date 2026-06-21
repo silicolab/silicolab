@@ -1,3 +1,6 @@
+[workspace]
+members = ["compute-core"]
+
 [package]
 name = "silicolab"
 version = "0.1.0"
@@ -11,12 +14,12 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 anyhow = "1.0"
 bytemuck = { version = "1", features = ["derive"] }
+compute-core = { path = "compute-core" }
 # Declarative grammar for the in-app `.sls` command console (see
 # `frontend/console/grammar.rs`): one clap derive tree is the single source of
 # truth for dispatch and help. `no_binary_name` is used because the console is a
 # REPL with no argv[0]; errors are rendered to strings, never `exit()`.
 clap = { version = "4", features = ["derive"] }
-docking = "0.1.0"
 eframe = { version = "0.34", features = ["persistence"] }
 egui-phosphor = "0.12.0"
 # Renders the assistant's Markdown replies in the Assistant tab. `pulldown_cmark`
@@ -29,19 +32,8 @@ flate2 = "1"
 hartree = "0.1.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 nalgebra = "0.35.0"
-rayon = "1"
 rfd = "0.17"
 rusqlite = { version = "0.40.0", features = ["bundled"] }
-sdfrust = "0.6"
-self_update = { version = "0.42", default-features = false, features = [
-    "rustls",
-    "archive-tar",
-    "archive-zip",
-    "compression-flate2",
-    # zip's Deflate decoder — required to read Windows `.zip` release assets
-    # (`compression-flate2` only covers `.tar.gz`, not zip entries).
-    "compression-zip-deflate",
-] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
