@@ -19,8 +19,6 @@
 
 use std::{collections::HashMap, path::PathBuf, time::Duration};
 
-use serde::{Deserialize, Serialize};
-
 use crate::engines::process::{self, ProcessConfig};
 
 /// Stable identifier used everywhere a specific engine is referenced.
@@ -38,46 +36,16 @@ impl EngineId {
     }
 }
 
-/// How to launch an external engine: a program plus an optional command
-/// prefix. Native = empty prefix; WSL = `["wsl.exe", "-e"]`; a container or
-/// wrapper script is just a different prefix.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EngineLaunch {
-    /// Leading command tokens, e.g. `["wsl.exe", "-e"]`. Empty for native.
-    #[serde(default)]
-    pub command_prefix: Vec<String>,
-    /// The engine executable, resolved on the *target* environment. For WSL
-    /// this is a Linux path like `/usr/local/gromacs/bin/gmx`; for native it
-    /// is a Windows path or a bare name found on PATH.
-    pub program: String,
-}
+pub use crate::launch::EngineLaunch;
 
 impl EngineLaunch {
-    /// A native launch with no prefix.
-    pub fn native(program: impl Into<String>) -> Self {
-        Self {
-            command_prefix: Vec::new(),
-            program: program.into(),
-        }
-    }
-
-    /// True when there is no usable program configured.
-    pub fn is_empty(&self) -> bool {
-        self.program.trim().is_empty()
-    }
-
-    /// Human-readable rendering of the effective command, for settings UI.
-    pub fn display_command(&self) -> String {
-        if self.command_prefix.is_empty() {
-            self.program.clone()
-        } else {
-            format!("{} {}", self.command_prefix.join(" "), self.program)
-        }
-    }
-
     /// Build a [`ProcessConfig`] that runs this engine with `engine_args` in
     /// `working_dir`. The prefix's first token becomes the spawned executable;
     /// remaining prefix tokens, the program, and the engine args follow.
+    ///
+    /// This conversion lives here, not beside the struct: [`EngineLaunch`] sits at
+    /// a leaf layer so `hosts` can store one without importing `engines`, while
+    /// `ProcessConfig` belongs to `engines`.
     pub fn to_process_config(
         &self,
         working_dir: impl Into<PathBuf>,

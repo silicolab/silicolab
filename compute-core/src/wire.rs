@@ -193,19 +193,30 @@ fn stage_subprocess(request: &EngineRequest) -> Result<(Child, PathBuf)> {
     let run_dir = std::env::temp_dir().join(format!("silicolab-job-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&run_dir)
         .with_context(|| format!("create run directory {}", run_dir.display()))?;
+    // Only the success path's monitor thread removes `run_dir`; clean it up here
+    // if staging fails (most likely a failed `spawn`) so the dir is not leaked.
+    match spawn_subprocess(request, &run_dir) {
+        Ok(child) => Ok((child, run_dir)),
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&run_dir);
+            Err(error)
+        }
+    }
+}
+
+fn spawn_subprocess(request: &EngineRequest, run_dir: &Path) -> Result<Child> {
     let request_path = run_dir.join("request.json");
     let outcome_path = run_dir.join("outcome.json");
     let json = serde_json::to_vec(request).context("serialize engine request")?;
     std::fs::write(&request_path, json)
         .with_context(|| format!("write {}", request_path.display()))?;
     let exe = std::env::current_exe().context("resolve current executable")?;
-    let child = Command::new(exe)
+    Command::new(exe)
         .arg("exec")
         .arg(&request_path)
         .arg(&outcome_path)
         .spawn()
-        .context("spawn engine subprocess")?;
-    Ok((child, run_dir))
+        .context("spawn engine subprocess")
 }
 
 fn wait_for_subprocess(child: &Arc<Mutex<Child>>, outcome_path: &Path) -> Result<EngineOutcome> {

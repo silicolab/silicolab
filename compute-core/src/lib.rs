@@ -7,13 +7,14 @@
 //! headless worker both link this crate, so engine logic is written once.
 //!
 //! Internal layering, lowest to highest: `domain` <- `io` <- `engines` <-
-//! `workflows`. `hosts` and `payload` are leaf utilities; `wire` sits at the top
-//! and ties an engine job to an executor.
+//! `workflows`. `hosts`, `launch`, and `payload` are leaf utilities; `wire` sits
+//! at the top and ties an engine job to an executor.
 
 pub mod domain;
 pub mod engines;
 pub mod hosts;
 pub mod io;
+pub mod launch;
 pub mod payload;
 pub mod wire;
 pub mod workflows;

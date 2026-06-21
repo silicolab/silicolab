@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::engines::registry::EngineLaunch;
+use crate::launch::EngineLaunch;
 
 /// A remote host SilicoLab can submit external-engine jobs to over SSH. Stored in
 /// the app config keyed by [`RemoteHost::id`]. Connection is key-based only — no
