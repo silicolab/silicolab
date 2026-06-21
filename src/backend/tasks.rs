@@ -477,6 +477,12 @@ impl TaskManager {
         self.tasks.iter_mut().find(|task| task.id == task_run_id)
     }
 
+    /// Find a run by its durable `run_uuid` (the key a detached remote job is
+    /// reconnected through), rather than the in-memory `id` handle.
+    pub fn task_run_by_uuid(&self, run_uuid: &str) -> Option<&TaskRun> {
+        self.tasks.iter().find(|task| task.run_uuid == run_uuid)
+    }
+
     pub fn mark_status(&mut self, task_run_id: u64, status: TaskStatus) {
         if let Some(task) = self.task_run_mut(task_run_id) {
             task.status = status;

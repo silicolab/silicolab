@@ -34,7 +34,13 @@
 //!    intermediate artifacts never round-trip.
 
 pub mod bootstrap;
+#[cfg(feature = "network")]
+pub mod deploy;
 pub mod hardware;
+pub mod launcher;
+pub mod run_record;
+
+pub use run_record::*;
 
 use std::{
     collections::HashMap,
@@ -440,28 +446,6 @@ pub fn run_probe_command(target: &RemoteTarget, script: &str, timeout: Duration)
     }
 }
 
-/// Write a small `remote_run.json` into the local run dir at launch, recording
-/// where the detached remote job lives. Because the remote command is detached
-/// (`nohup`/`setsid`), closing the app leaves it running; this record is what a
-/// later session (or the user) needs to find and clean up the remote scratch dir.
-/// Best-effort — a write failure must never fail the run.
-pub fn write_run_record(target: &RemoteTarget, working_dir: &Path) {
-    let started_at = std::time::SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    let record = serde_json::json!({
-        "host_id": target.host_id,
-        "host_label": target.host_label,
-        "user_host": target.user_host(),
-        "remote_dir": target.remote_dir,
-        "started_at_unix": started_at,
-    });
-    if let Ok(text) = serde_json::to_string_pretty(&record) {
-        let _ = fs::write(working_dir.join("remote_run.json"), text);
-    }
-}
-
 /// Remove the run's remote scratch directory (the "Remove remote scratch" button).
 /// The dir is our own `runs/<uuid>` path, so this is safe.
 pub fn remove_remote_scratch(target: &RemoteTarget) -> Result<()> {
@@ -532,7 +516,8 @@ fn needs_upload(manifest: &SyncManifest, name: &str, signature: (u64, i64)) -> b
 fn is_excluded_from_upload(name: &str) -> bool {
     name == MANIFEST_FILE
         || name == "gromacs.log"
-        || name == "remote_run.json"
+        || name == REMOTE_RUN_FILE
+        || name == "outcome.json"
         || name.ends_with(".console")
         || name.ends_with(".exit")
         || name.ends_with(".pgid")

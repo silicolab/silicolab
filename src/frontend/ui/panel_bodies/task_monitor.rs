@@ -63,12 +63,24 @@ pub(crate) fn render_task_monitor_panel(
                 state.ui.layout.active_primary_view = PrimaryView::Tasks;
                 state.ui.layout.show_primary_sidebar = true;
             }
+            // Opt-in status refresh for detached remote jobs (never automatic).
+            if ui
+                .button(format!(
+                    "{}  Refresh Remote",
+                    egui_phosphor::regular::ARROWS_CLOCKWISE
+                ))
+                .clicked()
+            {
+                actions.push(AppAction::RefreshRemoteJobs);
+            }
         });
     });
     ui.separator();
 
     render_active_task_summary(state, ui);
     ui.add_space(8.0);
+
+    render_remote_jobs(state, ui, actions);
 
     if state.tasks.tasks.is_empty() {
         ui.label("No task run yet.");
@@ -206,6 +218,67 @@ pub(crate) fn render_task_monitor_panel(
                 ui.add_space(6.0);
             }
         });
+}
+
+fn remote_status_badge(
+    pal: &crate::frontend::theme::Palette,
+    status: crate::backend::storage::jobs::RemoteJobStatus,
+    exit_code: Option<i64>,
+) -> RichText {
+    use crate::backend::storage::jobs::RemoteJobStatus;
+    let (label, color) = match status {
+        RemoteJobStatus::Queued => ("Queued", pal.status_blue),
+        RemoteJobStatus::Running => ("Running", pal.status_green),
+        RemoteJobStatus::Done => ("Done", pal.status_green),
+        RemoteJobStatus::Failed => ("Failed", pal.status_red),
+        RemoteJobStatus::Lost => ("Lost", pal.status_amber),
+    };
+    let text = match exit_code {
+        Some(code) if code != 0 => format!("{label} ({code})"),
+        _ => label.to_string(),
+    };
+    RichText::new(text).strong().color(color)
+}
+
+/// The detached remote jobs from the global registry: status, identity, and a
+/// per-row remote-scratch cleanup. Populated by the opt-in refresh, so it
+/// reflects the last probe rather than live state.
+fn render_remote_jobs(state: &AppState, ui: &mut egui::Ui, actions: &mut Vec<AppAction>) {
+    if state.ui.remote_jobs.is_empty() {
+        return;
+    }
+    let pal = crate::frontend::theme::palette(ui);
+    ui.label(RichText::new("Remote Jobs").strong());
+    ui.add_space(4.0);
+    for job in &state.ui.remote_jobs {
+        Frame::group(ui.style())
+            .inner_margin(Margin::same(8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
+                        ui.label(
+                            RichText::new(format!("{} · {}", job.host_label, job.job_kind))
+                                .strong(),
+                        );
+                        let short = job.run_uuid.get(..8).unwrap_or(job.run_uuid.as_str());
+                        ui.label(
+                            RichText::new(format!("{short} · {}", job.engine_id))
+                                .small()
+                                .color(pal.text_tertiary),
+                        );
+                    });
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        if ui.button("Remove scratch").clicked() {
+                            actions.push(AppAction::RemoveRemoteScratch(job.run_uuid.clone()));
+                        }
+                        ui.label(remote_status_badge(&pal, job.status, job.exit_code));
+                    });
+                });
+            });
+        ui.add_space(4.0);
+    }
+    ui.add_space(8.0);
 }
 
 fn render_active_task_summary(state: &AppState, ui: &mut egui::Ui) {

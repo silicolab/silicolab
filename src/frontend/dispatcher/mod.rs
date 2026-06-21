@@ -60,6 +60,7 @@ mod files;
 mod heavy_render;
 mod jobs;
 mod project;
+mod remote_jobs;
 mod selection;
 mod settings;
 mod simulation;
@@ -74,6 +75,7 @@ pub(crate) use files::*;
 pub(crate) use heavy_render::*;
 pub(crate) use jobs::*;
 pub(crate) use project::*;
+pub(crate) use remote_jobs::*;
 pub(crate) use selection::*;
 pub(crate) use settings::*;
 pub(crate) use simulation::*;
@@ -288,6 +290,8 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SetupRemoteHostKey(id) => setup_remote_host_key(state, id),
         AppAction::OpenRemoteHostsSettings => open_remote_hosts_settings(state),
         AppAction::FetchRemoteHardware(id) => fetch_remote_hardware(state, id),
+        AppAction::RefreshRemoteJobs => refresh_remote_jobs(state),
+        AppAction::RemoveRemoteScratch(run_uuid) => remove_remote_job_scratch(state, &run_uuid),
         AppAction::SetMonitorSource(src) => set_monitor_source(state, src),
         AppAction::RunConsoleCommand(command) => run_console_command(state, &command),
         AppAction::SendAgentMessage(text) => {

@@ -24,6 +24,7 @@ use crate::{
         remote::Compute,
     },
     frontend::md_support::{FrameworkRunMetadata, MD_FRAMEWORK_FILE, write_md_system_context},
+    frontend::remote_jobs::{RunningRemoteJobsRefresh, RunningRemoteQmSubmit},
     wire::{Engine, EngineOutcome, EngineRequest, Executor, JobUpdate, run_job},
     workflows::{
         docking::{DockingProgress, run_docking_calculation},
@@ -806,6 +807,15 @@ pub struct JobManager {
     /// Live remote-GPU sampler (Settings ▸ Hardware ▸ Remote host ▸ Live GPU).
     /// Dropping or `cancel()`-ing this handle ends the background SSH polling.
     pub remote_gpu_monitor: Option<RunningRemoteGpuMonitor>,
+    /// In-flight off-thread submission of a detached remote QM job (deploy +
+    /// stage + launch). Drained into the `jobs.db` registry on completion.
+    pub remote_qm_submit: Option<RunningRemoteQmSubmit>,
+    /// In-flight off-thread refresh of the detached remote jobs (liveness probe +
+    /// outcome retrieval). Opt-in, never an automatic loop.
+    pub remote_jobs_refresh: Option<RunningRemoteJobsRefresh>,
+    /// Whether the registry snapshot has been loaded into the UI this session
+    /// (a one-shot reconnect read on the first frame).
+    pub remote_jobs_loaded: bool,
 }
 
 impl JobManager {

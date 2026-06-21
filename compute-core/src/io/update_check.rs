@@ -11,7 +11,15 @@ use anyhow::{Context, Result};
 /// fallback when the API response carries no per-release URL).
 pub const RELEASES_URL: &str = "https://github.com/silicolab/silicolab/releases";
 
+/// GitHub REST base for this repo's releases. `releases/latest` (the update
+/// check) and `releases/tags/<tag>` (deploy's exact-version asset resolution)
+/// both hang off it.
+const RELEASES_API_BASE: &str = "https://api.github.com/repos/silicolab/silicolab/releases";
+
 const LATEST_RELEASE_API: &str = "https://api.github.com/repos/silicolab/silicolab/releases/latest";
+
+/// The User-Agent GitHub's API requires; carries the running version.
+const API_USER_AGENT: &str = concat!("silicolab/", env!("CARGO_PKG_VERSION"));
 
 /// Generous cap on the API response body; a release JSON is a few KB.
 const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
@@ -32,10 +40,7 @@ pub struct AvailableUpdate {
 pub fn check_for_update() -> Result<Option<AvailableUpdate>> {
     let body = ureq::get(LATEST_RELEASE_API)
         .header("Accept", "application/vnd.github+json")
-        .header(
-            "User-Agent",
-            concat!("silicolab/", env!("CARGO_PKG_VERSION")),
-        )
+        .header("User-Agent", API_USER_AGENT)
         .call()
         .context("failed to query GitHub for the latest release")?
         .body_mut()
@@ -44,6 +49,69 @@ pub fn check_for_update() -> Result<Option<AvailableUpdate>> {
         .read_to_string()
         .context("failed to read the GitHub release response")?;
     update_from_response(&body, env!("CARGO_PKG_VERSION"))
+}
+
+/// Resolve the public download URL of the asset named `asset_name` on the
+/// release tagged `tag` (e.g. `v0.1.1`). Unlike [`check_for_update`], which reads
+/// `releases/latest`, this pins an exact tag so the deployed worker always
+/// matches the running build. Fails closed: a missing release or asset is an
+/// `Err`, so a deploy never proceeds against an absent binary.
+pub fn release_asset_url(tag: &str, asset_name: &str) -> Result<String> {
+    let url = format!("{RELEASES_API_BASE}/tags/{tag}");
+    let body = ureq::get(&url)
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", API_USER_AGENT)
+        .call()
+        .with_context(|| format!("failed to query GitHub release {tag}"))?
+        .body_mut()
+        .with_config()
+        .limit(MAX_RESPONSE_BYTES)
+        .read_to_string()
+        .context("failed to read the GitHub release response")?;
+    asset_url_from_release(&body, asset_name)
+}
+
+/// Find a named asset's `browser_download_url` in a release JSON body. Split out
+/// from the network call so it is unit-testable.
+fn asset_url_from_release(body: &str, asset_name: &str) -> Result<String> {
+    let json: serde_json::Value =
+        serde_json::from_str(body).context("malformed GitHub release response")?;
+    let assets = json["assets"]
+        .as_array()
+        .context("GitHub release response has no assets array")?;
+    assets
+        .iter()
+        .find(|asset| asset["name"].as_str() == Some(asset_name))
+        .and_then(|asset| asset["browser_download_url"].as_str())
+        .map(str::to_string)
+        .with_context(|| format!("the release has no asset named {asset_name}"))
+}
+
+/// Download a release asset's raw bytes from its (public) download URL, capped at
+/// `max_bytes`. Used by the worker deploy to fetch the musl binary.
+pub fn download_asset_bytes(url: &str, max_bytes: u64) -> Result<Vec<u8>> {
+    ureq::get(url)
+        .header("User-Agent", API_USER_AGENT)
+        .call()
+        .with_context(|| format!("failed to download {url}"))?
+        .body_mut()
+        .with_config()
+        .limit(max_bytes)
+        .read_to_vec()
+        .with_context(|| format!("failed to read {url}"))
+}
+
+/// Download a small text asset (e.g. a published `.sha256`) from its download URL.
+pub fn download_asset_text(url: &str) -> Result<String> {
+    ureq::get(url)
+        .header("User-Agent", API_USER_AGENT)
+        .call()
+        .with_context(|| format!("failed to download {url}"))?
+        .body_mut()
+        .with_config()
+        .limit(MAX_RESPONSE_BYTES)
+        .read_to_string()
+        .with_context(|| format!("failed to read {url}"))
 }
 
 /// Parse a `releases/latest` response and decide whether it is newer than
@@ -137,5 +205,41 @@ mod tests {
     fn malformed_response_is_an_error() {
         assert!(update_from_response("not json", "0.1.0").is_err());
         assert!(update_from_response("{}", "0.1.0").is_err());
+    }
+
+    #[test]
+    fn asset_url_resolves_by_exact_name() {
+        let body = r#"{
+            "tag_name": "v0.1.1",
+            "assets": [
+                {"name": "silicolab-v0.1.1-x86_64-unknown-linux-gnu.tar.gz", "browser_download_url": "https://example.org/gui"},
+                {"name": "silicolab-compute-x86_64-unknown-linux-musl", "browser_download_url": "https://example.org/worker"},
+                {"name": "silicolab-compute-x86_64-unknown-linux-musl.sha256", "browser_download_url": "https://example.org/sum"}
+            ]
+        }"#;
+        assert_eq!(
+            super::asset_url_from_release(body, "silicolab-compute-x86_64-unknown-linux-musl")
+                .unwrap(),
+            "https://example.org/worker"
+        );
+        assert_eq!(
+            super::asset_url_from_release(
+                body,
+                "silicolab-compute-x86_64-unknown-linux-musl.sha256"
+            )
+            .unwrap(),
+            "https://example.org/sum"
+        );
+    }
+
+    #[test]
+    fn asset_url_missing_asset_fails_closed() {
+        let body = r#"{"tag_name": "v0.1.1", "assets": []}"#;
+        assert!(
+            super::asset_url_from_release(body, "silicolab-compute-x86_64-unknown-linux-musl")
+                .is_err()
+        );
+        // A release JSON without an assets array is also an error, not a silent miss.
+        assert!(super::asset_url_from_release(r#"{"tag_name":"v0.1.1"}"#, "x").is_err());
     }
 }

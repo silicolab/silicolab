@@ -236,6 +236,12 @@ pub enum AppAction {
     /// Fetch the static hardware inventory (CPU/memory/GPU) of the host with this
     /// id over SSH, for the Hardware ▸ Remote settings panel (worker thread).
     FetchRemoteHardware(String),
+    /// Opt-in refresh of every detached remote job: probe liveness and retrieve
+    /// any finished outcome over SSH (off the UI thread). Never automatic.
+    RefreshRemoteJobs,
+    /// Remove the remote scratch directory of the remote job with this `run_uuid`
+    /// and drop its registry row.
+    RemoveRemoteScratch(String),
     /// Set which machine the sidebar system monitor shows (Local or a remote host).
     /// Reconciles the live remote-GPU SSH sampler to match: starts it for a remote
     /// host, stops it on Local or a host change. At most one sampler runs at a time.

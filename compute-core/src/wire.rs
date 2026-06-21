@@ -19,6 +19,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::engines::qm::{QmJob, QmOutcome};
+use crate::engines::remote::launcher::{self, Liveness, RemoteExecution};
 use crate::workflows::qm::{QmCalculationProgress, run_qm_calculation};
 
 /// A complete engine job, independent of where it runs. `cores` travels with the
@@ -65,6 +66,12 @@ pub enum Executor {
     /// A self-exec'd subprocess, giving an OS-level crash/out-of-memory boundary
     /// and a kill-based cancel.
     LocalSubprocess,
+    /// A pre-deployed headless worker on a remote host, driven over SSH behind a
+    /// pluggable launcher. Boxed because a [`RemoteExecution`] is far larger than
+    /// the unit variants. This is the attached run-and-wait path; the GUI's
+    /// detached, durable status model drives the same launcher primitives
+    /// directly instead.
+    Remote(Box<RemoteExecution>),
 }
 
 /// A coarse progress update or the terminal result, as it arrives from a job.
@@ -126,6 +133,7 @@ pub fn run_job(request: EngineRequest, executor: Executor) -> Running {
     match executor {
         Executor::InProcess => run_in_process(request),
         Executor::LocalSubprocess => run_subprocess(request),
+        Executor::Remote(execution) => run_remote(request, execution),
     }
 }
 
@@ -220,6 +228,132 @@ fn wait_for_subprocess(child: &Arc<Mutex<Child>>, outcome_path: &Path) -> Result
     serde_json::from_slice(&bytes).context("parse engine outcome")
 }
 
+/// Poll cadence for the attached remote path. Modest: this is an explicit
+/// run-and-wait call, not the GUI's on-demand refresh model.
+const REMOTE_POLL_INTERVAL: Duration = Duration::from_secs(3);
+/// Granularity at which the poll wait wakes to check the cancel flag.
+const REMOTE_CANCEL_TICK: Duration = Duration::from_millis(250);
+
+/// Drive a job on a remote worker to completion, streaming the remote console as
+/// progress. Cancel kills the remote process group. This attached path keeps the
+/// uniform `run_job` contract; the GUI uses the launcher's detached primitives
+/// directly so a run survives an app restart.
+fn run_remote(request: EngineRequest, execution: Box<RemoteExecution>) -> Running {
+    let (sender, updates) = mpsc::channel();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_for_worker = Arc::clone(&cancel);
+    std::thread::spawn(move || {
+        let result = run_remote_blocking(request, &execution, &cancel_for_worker, |stage| {
+            let _ = sender.send(JobUpdate::Progress { stage });
+        });
+        let _ = sender.send(match result {
+            Ok(outcome) => JobUpdate::Finished(Box::new(outcome)),
+            Err(error) => JobUpdate::Failed(error.to_string()),
+        });
+    });
+    Running {
+        cancel: CancelHandle::Flag(cancel),
+        updates,
+    }
+}
+
+fn run_remote_blocking(
+    request: EngineRequest,
+    execution: &RemoteExecution,
+    cancel: &Arc<AtomicBool>,
+    mut progress: impl FnMut(String),
+) -> Result<EngineOutcome> {
+    let RemoteExecution {
+        target,
+        launcher,
+        working_dir,
+        worker_path,
+    } = execution;
+
+    progress("staging the remote job".to_string());
+    std::fs::create_dir_all(working_dir)
+        .with_context(|| format!("create remote run directory {}", working_dir.display()))?;
+    let json = serde_json::to_vec(&request).context("serialize engine request")?;
+    std::fs::write(working_dir.join(launcher::REQUEST_FILE), json).context("write request.json")?;
+
+    progress("submitting to the remote host".to_string());
+    let handle = launcher.submit(target, working_dir, worker_path)?;
+
+    let mut forwarded = 0usize;
+    loop {
+        // Cancel-responsive wait between polls.
+        let mut slept = Duration::ZERO;
+        while slept < REMOTE_POLL_INTERVAL {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = launcher.cancel(target, &handle);
+                bail!("remote job cancelled");
+            }
+            std::thread::sleep(REMOTE_CANCEL_TICK);
+            slept += REMOTE_CANCEL_TICK;
+        }
+        let (liveness, console) = launcher.poll(target, &handle)?;
+        forward_console(&console, &mut forwarded, &mut progress);
+        match liveness {
+            Liveness::Alive => {}
+            Liveness::Lost => {
+                bail!("remote job was lost (no exit code — node crash, OOM, or external kill)")
+            }
+            Liveness::Done(0) => {
+                progress("retrieving the outcome".to_string());
+                let bytes = launcher::retrieve_outcome(target, working_dir)?;
+                return serde_json::from_slice(&bytes).context("parse engine outcome");
+            }
+            Liveness::Done(code) => bail!("remote worker exited with status {code}"),
+        }
+    }
+}
+
+/// Forward console lines that appeared since the last forward (best-effort live
+/// streaming; the authoritative outcome arrives in `outcome.json`).
+fn forward_console(console: &str, forwarded: &mut usize, progress: &mut impl FnMut(String)) {
+    let lines: Vec<&str> = console.lines().collect();
+    for line in lines.iter().skip(*forwarded) {
+        progress((*line).to_string());
+    }
+    *forwarded = lines.len().max(*forwarded);
+}
+
+/// Reject a payload the worker should not run: no atoms, or a non-finite
+/// (NaN/inf) coordinate. The engine would also reject these, but checking up
+/// front turns malformed remote input into a clear, immediate non-zero exit
+/// rather than a deeper engine error.
+fn validate_request(request: &EngineRequest) -> Result<()> {
+    let structure = match &request.engine {
+        Engine::Qm(QmJob::Molecular(req)) => &req.structure,
+        Engine::Qm(QmJob::Periodic(req)) => &req.structure,
+    };
+    if structure.atoms.is_empty() {
+        bail!("engine request carries no atoms");
+    }
+    if let Some((index, _)) = structure
+        .atoms
+        .iter()
+        .enumerate()
+        .find(|(_, atom)| !atom.position.coords.iter().all(|c| c.is_finite()))
+    {
+        bail!("atom {index} has a non-finite coordinate");
+    }
+    // A periodic job carries a lattice; a non-finite component would corrupt the
+    // reciprocal-space setup, so reject it up front the way atom coordinates are.
+    if let Engine::Qm(QmJob::Periodic(_)) = &request.engine
+        && let Some(cell) = &structure.cell
+    {
+        let lattice_finite = [cell.a, cell.b, cell.c, cell.alpha, cell.beta, cell.gamma]
+            .into_iter()
+            .all(f32::is_finite)
+            && cell.vectors.iter().all(|v| v.iter().all(|c| c.is_finite()));
+        if !lattice_finite {
+            bail!("periodic request has a non-finite lattice component");
+        }
+    }
+    Ok(())
+}
+
 /// Run an engine request in-process, reporting coarse stages through `progress`.
 /// Shared by the in-process executor and the [`exec`] subcommand so local and
 /// out-of-process runs go through identical engine code.
@@ -241,12 +375,13 @@ fn run_request(
 }
 
 /// Process a staged `request.json` and write `outcome.json`. This is the engine
-/// entry a subprocess (and, later, a remote worker) runs; malformed input fails
-/// the parse and returns an error, so the process exits non-zero.
+/// entry a subprocess (and a remote worker) runs; malformed input fails the parse
+/// or [`validate_request`] and returns an error, so the process exits non-zero.
 pub fn exec(request_path: &Path, outcome_path: &Path) -> Result<()> {
     let bytes =
         std::fs::read(request_path).with_context(|| format!("read {}", request_path.display()))?;
     let request: EngineRequest = serde_json::from_slice(&bytes).context("parse engine request")?;
+    validate_request(&request)?;
     let cancel = Arc::new(AtomicBool::new(false));
     let outcome = run_request(request, cancel, |stage| eprintln!("{stage}"))?;
     let json = serde_json::to_vec(&outcome).context("serialize engine outcome")?;
@@ -288,6 +423,84 @@ mod tests {
             kind: QmKind::SinglePoint,
             options: QmOptions::default(),
         })))
+    }
+
+    #[test]
+    fn validate_request_rejects_empty_nan_and_accepts_h2() {
+        // Empty atoms → rejected.
+        let empty = EngineRequest::new(Engine::Qm(QmJob::Molecular(QmRequest {
+            structure: Structure::new("empty", Vec::new()),
+            method: QmMethod::Rhf,
+            basis: "sto-3g".to_string(),
+            charge: 0,
+            multiplicity: 1,
+            kind: QmKind::SinglePoint,
+            options: QmOptions::default(),
+        })));
+        assert!(validate_request(&empty).is_err());
+
+        // A non-finite coordinate → rejected, message names the atom index. The
+        // structure is built clean (bond inference rejects non-finite input), then
+        // a coordinate is poked to infinity to exercise the validator.
+        let mut nan_structure = Structure::new(
+            "nan",
+            vec![
+                Atom {
+                    element: "H".to_string(),
+                    position: Point3::new(0.0, 0.0, 0.0),
+                    charge: 0.0,
+                },
+                Atom {
+                    element: "H".to_string(),
+                    position: Point3::new(0.0, 0.0, 0.74),
+                    charge: 0.0,
+                },
+            ],
+        );
+        nan_structure.atoms[1].position.y = f32::INFINITY;
+        let nan = EngineRequest::new(Engine::Qm(QmJob::Molecular(QmRequest {
+            structure: nan_structure,
+            method: QmMethod::Rhf,
+            basis: "sto-3g".to_string(),
+            charge: 0,
+            multiplicity: 1,
+            kind: QmKind::SinglePoint,
+            options: QmOptions::default(),
+        })));
+        let error = validate_request(&nan).unwrap_err().to_string();
+        assert!(
+            error.contains("atom 1"),
+            "message should name atom 1: {error}"
+        );
+
+        // A clean H2 → accepted.
+        assert!(validate_request(&h2_single_point()).is_ok());
+    }
+
+    #[test]
+    fn validate_request_rejects_a_non_finite_lattice() {
+        use crate::domain::UnitCell;
+        use crate::engines::qm::PeriodicQmRequest;
+
+        let mut cell = UnitCell::from_parameters(5.43, 5.43, 5.43, 90.0, 90.0, 90.0);
+        cell.vectors[0].x = f32::NAN;
+        let structure = Structure::with_cell(
+            "si",
+            vec![Atom {
+                element: "Si".to_string(),
+                position: Point3::new(0.0, 0.0, 0.0),
+                charge: 0.0,
+            }],
+            cell,
+        );
+        let request = EngineRequest::new(Engine::Qm(QmJob::Periodic(PeriodicQmRequest::new(
+            structure,
+        ))));
+        let error = validate_request(&request).unwrap_err().to_string();
+        assert!(
+            error.contains("lattice"),
+            "message should name the lattice: {error}"
+        );
     }
 
     #[test]
