@@ -97,4 +97,14 @@ pub(crate) fn render(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec<
             }
         }
     }
+
+    // Live GPU monitoring now lives in the sidebar system monitor (pick a host
+    // from its source dropdown), so it sits next to the local CPU/GPU gauges
+    // instead of being buried in Settings.
+    ui.add_space(8.0);
+    ui.separator();
+    ui.label(
+        RichText::new("Live GPU monitoring moved to the sidebar system monitor.")
+            .color(pal.text_tertiary),
+    );
 }

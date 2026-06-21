@@ -245,6 +245,68 @@ pub fn spawn_remote_hardware_fetch(
     RunningRemoteHardwareFetch { host_id, receiver }
 }
 
+/// Handle to a live remote-GPU sampler. `cancel()` ends the loop within ~250 ms;
+/// dropping the handle also ends it (the next `send` fails once the receiver is
+/// gone). `cancel` is `pub(crate)` so dispatcher tests can build a handle.
+pub struct RunningRemoteGpuMonitor {
+    pub host_id: String,
+    pub receiver: Receiver<Result<Vec<crate::engines::remote::hardware::RemoteGpuStat>, String>>,
+    pub(crate) cancel: Arc<AtomicBool>,
+}
+
+impl RunningRemoteGpuMonitor {
+    /// Signal the sampler thread to stop before its next poll.
+    pub fn cancel(&self) {
+        self.cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+}
+
+/// Spawn a recurring remote-GPU sampler: every `interval`, SSH-run the nvidia-smi
+/// stats query and parse it, sending each `Result` back. The first sample fires
+/// immediately. The loop exits when `cancel` is set or the receiver is dropped.
+pub fn spawn_remote_gpu_monitor(
+    host: crate::backend::config::RemoteHost,
+    interval: std::time::Duration,
+) -> RunningRemoteGpuMonitor {
+    use crate::engines::remote::{self, hardware};
+    use std::time::Duration;
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let host_id = host.id.clone();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let thread_cancel = cancel.clone();
+    std::thread::spawn(move || {
+        let target = remote::RemoteTarget::for_run(&host, "gpu-monitor");
+        loop {
+            let msg = match remote::run_probe_command(
+                &target,
+                hardware::GPU_STATS_SCRIPT,
+                Duration::from_secs(15),
+            ) {
+                Ok(stdout) => Ok(hardware::parse_remote_gpu_stats(&stdout)),
+                Err(error) => Err(error.to_string()),
+            };
+            if sender.send(msg).is_err() {
+                break; // receiver dropped (toggled off / app closing)
+            }
+            // Cancel-responsive sleep so cancel() takes effect within ~250 ms.
+            let mut slept = Duration::ZERO;
+            while slept < interval {
+                if thread_cancel.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(250));
+                slept += Duration::from_millis(250);
+            }
+        }
+    });
+    RunningRemoteGpuMonitor {
+        host_id,
+        receiver,
+        cancel,
+    }
+}
+
 /// An in-flight assistant model turn: one `provider.complete()` POST running on
 /// a worker thread (network takes seconds-to-minutes, so it must be off the UI
 /// thread). The driver drains the result in `poll_jobs` and runs any tool calls
@@ -741,6 +803,9 @@ pub struct JobManager {
     /// Live CPU/GPU utilization sampler, running while `show_utilization_bars` is
     /// on. Dropping this handle stops the background thread.
     pub metrics: Option<RunningMetricsSampler>,
+    /// Live remote-GPU sampler (Settings ▸ Hardware ▸ Remote host ▸ Live GPU).
+    /// Dropping or `cancel()`-ing this handle ends the background SSH polling.
+    pub remote_gpu_monitor: Option<RunningRemoteGpuMonitor>,
 }
 
 impl JobManager {

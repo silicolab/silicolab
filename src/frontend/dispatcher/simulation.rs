@@ -504,6 +504,17 @@ pub(crate) fn remove_remote_host(state: &mut AppState, id: String) {
     if matches!(&state.ui.settings.remote_bootstrap, Some((bid, _)) if *bid == id) {
         state.ui.settings.remote_bootstrap = None;
     }
+    // Don't keep sampling a host that no longer exists: if the monitor was pointed
+    // at it, stop the sampler and fall back to Local.
+    let monitoring_removed = state
+        .jobs
+        .remote_gpu_monitor
+        .as_ref()
+        .is_some_and(|m| m.host_id == id)
+        || state.ui.layout.monitor_source == crate::frontend::state::MonitorSource::Remote(id);
+    if monitoring_removed {
+        set_monitor_source(state, crate::frontend::state::MonitorSource::Local);
+    }
     persist_engine_config(state, "Removed remote host");
 }
 
@@ -552,6 +563,61 @@ pub(crate) fn fetch_remote_hardware(state: &mut AppState, id: String) {
     state.ui.settings.remote_hardware_host = Some(id);
     state.jobs.remote_hardware = Some(crate::frontend::jobs::spawn_remote_hardware_fetch(host));
     state.set_message("Fetching remote hardware…".to_string());
+}
+
+/// Point the sidebar system monitor at `src` (Local or a remote host), reconciling
+/// the live remote-GPU SSH sampler so exactly the selected host is being polled. At
+/// most one sampler runs at a time; re-selecting the host already running is a no-op
+/// (it keeps the sparkline history rather than restarting from empty).
+pub(crate) fn set_monitor_source(state: &mut AppState, src: crate::frontend::state::MonitorSource) {
+    use crate::frontend::state::MonitorSource;
+
+    let desired_host = match &src {
+        MonitorSource::Local => None,
+        MonitorSource::Remote(id) => Some(id.clone()),
+    };
+    let running_host = state
+        .jobs
+        .remote_gpu_monitor
+        .as_ref()
+        .map(|m| m.host_id.clone());
+
+    if running_host == desired_host {
+        state.ui.layout.monitor_source = src;
+        return;
+    }
+
+    if let Some(monitor) = state.jobs.remote_gpu_monitor.take() {
+        monitor.cancel();
+    }
+    state.ui.settings.remote_gpu_live = None;
+    state.ui.layout.monitor_source = src;
+
+    let Some(id) = desired_host else {
+        return;
+    };
+    // ssh missing: keep the source on this host and surface the error in the dock
+    // (the panel renders `last_error`), rather than silently snapping back to Local.
+    if let Err(error) = crate::engines::remote::ensure_ssh_available() {
+        state.ui.settings.remote_gpu_live = Some(crate::frontend::state::RemoteGpuLive {
+            host_id: id,
+            gpus: Vec::new(),
+            last_error: Some(error.to_string()),
+        });
+        return;
+    }
+    let Some(host) = state.config.remote_hosts.get(&id).cloned() else {
+        return; // host vanished from config between selection and dispatch.
+    };
+    state.ui.settings.remote_gpu_live = Some(crate::frontend::state::RemoteGpuLive {
+        host_id: id,
+        gpus: Vec::new(),
+        last_error: None,
+    });
+    state.jobs.remote_gpu_monitor = Some(crate::frontend::jobs::spawn_remote_gpu_monitor(
+        host,
+        std::time::Duration::from_secs(15),
+    ));
 }
 
 pub(crate) fn check_remote_host(state: &mut AppState, id: String) {
@@ -967,4 +1033,112 @@ pub(crate) fn build_md_system_builtin(
     ));
     complete_active_task(state, TaskKind::BuildMdSystem, TaskStatus::Completed);
     true
+}
+
+#[cfg(test)]
+mod monitor_source_tests {
+    use super::*;
+    use crate::frontend::jobs::RunningRemoteGpuMonitor;
+    use crate::frontend::state::{MonitorSource, RemoteGpuLive};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    /// A running-monitor handle bound to `host_id`. We never read the receiver in
+    /// these tests, so a dropped sender is harmless; the returned `cancel` flag lets
+    /// the caller assert whether the sampler was told to stop.
+    fn running_monitor(host_id: &str) -> (RunningRemoteGpuMonitor, Arc<AtomicBool>) {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
+        (
+            RunningRemoteGpuMonitor {
+                host_id: host_id.into(),
+                receiver: rx,
+                cancel: cancel.clone(),
+            },
+            cancel,
+        )
+    }
+
+    fn live(host_id: &str) -> RemoteGpuLive {
+        RemoteGpuLive {
+            host_id: host_id.into(),
+            gpus: Vec::new(),
+            last_error: None,
+        }
+    }
+
+    #[test]
+    fn switching_to_local_stops_the_running_monitor() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let (monitor, cancel) = running_monitor("a");
+        state.jobs.remote_gpu_monitor = Some(monitor);
+        state.ui.settings.remote_gpu_live = Some(live("a"));
+        state.ui.layout.monitor_source = MonitorSource::Remote("a".into());
+
+        set_monitor_source(&mut state, MonitorSource::Local);
+
+        assert!(
+            cancel.load(Ordering::Relaxed),
+            "sampler should be cancelled"
+        );
+        assert!(state.jobs.remote_gpu_monitor.is_none());
+        assert!(state.ui.settings.remote_gpu_live.is_none());
+        assert_eq!(state.ui.layout.monitor_source, MonitorSource::Local);
+    }
+
+    #[test]
+    fn reselecting_the_same_host_is_idempotent() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let (monitor, cancel) = running_monitor("a");
+        state.jobs.remote_gpu_monitor = Some(monitor);
+        state.ui.layout.monitor_source = MonitorSource::Remote("a".into());
+
+        set_monitor_source(&mut state, MonitorSource::Remote("a".into()));
+
+        assert!(
+            !cancel.load(Ordering::Relaxed),
+            "an already-running host must not be restarted"
+        );
+        assert_eq!(
+            state
+                .jobs
+                .remote_gpu_monitor
+                .as_ref()
+                .map(|m| m.host_id.as_str()),
+            Some("a")
+        );
+        assert_eq!(
+            state.ui.layout.monitor_source,
+            MonitorSource::Remote("a".into())
+        );
+    }
+
+    #[test]
+    fn switching_to_another_host_stops_the_previous_one() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let (monitor, cancel) = running_monitor("a");
+        state.jobs.remote_gpu_monitor = Some(monitor);
+        state.ui.settings.remote_gpu_live = Some(live("a"));
+        state.ui.layout.monitor_source = MonitorSource::Remote("a".into());
+
+        // Host "b" isn't in config, so no new sampler spawns regardless of whether
+        // ssh is available in the test environment — but the previous "a" sampler
+        // must always be stopped and the source must move to "b".
+        set_monitor_source(&mut state, MonitorSource::Remote("b".into()));
+
+        assert!(cancel.load(Ordering::Relaxed), "previous sampler cancelled");
+        assert_ne!(
+            state
+                .jobs
+                .remote_gpu_monitor
+                .as_ref()
+                .map(|m| m.host_id.clone()),
+            Some("a".to_string()),
+            "the old host's sampler handle must be gone"
+        );
+        assert_eq!(
+            state.ui.layout.monitor_source,
+            MonitorSource::Remote("b".into())
+        );
+    }
 }

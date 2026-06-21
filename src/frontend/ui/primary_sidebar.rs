@@ -379,7 +379,7 @@ pub(crate) fn render_primary_sidebar(
                 .max_rect(footer_rect)
                 .layout(Layout::top_down(Align::Min)),
         );
-        render_sidebar_monitor_footer(state, &mut footer_ui);
+        render_sidebar_monitor_footer(state, &mut footer_ui, actions);
         // Cache the actual rendered height for next frame's reservation; repaint
         // once when it changes so a newly-correct height is applied without a
         // visible clip. The threshold avoids a perpetual repaint loop.
@@ -393,7 +393,11 @@ pub(crate) fn render_primary_sidebar(
 
 /// Render the system-monitor footer: a hairline divider above the full-width
 /// stack of compact utilization bars. Only called when the monitor is enabled.
-fn render_sidebar_monitor_footer(state: &mut AppState, ui: &mut egui::Ui) {
+fn render_sidebar_monitor_footer(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+) {
     let pal = crate::frontend::theme::palette(ui);
     let top = ui.max_rect().left_top();
     let right = ui.max_rect().right_top().x;
@@ -412,7 +416,7 @@ fn render_sidebar_monitor_footer(state: &mut AppState, ui: &mut egui::Ui) {
             bottom: 0,
         })
         .show(ui, |ui| {
-            panel_bodies::render_compact_monitor(state, ui);
+            panel_bodies::render_compact_monitor(state, ui, actions);
         });
 }
 

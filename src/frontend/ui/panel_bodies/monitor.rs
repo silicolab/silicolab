@@ -16,12 +16,88 @@ use std::collections::{BTreeSet, VecDeque};
 use eframe::egui::{self, RichText, Sense};
 
 use crate::backend::hardware::{GpuInfo, GpuKind};
+use crate::frontend::actions::AppAction;
 use crate::frontend::gpu_monitor;
-use crate::frontend::state::AppState;
+use crate::frontend::state::{AppState, MonitorSource, RemoteGpuLive};
 use crate::frontend::ui::gauge;
 
 /// Bytes per GiB, for human-readable memory/VRAM figures.
 const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+
+/// Shown while a freshly-selected remote host hasn't returned its first sample yet.
+const REMOTE_WAITING: &str = "Waiting for first GPU sample…";
+/// Shown while the SSH sampler is retrying after a transport error.
+const REMOTE_RETRYING: &str = "Temporarily unreachable, retrying…";
+
+/// One remote GPU's display data, the remote-host analogue of [`GpuRow`]. Sourced
+/// from [`RemoteGpuLive`] (nvidia-smi over SSH) rather than the local sampler.
+struct RemoteRow {
+    /// Compact label: "GPU" for one card, else "GPU0"/"GPU1"/… (by position).
+    short: String,
+    /// Full model name, shown on hover.
+    name: String,
+    /// Live utilization percentage (0–100), `None` when the card didn't report it.
+    util: Option<f32>,
+    /// Right-hand detail line: "pct%  ·  VRAM u/t MiB  ·  T °C  ·  P W" (parts the
+    /// host didn't report are dropped).
+    detail: String,
+    /// Utilization sparkline history (oldest at front).
+    history: VecDeque<Option<f32>>,
+}
+
+/// Build the display rows for the selected remote host, plus an optional status
+/// line. `live` is the running monitor's state; `host_id` is the source the dock is
+/// pointed at. A `None`/mismatched `live` (sampler just (re)started) or an empty
+/// reading reads as "waiting"; a transport error reads as "retrying" while any
+/// last-known rows stay on screen.
+fn remote_rows(live: Option<&RemoteGpuLive>, host_id: &str) -> (Vec<RemoteRow>, Option<String>) {
+    let Some(live) = live.filter(|l| l.host_id == host_id) else {
+        return (Vec::new(), Some(REMOTE_WAITING.to_string()));
+    };
+
+    let multi = live.gpus.len() > 1;
+    let rows: Vec<RemoteRow> = live
+        .gpus
+        .iter()
+        .enumerate()
+        .map(|(i, view)| RemoteRow {
+            short: if multi {
+                format!("GPU{i}")
+            } else {
+                "GPU".to_string()
+            },
+            name: view.name.clone(),
+            util: view.latest.util_pct,
+            detail: remote_gpu_detail(&view.latest),
+            history: view.util_history.clone(),
+        })
+        .collect();
+
+    let status = if live.last_error.is_some() {
+        Some(REMOTE_RETRYING.to_string())
+    } else if rows.is_empty() {
+        Some(REMOTE_WAITING.to_string())
+    } else {
+        None
+    };
+    (rows, status)
+}
+
+/// "pct%  ·  VRAM u/t MiB  ·  T °C  ·  P W", dropping any field the host didn't
+/// report. The percentage is always present ("N/A" when unknown).
+fn remote_gpu_detail(stat: &crate::engines::remote::hardware::RemoteGpuStat) -> String {
+    let mut bits = vec![pct_text(stat.util_pct)];
+    if let (Some(used), Some(total)) = (stat.vram_used_mib, stat.vram_total_mib) {
+        bits.push(format!("VRAM {used} / {total} MiB"));
+    }
+    if let Some(t) = stat.temp_c {
+        bits.push(format!("{t} °C"));
+    }
+    if let Some(p) = stat.power_w {
+        bits.push(format!("{p:.0} W"));
+    }
+    bits.join("  ·  ")
+}
 
 /// One GPU's display data — one row/chart per card, never averaged.
 struct GpuRow {
@@ -111,54 +187,159 @@ fn gpu_rows(state: &AppState) -> Vec<GpuRow> {
         .collect()
 }
 
-/// Footer (sidebar) glance view: compact one-line utilization bars — CPU, Memory,
-/// then one per GPU. The whole cluster is one click target that toggles the
-/// detail popover and records its rect for anchoring.
-pub(crate) fn render_compact_monitor(state: &mut AppState, ui: &mut egui::Ui) -> egui::Response {
-    let cpu = state.ui.cpu_pct;
-    let mem = state.ui.mem_pct;
-    let rows = gpu_rows(state);
+/// Source dropdown — "Local" plus every configured remote host — letting the dock
+/// switch which machine it shows. Hidden when no remote hosts exist (nothing to
+/// switch to). Rendered above the gauge cluster and outside its click target, so
+/// opening the dropdown doesn't also toggle the detail popover.
+fn render_source_selector(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec<AppAction>) {
+    let mut hosts: Vec<(String, String)> = state
+        .config
+        .remote_hosts
+        .values()
+        .map(|host| (host.id.clone(), host.label.clone()))
+        .collect();
+    if hosts.is_empty() {
+        return;
+    }
+    hosts.sort_by(|a, b| a.1.cmp(&b.1));
 
-    let resp = ui
-        .vertical(|ui| {
-            ui.spacing_mut().item_spacing.y = 5.0;
-            gauge::utilization_row_inline(ui, "CPU", None, &pct_text(Some(cpu)), Some(cpu / 100.0));
-            gauge::utilization_row_inline(ui, "MEM", None, &pct_text(mem), mem.map(|m| m / 100.0));
-            for row in &rows {
-                gauge::utilization_row_inline(
-                    ui,
-                    &row.short,
-                    Some(&row.name),
-                    &pct_text(row.util),
-                    row.util.map(|u| u / 100.0),
-                );
+    let current = state.ui.layout.monitor_source.clone();
+    let selected_text = match &current {
+        MonitorSource::Local => "Local".to_string(),
+        MonitorSource::Remote(id) => hosts
+            .iter()
+            .find(|(hid, _)| hid == id)
+            .map(|(_, label)| label.clone())
+            .unwrap_or_else(|| id.clone()),
+    };
+
+    egui::ComboBox::from_id_salt("monitor_source")
+        .selected_text(selected_text)
+        .show_ui(ui, |ui| {
+            crate::frontend::theme::stabilize_selectable_rows(ui);
+            let mut pick = current.clone();
+            ui.selectable_value(&mut pick, MonitorSource::Local, "Local");
+            for (id, label) in &hosts {
+                ui.selectable_value(&mut pick, MonitorSource::Remote(id.clone()), label);
             }
-        })
-        .response;
+            if pick != current {
+                actions.push(AppAction::SetMonitorSource(pick));
+            }
+        });
+    ui.add_space(5.0);
+}
 
+/// Footer (sidebar) glance view: the source dropdown above a stack of compact
+/// one-line utilization bars. Local shows CPU, Memory, then one per GPU; a remote
+/// host shows one bar per GPU (no remote CPU/memory). The gauge cluster is one
+/// click target that toggles the detail popover and records its rect for anchoring.
+pub(crate) fn render_compact_monitor(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+) -> egui::Response {
+    render_source_selector(state, ui, actions);
+    let resp = match state.ui.layout.monitor_source.clone() {
+        MonitorSource::Local => render_compact_local(state, ui),
+        MonitorSource::Remote(id) => render_compact_remote(state, ui, &id),
+    };
     arm_click(state, resp)
 }
 
-/// Status-bar fallback (sidebar hidden): one compact, clickable line of colored
-/// chips — CPU, Memory, then one per GPU.
-pub(crate) fn render_status_monitor(state: &mut AppState, ui: &mut egui::Ui) -> egui::Response {
+/// Compact local bars: CPU, Memory, then one per real GPU.
+fn render_compact_local(state: &mut AppState, ui: &mut egui::Ui) -> egui::Response {
+    let cpu = state.ui.cpu_pct;
+    let mem = state.ui.mem_pct;
+    let rows = gpu_rows(state);
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 5.0;
+        gauge::utilization_row_inline(ui, "CPU", None, &pct_text(Some(cpu)), Some(cpu / 100.0));
+        gauge::utilization_row_inline(ui, "MEM", None, &pct_text(mem), mem.map(|m| m / 100.0));
+        for row in &rows {
+            gauge::utilization_row_inline(
+                ui,
+                &row.short,
+                Some(&row.name),
+                &pct_text(row.util),
+                row.util.map(|u| u / 100.0),
+            );
+        }
+    })
+    .response
+}
+
+/// Compact remote bars: one per GPU of the selected host, or a muted status line
+/// while waiting for the first sample / retrying after a transport error.
+fn render_compact_remote(state: &mut AppState, ui: &mut egui::Ui, host_id: &str) -> egui::Response {
+    let (rows, status) = remote_rows(state.ui.settings.remote_gpu_live.as_ref(), host_id);
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 5.0;
+        for row in &rows {
+            gauge::utilization_row_inline(
+                ui,
+                &row.short,
+                Some(&row.name),
+                &pct_text(row.util),
+                row.util.map(|u| u / 100.0),
+            );
+        }
+        if let Some(status) = status {
+            let pal = crate::frontend::theme::palette(ui);
+            ui.label(RichText::new(status).color(pal.text_tertiary));
+        }
+    })
+    .response
+}
+
+/// Status-bar fallback (sidebar hidden): the source dropdown followed by one
+/// compact, clickable line of colored chips. Local shows CPU, Memory, then one per
+/// GPU; a remote host shows one chip per GPU. The dropdown is kept here too so the
+/// source can still be switched (back to Local) when the sidebar is hidden.
+pub(crate) fn render_status_monitor(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+) -> egui::Response {
+    render_source_selector(state, ui, actions);
+    let resp = match state.ui.layout.monitor_source.clone() {
+        MonitorSource::Local => render_status_local(state, ui),
+        MonitorSource::Remote(id) => render_status_remote(state, ui, &id),
+    };
+    arm_click(state, resp)
+}
+
+/// Status-bar chips for the local machine: CPU, Memory, then one per real GPU.
+fn render_status_local(state: &mut AppState, ui: &mut egui::Ui) -> egui::Response {
     let pal = crate::frontend::theme::palette(ui);
     let cpu = state.ui.cpu_pct;
     let mem = state.ui.mem_pct;
     let rows = gpu_rows(state);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        status_chip(ui, &pal, "CPU", None, Some(cpu));
+        status_chip(ui, &pal, "MEM", None, mem);
+        for row in &rows {
+            status_chip(ui, &pal, &row.short, Some(&row.name), row.util);
+        }
+    })
+    .response
+}
 
-    let resp = ui
-        .horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 10.0;
-            status_chip(ui, &pal, "CPU", None, Some(cpu));
-            status_chip(ui, &pal, "MEM", None, mem);
-            for row in &rows {
-                status_chip(ui, &pal, &row.short, Some(&row.name), row.util);
-            }
-        })
-        .response;
-
-    arm_click(state, resp)
+/// Status-bar chips for a remote host: one per GPU, or a muted status line while
+/// waiting / retrying.
+fn render_status_remote(state: &mut AppState, ui: &mut egui::Ui, host_id: &str) -> egui::Response {
+    let pal = crate::frontend::theme::palette(ui);
+    let (rows, status) = remote_rows(state.ui.settings.remote_gpu_live.as_ref(), host_id);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        for row in &rows {
+            status_chip(ui, &pal, &row.short, Some(&row.name), row.util);
+        }
+        if let Some(status) = status {
+            ui.label(RichText::new(status).small().color(pal.text_tertiary));
+        }
+    })
+    .response
 }
 
 /// Detail popover: two-line utilization charts (CPU, Memory, then one per GPU)
@@ -176,6 +357,11 @@ pub(crate) fn render_monitor_popover(state: &mut AppState, ctx: &egui::Context) 
         return;
     };
 
+    let source = state.ui.layout.monitor_source.clone();
+    let (remote_rows_vec, remote_status) = match &source {
+        MonitorSource::Local => (Vec::new(), None),
+        MonitorSource::Remote(id) => remote_rows(state.ui.settings.remote_gpu_live.as_ref(), id),
+    };
     let cpu = state.ui.cpu_pct;
     let mem = state.ui.mem_pct;
     let rows = gpu_rows(state);
@@ -211,34 +397,60 @@ pub(crate) fn render_monitor_popover(state: &mut AppState, ctx: &egui::Context) 
                 .inner_margin(egui::Margin::symmetric(H_MARGIN, 12))
                 .show(ui, |ui| {
                     ui.set_width(content_width);
-                    gauge::utilization_chart(
-                        ui,
-                        "CPU",
-                        None,
-                        &format!("{cpu:.0}%"),
-                        cpu_hist,
-                        Some(cpu),
-                    );
-                    ui.add_space(14.0);
-                    gauge::utilization_chart(
-                        ui,
-                        "Memory",
-                        None,
-                        &memory_detail(mem, total_ram),
-                        mem_hist,
-                        mem,
-                    );
-                    for row in &rows {
-                        ui.add_space(14.0);
-                        let hist = gpu_hists.get(&row.bus_id).unwrap_or(&empty_hist);
-                        gauge::utilization_chart(
-                            ui,
-                            &row.short,
-                            Some(&row.name),
-                            &gpu_detail(row),
-                            hist,
-                            row.util,
-                        );
+                    match &source {
+                        MonitorSource::Local => {
+                            gauge::utilization_chart(
+                                ui,
+                                "CPU",
+                                None,
+                                &format!("{cpu:.0}%"),
+                                cpu_hist,
+                                Some(cpu),
+                            );
+                            ui.add_space(14.0);
+                            gauge::utilization_chart(
+                                ui,
+                                "Memory",
+                                None,
+                                &memory_detail(mem, total_ram),
+                                mem_hist,
+                                mem,
+                            );
+                            for row in &rows {
+                                ui.add_space(14.0);
+                                let hist = gpu_hists.get(&row.bus_id).unwrap_or(&empty_hist);
+                                gauge::utilization_chart(
+                                    ui,
+                                    &row.short,
+                                    Some(&row.name),
+                                    &gpu_detail(row),
+                                    hist,
+                                    row.util,
+                                );
+                            }
+                        }
+                        MonitorSource::Remote(_) => {
+                            for (i, row) in remote_rows_vec.iter().enumerate() {
+                                if i > 0 {
+                                    ui.add_space(14.0);
+                                }
+                                gauge::utilization_chart(
+                                    ui,
+                                    &row.short,
+                                    Some(&row.name),
+                                    &row.detail,
+                                    &row.history,
+                                    row.util,
+                                );
+                            }
+                            if let Some(status) = &remote_status {
+                                if !remote_rows_vec.is_empty() {
+                                    ui.add_space(14.0);
+                                }
+                                let pal = crate::frontend::theme::palette(ui);
+                                ui.label(RichText::new(status).color(pal.text_tertiary));
+                            }
+                        }
                     }
                 });
         });
@@ -339,6 +551,116 @@ mod tests {
             pci_bus_id: bus.into(),
             backend: String::new(),
         }
+    }
+
+    use crate::engines::remote::hardware::RemoteGpuStat;
+    use crate::frontend::state::RemoteGpuView;
+
+    fn stat(index: u32, name: &str, util: Option<f32>) -> RemoteGpuStat {
+        RemoteGpuStat {
+            index,
+            name: name.into(),
+            util_pct: util,
+            vram_used_mib: None,
+            vram_total_mib: None,
+            temp_c: None,
+            power_w: None,
+        }
+    }
+
+    fn view(stat: RemoteGpuStat) -> RemoteGpuView {
+        let mut history = VecDeque::new();
+        history.push_back(stat.util_pct);
+        RemoteGpuView {
+            index: stat.index,
+            name: stat.name.clone(),
+            latest: stat,
+            util_history: history,
+        }
+    }
+
+    fn remote_live(host_id: &str, views: Vec<RemoteGpuView>) -> RemoteGpuLive {
+        RemoteGpuLive {
+            host_id: host_id.into(),
+            gpus: views,
+            last_error: None,
+        }
+    }
+
+    #[test]
+    fn remote_rows_single_gpu_is_labelled_gpu() {
+        let live = remote_live("h", vec![view(stat(0, "RTX 3070 Ti", Some(42.0)))]);
+        let (rows, status) = remote_rows(Some(&live), "h");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].short, "GPU");
+        assert_eq!(rows[0].name, "RTX 3070 Ti");
+        assert_eq!(rows[0].util, Some(42.0));
+        assert!(status.is_none());
+    }
+
+    #[test]
+    fn remote_rows_multiple_gpus_are_indexed_by_position() {
+        let live = remote_live(
+            "h",
+            vec![view(stat(0, "A", Some(1.0))), view(stat(3, "B", Some(2.0)))],
+        );
+        let (rows, _) = remote_rows(Some(&live), "h");
+        assert_eq!(rows.len(), 2);
+        // Position-based labels, not the (possibly sparse) nvidia-smi index.
+        assert_eq!(rows[0].short, "GPU0");
+        assert_eq!(rows[1].short, "GPU1");
+    }
+
+    #[test]
+    fn remote_rows_empty_with_no_error_is_waiting() {
+        let live = remote_live("h", Vec::new());
+        let (rows, status) = remote_rows(Some(&live), "h");
+        assert!(rows.is_empty());
+        assert_eq!(status.as_deref(), Some(REMOTE_WAITING));
+    }
+
+    #[test]
+    fn remote_rows_with_error_shows_retry_status() {
+        let mut live = remote_live("h", vec![view(stat(0, "A", Some(5.0)))]);
+        live.last_error = Some("connection refused".into());
+        let (rows, status) = remote_rows(Some(&live), "h");
+        assert_eq!(
+            rows.len(),
+            1,
+            "last-known rows stay on screen while retrying"
+        );
+        assert_eq!(status.as_deref(), Some(REMOTE_RETRYING));
+    }
+
+    #[test]
+    fn remote_rows_host_mismatch_is_waiting() {
+        let live = remote_live("a", vec![view(stat(0, "A", Some(5.0)))]);
+        let (rows, status) = remote_rows(Some(&live), "b");
+        assert!(rows.is_empty());
+        assert_eq!(status.as_deref(), Some(REMOTE_WAITING));
+    }
+
+    #[test]
+    fn remote_rows_none_live_is_waiting() {
+        let (rows, status) = remote_rows(None, "h");
+        assert!(rows.is_empty());
+        assert_eq!(status.as_deref(), Some(REMOTE_WAITING));
+    }
+
+    #[test]
+    fn remote_rows_detail_includes_vram_temp_power() {
+        let mut s = stat(0, "A", Some(50.0));
+        s.vram_used_mib = Some(512);
+        s.vram_total_mib = Some(8192);
+        s.temp_c = Some(45);
+        s.power_w = Some(60.0);
+        let live = remote_live("h", vec![view(s)]);
+        let (rows, _) = remote_rows(Some(&live), "h");
+        let detail = &rows[0].detail;
+        assert!(detail.contains("50%"), "detail = {detail:?}");
+        assert!(detail.contains("512 / 8192 MiB"), "detail = {detail:?}");
+        assert!(detail.contains("45 °C"), "detail = {detail:?}");
+        assert!(detail.contains("60 W"), "detail = {detail:?}");
     }
 
     #[test]

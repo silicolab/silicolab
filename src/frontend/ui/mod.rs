@@ -240,7 +240,7 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
                 .corner_radius(bottom_corners)
                 .inner_margin(Margin::symmetric(10, 3)),
         )
-        .show_inside(ui, |ui| render_status_bar(state, ui));
+        .show_inside(ui, |ui| render_status_bar(state, ui, actions));
 
     if state.ui.layout.dock.is_visible(DockArea::Right) {
         let max_w = state

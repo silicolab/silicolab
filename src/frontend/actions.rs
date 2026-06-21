@@ -236,6 +236,10 @@ pub enum AppAction {
     /// Fetch the static hardware inventory (CPU/memory/GPU) of the host with this
     /// id over SSH, for the Hardware ▸ Remote settings panel (worker thread).
     FetchRemoteHardware(String),
+    /// Set which machine the sidebar system monitor shows (Local or a remote host).
+    /// Reconciles the live remote-GPU SSH sampler to match: starts it for a remote
+    /// host, stops it on Local or a host change. At most one sampler runs at a time.
+    SetMonitorSource(crate::frontend::state::MonitorSource),
     RunConsoleCommand(String),
     /// Send a message to the in-app assistant, kicking off an agent turn.
     SendAgentMessage(String),
