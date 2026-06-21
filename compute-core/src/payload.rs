@@ -329,6 +329,32 @@ pub mod structure_serde {
     }
 }
 
+/// The `Box<Structure>` counterpart of [`structure_serde`], for a boxed structure
+/// field — a docking receptor/ligand input, which is boxed to keep its enum small.
+pub mod structure_serde_boxed {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::{StructurePayload, payload_to_structure, structure_to_payload};
+    use crate::domain::Structure;
+
+    // serde's `with` adapter receives the field by reference, and the field's type
+    // is `Box<Structure>`; the reference derefs to `&Structure` at the call below.
+    #[allow(clippy::borrowed_box)]
+    pub fn serialize<S: Serializer>(
+        structure: &Box<Structure>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        structure_to_payload(structure).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Box<Structure>, D::Error> {
+        let payload = StructurePayload::deserialize(deserializer)?;
+        Ok(Box::new(payload_to_structure(payload)))
+    }
+}
+
 /// The `Option<Structure>` counterpart of [`structure_serde`], for fields like an
 /// optimization's optional optimized geometry.
 pub mod structure_serde_opt {

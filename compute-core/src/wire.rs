@@ -18,8 +18,10 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
+use crate::engines::docking::{DockingInput, DockingOutcome, DockingRequest};
 use crate::engines::qm::{QmJob, QmOutcome};
 use crate::engines::remote::launcher::{self, Liveness, RemoteExecution};
+use crate::workflows::docking::{DockingProgress, run_docking_calculation};
 use crate::workflows::qm::{QmCalculationProgress, run_qm_calculation};
 
 /// A complete engine job, independent of where it runs. `cores` travels with the
@@ -47,15 +49,26 @@ impl EngineRequest {
 
 /// The engine to run and its typed input. A new engine is a new variant here (with
 /// the matching [`EngineOutcome`] variant) — never a new transport.
+// The QM variant embeds a full inline `Structure`, so it dwarfs the others; this
+// envelope is built once per job and immediately serialized or moved, never held
+// in bulk, so boxing every variant would only add indirection to a cold path (and
+// break the nested `Engine::Qm(QmJob::Molecular(..))` matching the call sites use).
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Engine {
     Qm(QmJob),
+    Docking(DockingRequest),
 }
 
 /// The typed result of an [`EngineRequest`], discriminated to match [`Engine`].
+// Same rationale as [`Engine`]: the QM outcome carries an optional optimized
+// `Structure`, so it is far larger than the docking outcome; this is a per-job
+// value, not a bulk-stored one.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EngineOutcome {
     Qm(QmOutcome),
+    Docking(DockingOutcome),
 }
 
 /// Where a job runs.
@@ -334,9 +347,16 @@ fn forward_console(console: &str, forwarded: &mut usize, progress: &mut impl FnM
 /// front turns malformed remote input into a clear, immediate non-zero exit
 /// rather than a deeper engine error.
 fn validate_request(request: &EngineRequest) -> Result<()> {
-    let structure = match &request.engine {
-        Engine::Qm(QmJob::Molecular(req)) => &req.structure,
-        Engine::Qm(QmJob::Periodic(req)) => &req.structure,
+    match &request.engine {
+        Engine::Qm(job) => validate_qm_job(job),
+        Engine::Docking(docking) => validate_docking_request(docking),
+    }
+}
+
+fn validate_qm_job(job: &QmJob) -> Result<()> {
+    let structure = match job {
+        QmJob::Molecular(req) => &req.structure,
+        QmJob::Periodic(req) => &req.structure,
     };
     if structure.atoms.is_empty() {
         bail!("engine request carries no atoms");
@@ -351,7 +371,7 @@ fn validate_request(request: &EngineRequest) -> Result<()> {
     }
     // A periodic job carries a lattice; a non-finite component would corrupt the
     // reciprocal-space setup, so reject it up front the way atom coordinates are.
-    if let Engine::Qm(QmJob::Periodic(_)) = &request.engine
+    if let QmJob::Periodic(_) = job
         && let Some(cell) = &structure.cell
     {
         let lattice_finite = [cell.a, cell.b, cell.c, cell.alpha, cell.beta, cell.gamma]
@@ -363,6 +383,49 @@ fn validate_request(request: &EngineRequest) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Reject a docking payload before the search runs: an input with no atoms (or
+/// empty PDBQT), a non-finite coordinate, or a non-positive search box.
+fn validate_docking_request(request: &DockingRequest) -> Result<()> {
+    validate_docking_input(&request.receptor, "receptor")?;
+    validate_docking_input(&request.ligand, "ligand")?;
+    if !request.box_center.iter().all(|c| c.is_finite()) {
+        bail!("the docking search box center has a non-finite coordinate");
+    }
+    if !request
+        .box_size
+        .iter()
+        .all(|size| size.is_finite() && *size > 0.0)
+    {
+        bail!("the docking search box must have a positive, finite size on every axis");
+    }
+    Ok(())
+}
+
+fn validate_docking_input(input: &DockingInput, role: &str) -> Result<()> {
+    match input {
+        DockingInput::Pdbqt(text) => {
+            if text.trim().is_empty() {
+                bail!("the {role} PDBQT input is empty");
+            }
+            Ok(())
+        }
+        DockingInput::Structure(structure) => {
+            if structure.atoms.is_empty() {
+                bail!("the {role} structure has no atoms");
+            }
+            if let Some((index, _)) = structure
+                .atoms
+                .iter()
+                .enumerate()
+                .find(|(_, atom)| !atom.position.coords.iter().all(|c| c.is_finite()))
+            {
+                bail!("{role} atom {index} has a non-finite coordinate");
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Run an engine request in-process, reporting coarse stages through `progress`.
@@ -381,6 +444,14 @@ fn run_request(
                     progress(stage)
                 })?;
             Ok(EngineOutcome::Qm(result.outcome))
+        }
+        Engine::Docking(request) => {
+            // The docking engine is single-threaded (no rayon pool), so the
+            // requested core count does not size a thread pool here as it does for QM.
+            let result = run_docking_calculation(request, cancel, |DockingProgress { stage }| {
+                progress(stage)
+            })?;
+            Ok(EngineOutcome::Docking(result.outcome))
         }
     }
 }
@@ -554,7 +625,9 @@ mod tests {
             summary: "relaxed".to_string(),
         });
         let json = serde_json::to_vec(&outcome).unwrap();
-        let EngineOutcome::Qm(back) = serde_json::from_slice(&json).unwrap();
+        let EngineOutcome::Qm(back) = serde_json::from_slice(&json).unwrap() else {
+            panic!("expected a QM outcome");
+        };
         let relaxed = back
             .optimized_structure
             .expect("optimized structure survives the wire");
@@ -600,7 +673,9 @@ mod tests {
                 JobUpdate::Progress { .. } => {}
             }
         };
-        let EngineOutcome::Qm(outcome) = *outcome;
+        let EngineOutcome::Qm(outcome) = *outcome else {
+            panic!("expected a QM outcome");
+        };
         assert!(outcome.converged);
     }
 
@@ -612,7 +687,9 @@ mod tests {
         let local = loop {
             match in_process.updates().recv().expect("worker stays alive") {
                 JobUpdate::Finished(outcome) => {
-                    let EngineOutcome::Qm(outcome) = *outcome;
+                    let EngineOutcome::Qm(outcome) = *outcome else {
+                        panic!("expected a QM outcome");
+                    };
                     break outcome;
                 }
                 JobUpdate::Failed(error) => panic!("in-process job failed: {error}"),
@@ -632,7 +709,9 @@ mod tests {
         .unwrap();
         exec(&request_path, &outcome_path).expect("exec succeeds");
         let bytes = std::fs::read(&outcome_path).unwrap();
-        let EngineOutcome::Qm(via_exec) = serde_json::from_slice(&bytes).unwrap();
+        let EngineOutcome::Qm(via_exec) = serde_json::from_slice(&bytes).unwrap() else {
+            panic!("expected a QM outcome");
+        };
 
         assert!(via_exec.converged);
         assert!(
@@ -642,5 +721,111 @@ mod tests {
             via_exec.energy_hartree
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A small docking request whose receptor and ligand are butane skeletons,
+    /// prepared heuristically from structures (exercising the payload bridge on the
+    /// `DockingInput::Structure` variant). `ScoreOnly` keeps it a single, fast
+    /// evaluation.
+    fn butane_score_request() -> EngineRequest {
+        use crate::domain::{Bond, BondType};
+        use crate::engines::docking::{DockingConfig, DockingInput, DockingKind, DockingRequest};
+
+        let carbon = |x: f32, y: f32, z: f32| Atom {
+            element: "C".to_string(),
+            position: Point3::new(x, y, z),
+            charge: 0.0,
+        };
+        let skeleton = || {
+            Structure::with_bonds(
+                "butane",
+                vec![
+                    carbon(0.0, 0.0, 0.0),
+                    carbon(1.5, 0.0, 0.0),
+                    carbon(2.2, 1.3, 0.0),
+                    carbon(3.7, 1.3, 0.0),
+                ],
+                vec![
+                    Bond::with_type(0, 1, BondType::Single),
+                    Bond::with_type(1, 2, BondType::Single),
+                    Bond::with_type(2, 3, BondType::Single),
+                ],
+            )
+        };
+        EngineRequest::new(Engine::Docking(DockingRequest {
+            receptor: DockingInput::Structure(Box::new(skeleton())),
+            ligand: DockingInput::Structure(Box::new(skeleton())),
+            box_center: [1.8, 0.6, 0.0],
+            box_size: [20.0, 20.0, 20.0],
+            config: DockingConfig::default(),
+            kind: DockingKind::ScoreOnly,
+        }))
+    }
+
+    #[test]
+    fn docking_request_round_trips_through_the_payload_bridge() {
+        use crate::engines::docking::DockingInput;
+
+        let request = butane_score_request();
+        let json = serde_json::to_vec(&request).unwrap();
+        let back: EngineRequest = serde_json::from_slice(&json).unwrap();
+        match back.engine {
+            Engine::Docking(docking) => {
+                let DockingInput::Structure(receptor) = &docking.receptor else {
+                    panic!("expected a structure receptor");
+                };
+                assert_eq!(receptor.atoms.len(), 4);
+                assert_eq!(receptor.bonds.len(), 3);
+                assert_eq!(docking.box_size, [20.0, 20.0, 20.0]);
+            }
+            _ => panic!("expected a docking request"),
+        }
+    }
+
+    #[test]
+    fn docking_outcome_round_trips() {
+        let outcome = EngineOutcome::Docking(crate::engines::docking::DockingOutcome {
+            poses: vec![crate::engines::docking::DockedPose {
+                affinity: -5.5,
+                intermolecular: -6.0,
+                internal: 0.5,
+                torsional: 0.0,
+                structure: Structure::new(
+                    "pose 1",
+                    vec![Atom {
+                        element: "C".to_string(),
+                        position: Point3::new(0.0, 0.0, 0.0),
+                        charge: 0.0,
+                    }],
+                ),
+                pdbqt: "ATOM      1  C   LIG A   1       0.000   0.000   0.000\n".to_string(),
+            }],
+            notes: vec!["prepared heuristically".to_string()],
+            summary: "Score only:".to_string(),
+        });
+        let json = serde_json::to_vec(&outcome).unwrap();
+        let EngineOutcome::Docking(back) = serde_json::from_slice(&json).unwrap() else {
+            panic!("expected a docking outcome");
+        };
+        assert_eq!(back.poses.len(), 1);
+        assert!((back.poses[0].affinity + 5.5).abs() < 1e-9);
+        assert_eq!(back.poses[0].structure.atoms.len(), 1);
+    }
+
+    #[test]
+    fn in_process_docking_scores_a_pose() {
+        let running = run_job(butane_score_request(), Executor::InProcess);
+        let outcome = loop {
+            match running.updates().recv().expect("worker stays alive") {
+                JobUpdate::Finished(outcome) => break outcome,
+                JobUpdate::Failed(error) => panic!("in-process docking failed: {error}"),
+                JobUpdate::Progress { .. } => {}
+            }
+        };
+        let EngineOutcome::Docking(outcome) = *outcome else {
+            panic!("expected a docking outcome");
+        };
+        assert_eq!(outcome.poses.len(), 1);
+        assert!(outcome.poses[0].affinity.is_finite());
     }
 }

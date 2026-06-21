@@ -1007,10 +1007,12 @@ pub fn spawn_qm_job(job: QmJob, threads: Option<usize>) -> RunningQmJob {
         while let Ok(update) = running.updates().recv() {
             let message = match update {
                 JobUpdate::Progress { stage } => QmWorkerMessage::Progress { stage },
-                JobUpdate::Finished(outcome) => {
-                    let EngineOutcome::Qm(outcome) = *outcome;
-                    QmWorkerMessage::Finished(Box::new(outcome))
-                }
+                JobUpdate::Finished(outcome) => match *outcome {
+                    EngineOutcome::Qm(outcome) => QmWorkerMessage::Finished(Box::new(outcome)),
+                    // This relay only ever drives a QM request, so a non-QM outcome
+                    // is an internal contract break rather than a user-facing error.
+                    _ => QmWorkerMessage::Failed("QM job returned a non-QM outcome".to_string()),
+                },
                 JobUpdate::Failed(error) => QmWorkerMessage::Failed(error),
             };
             if sender.send(message).is_err() {

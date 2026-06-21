@@ -257,7 +257,7 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
     // judged here against this machine's RAM; a REMOTE job defers to the off-thread
     // submit, which probes the host and judges against ITS RAM (this machine's
     // budget would be the wrong yardstick), so it is not pre-flighted on this path.
-    if !prompt.periodic && resolve_qm_remote_host(state).is_none() {
+    if !prompt.periodic && resolve_remote_compute_host(state).is_none() {
         let request = prompt.to_request(state.structure().clone());
         let verdict = memory_verdict(&request, crate::backend::hardware::qm_incore_budget_bytes());
         if let Some(notification) = qm_memory_notification(&verdict, "this machine") {
@@ -266,7 +266,7 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
         }
     }
     let job = prompt.to_job(state.structure().clone());
-    let remote_host = resolve_qm_remote_host(state);
+    let remote_host = resolve_remote_compute_host(state);
     state.set_source_path(None);
     state.ui.editor = None;
     state.ui.pending_qm = None;
@@ -292,10 +292,13 @@ fn qm_thread_count(state: &AppState) -> usize {
         .clamp(1, crate::backend::hardware::info().logical_cores)
 }
 
-/// The remote host a QM job should run on, or `None` for local. Resolves the
-/// app-wide compute target leniently: a dangling host id falls back to local,
-/// mirroring the MD path's `resolve_md_compute`.
-fn resolve_qm_remote_host(state: &AppState) -> Option<crate::backend::config::RemoteHost> {
+/// The remote host a built-in compute job should run on, or `None` for local.
+/// Resolves the app-wide compute target leniently: a dangling host id falls back
+/// to local, mirroring the MD path's `resolve_md_compute`. Shared by the QM and
+/// docking routers.
+pub(crate) fn resolve_remote_compute_host(
+    state: &AppState,
+) -> Option<crate::backend::config::RemoteHost> {
     use crate::backend::config::ComputeTarget;
     match &state.config.default_compute_target {
         ComputeTarget::Local => None,
@@ -310,7 +313,7 @@ fn resolve_qm_remote_host(state: &AppState) -> Option<crate::backend::config::Re
 /// submit re-probes and re-checks against the real host before launch regardless.
 fn qm_incore_budget_and_location(state: &AppState) -> (u64, String) {
     use crate::backend::hardware::{qm_incore_budget_bytes, qm_incore_budget_for};
-    if let Some(host) = resolve_qm_remote_host(state)
+    if let Some(host) = resolve_remote_compute_host(state)
         && let Some(ram) = state
             .ui
             .settings
@@ -323,62 +326,25 @@ fn qm_incore_budget_and_location(state: &AppState) -> (u64, String) {
     (qm_incore_budget_bytes(), "this machine".to_string())
 }
 
-/// Launch a detached remote QM job: ensure the worker is deployed, stage the
-/// bundle, and submit — all off the UI thread. The durable handle is recorded in
-/// the registry when the submission returns; status is tracked via the opt-in
-/// refresh, so the run survives an app restart.
+/// Launch a detached remote QM job on `host`. Resolves the core count
+/// (per-job override → per-host default → app-wide; clamped to the host's probed
+/// inventory off-thread) and hands off to [`start_remote_engine`].
 fn start_remote_qm(
     state: &mut AppState,
     job: crate::engines::qm::QmJob,
     host: crate::backend::config::RemoteHost,
 ) {
-    let Some(task_run_id) = state.active_task_run else {
-        state.set_message("no active task to run remotely".to_string());
-        return;
-    };
-    let Some(task) = state.tasks.task_run(task_run_id).cloned() else {
-        return;
-    };
-    if let Err(error) = crate::engines::remote::ensure_ssh_available() {
-        state.set_message(format!("remote QM unavailable: {error}"));
-        complete_active_qm_task(state, TaskStatus::Failed);
-        return;
-    }
-    let local_run_dir = match ensure_active_task_run_dir(state, task.kind, None) {
-        Ok(dir) => dir,
-        Err(error) => {
-            state.set_message(format!("could not create run directory: {error}"));
-            complete_active_qm_task(state, TaskStatus::Failed);
-            return;
-        }
-    };
-    let project_root = state
-        .workspace
-        .project()
-        .map(|project| project.root.to_string_lossy().to_string());
-    // Per-job override → per-host default → app-wide count; the off-thread submit
-    // then clamps this to the remote host's probed CPU inventory before staging.
     let requested_cores = crate::frontend::remote_jobs::resolve_requested_cores(
         None,
         &host,
         state.config.compute_core_count,
     );
-    let handle = crate::frontend::remote_jobs::spawn_remote_submit(
-        host.clone(),
+    start_remote_engine(
+        state,
+        host,
         crate::wire::Engine::Qm(job),
         Some(requested_cores),
-        task.run_uuid.clone(),
-        Some(task_run_id),
-        task.controller_id.to_string(),
-        project_root,
-        local_run_dir,
     );
-    state.jobs.remote_submit = Some(handle);
-    mark_task_status(state, task_run_id, TaskStatus::Running);
-    state.set_message(format!(
-        "Deploying & submitting QM to {} (use Refresh Remote to track it)…",
-        host.label
-    ));
 }
 
 pub(crate) fn cancel_pending_qm_request(state: &mut AppState) {

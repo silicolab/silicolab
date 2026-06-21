@@ -130,6 +130,7 @@ fn engine_id_token(engine: &crate::wire::Engine) -> &'static str {
     use crate::engines::registry::EngineId;
     match engine {
         crate::wire::Engine::Qm(_) => EngineId::HARTREE.as_str(),
+        crate::wire::Engine::Docking(_) => EngineId::DOCKING.as_str(),
     }
 }
 
@@ -490,8 +491,142 @@ mod tests {
             }
         };
 
-        let crate::wire::EngineOutcome::Qm(outcome) = outcome;
+        let crate::wire::EngineOutcome::Qm(outcome) = outcome else {
+            panic!("expected a QM outcome");
+        };
         let _ = std::fs::remove_dir_all(&local_run_dir);
         assert!(outcome.converged, "remote QM did not converge");
+    }
+
+    /// The detached docking path against a real SSH host, mirroring the QM E2E
+    /// above: submit a `ScoreOnly` job (one fast evaluation), refresh until it
+    /// finishes, and assert a pose came back through the payload bridge. `#[ignore]`
+    /// for the same reason — it needs a host with a pre-placed worker. Run with:
+    ///
+    /// ```text
+    /// SILICOLAB_TEST_SSH_HOST=<ip> SILICOLAB_TEST_SSH_USER=<user> \
+    /// cargo test -p silicolab --lib -- --ignored remote_docking_submit_then_refresh
+    /// ```
+    #[test]
+    #[ignore = "requires an SSH host with a pre-placed worker (set SILICOLAB_TEST_SSH_HOST)"]
+    fn remote_docking_submit_then_refresh_against_ssh_host() {
+        use crate::backend::config::RemoteHost;
+        use crate::backend::storage::jobs::{RemoteJob, RemoteJobStatus};
+        use crate::domain::{Atom, Bond, BondType, Structure};
+        use crate::engines::docking::{DockingConfig, DockingInput, DockingKind, DockingRequest};
+        use crate::engines::remote::deploy::WORKER_VERSION_KEY;
+        use nalgebra::Point3;
+        use std::time::Duration;
+
+        let Ok(hostname) = std::env::var("SILICOLAB_TEST_SSH_HOST") else {
+            eprintln!("skip: set SILICOLAB_TEST_SSH_HOST to run the remote docking test");
+            return;
+        };
+        let username =
+            std::env::var("SILICOLAB_TEST_SSH_USER").unwrap_or_else(|_| "root".to_string());
+
+        let mut engine_versions = std::collections::HashMap::new();
+        engine_versions.insert(
+            WORKER_VERSION_KEY.to_string(),
+            env!("CARGO_PKG_VERSION").to_string(),
+        );
+        let host = RemoteHost {
+            id: "wsl".to_string(),
+            label: "WSL".to_string(),
+            hostname,
+            username,
+            port: 22,
+            work_root: "~/.silicolab".to_string(),
+            prelude: Vec::new(),
+            engines: Default::default(),
+            engine_versions,
+            resources: Default::default(),
+        };
+
+        let carbon = |x: f32, y: f32, z: f32| Atom {
+            element: "C".to_string(),
+            position: Point3::new(x, y, z),
+            charge: 0.0,
+        };
+        let skeleton = || {
+            Structure::with_bonds(
+                "butane",
+                vec![
+                    carbon(0.0, 0.0, 0.0),
+                    carbon(1.5, 0.0, 0.0),
+                    carbon(2.2, 1.3, 0.0),
+                    carbon(3.7, 1.3, 0.0),
+                ],
+                vec![
+                    Bond::with_type(0, 1, BondType::Single),
+                    Bond::with_type(1, 2, BondType::Single),
+                    Bond::with_type(2, 3, BondType::Single),
+                ],
+            )
+        };
+        let request = DockingRequest {
+            receptor: DockingInput::Structure(Box::new(skeleton())),
+            ligand: DockingInput::Structure(Box::new(skeleton())),
+            box_center: [1.8, 0.6, 0.0],
+            box_size: [20.0, 20.0, 20.0],
+            config: DockingConfig::default(),
+            kind: DockingKind::ScoreOnly,
+        };
+
+        let run_uuid = uuid::Uuid::new_v4().to_string();
+        let local_run_dir = std::env::temp_dir().join(format!("sl-frontend-dock-{run_uuid}"));
+        let submit = spawn_remote_submit(
+            host.clone(),
+            crate::wire::Engine::Docking(request),
+            None,
+            run_uuid.clone(),
+            None,
+            "dock".to_string(),
+            None,
+            local_run_dir.clone(),
+        );
+        let submitted = match submit.receiver.recv().expect("submit worker stays alive") {
+            RemoteSubmitOutcome::Submitted(submitted) => *submitted,
+            RemoteSubmitOutcome::Failed(error) => panic!("remote docking submit failed: {error}"),
+        };
+
+        let row = RemoteJob {
+            run_uuid: submitted.run_uuid,
+            host_id: submitted.host_id,
+            host_label: submitted.host_label,
+            remote_dir: submitted.remote_dir,
+            scheduler: submitted.scheduler,
+            launch_handle: submitted.launch_handle,
+            engine_id: submitted.engine_id,
+            job_kind: submitted.job_kind,
+            project_root: submitted.project_root,
+            local_run_dir: submitted.local_run_dir.to_string_lossy().to_string(),
+            status: RemoteJobStatus::Running,
+            submitted_at_ms: 0,
+            last_polled_at_ms: None,
+            exit_code: None,
+        };
+
+        let outcome = loop {
+            let refresh = spawn_remote_jobs_refresh(vec![(row.clone(), host.clone())]);
+            let mut updates = refresh.receiver.recv().expect("refresh worker stays alive");
+            match updates.pop().expect("one update per job").outcome {
+                RemoteJobOutcome::Done(outcome) => break *outcome,
+                RemoteJobOutcome::Running => std::thread::sleep(Duration::from_millis(500)),
+                RemoteJobOutcome::FailedExit(code) => panic!("remote job exited {code}"),
+                RemoteJobOutcome::Lost => panic!("remote job was lost"),
+                RemoteJobOutcome::OutcomeUnreadable(error) => {
+                    panic!("outcome unreadable: {error}")
+                }
+                RemoteJobOutcome::ProbeError(error) => panic!("probe error: {error}"),
+            }
+        };
+
+        let crate::wire::EngineOutcome::Docking(outcome) = outcome else {
+            panic!("expected a docking outcome");
+        };
+        let _ = std::fs::remove_dir_all(&local_run_dir);
+        assert_eq!(outcome.poses.len(), 1, "ScoreOnly returns one pose");
+        assert!(outcome.poses[0].affinity.is_finite());
     }
 }

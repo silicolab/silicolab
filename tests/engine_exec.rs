@@ -30,7 +30,9 @@ fn in_process_energy(request: EngineRequest) -> f64 {
     loop {
         match running.updates().recv().expect("worker stays alive") {
             JobUpdate::Finished(outcome) => {
-                let EngineOutcome::Qm(outcome) = *outcome;
+                let EngineOutcome::Qm(outcome) = *outcome else {
+                    panic!("expected a QM outcome");
+                };
                 return outcome.energy_hartree;
             }
             JobUpdate::Failed(error) => panic!("in-process job failed: {error}"),
@@ -60,7 +62,9 @@ fn exec_subcommand_matches_in_process_within_tolerance() {
     assert!(status.success(), "exec subcommand exited with {status}");
 
     let bytes = std::fs::read(&outcome_path).expect("read outcome");
-    let EngineOutcome::Qm(outcome) = serde_json::from_slice(&bytes).expect("parse outcome");
+    let EngineOutcome::Qm(outcome) = serde_json::from_slice(&bytes).expect("parse outcome") else {
+        panic!("expected a QM outcome");
+    };
     assert!(outcome.converged, "exec outcome did not converge");
     assert!(
         (expected - outcome.energy_hartree).abs() < 1e-6,

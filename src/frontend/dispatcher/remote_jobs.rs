@@ -32,6 +32,75 @@ pub(crate) fn reload_remote_jobs(state: &mut AppState) {
     state.ui.remote_jobs = rows;
 }
 
+/// Launch a detached remote job for any built-in engine: verify SSH, create the
+/// run directory, and submit — all off the UI thread. The durable handle is
+/// recorded in the registry when the submission returns; status is tracked via the
+/// opt-in refresh, so the run survives an app restart. The engine and its optional
+/// core count ride in the request, so QM and docking share this one path.
+pub(crate) fn start_remote_engine(
+    state: &mut AppState,
+    host: crate::backend::config::RemoteHost,
+    engine: crate::wire::Engine,
+    cores: Option<usize>,
+) {
+    let Some(task_run_id) = state.active_task_run else {
+        state.set_message("no active task to run remotely".to_string());
+        return;
+    };
+    let Some(task) = state.tasks.task_run(task_run_id).cloned() else {
+        return;
+    };
+    let engine_name = remote_engine_name(&engine);
+    if let Err(error) = crate::engines::remote::ensure_ssh_available() {
+        state.set_message(format!("remote {engine_name} unavailable: {error}"));
+        fail_active_task(state, task_run_id);
+        return;
+    }
+    let local_run_dir = match ensure_active_task_run_dir(state, task.kind, None) {
+        Ok(dir) => dir,
+        Err(error) => {
+            state.set_message(format!("could not create run directory: {error}"));
+            fail_active_task(state, task_run_id);
+            return;
+        }
+    };
+    let project_root = state
+        .workspace
+        .project()
+        .map(|project| project.root.to_string_lossy().to_string());
+    let handle = crate::frontend::remote_jobs::spawn_remote_submit(
+        host.clone(),
+        engine,
+        cores,
+        task.run_uuid.clone(),
+        Some(task_run_id),
+        task.controller_id.to_string(),
+        project_root,
+        local_run_dir,
+    );
+    state.jobs.remote_submit = Some(handle);
+    mark_task_status(state, task_run_id, TaskStatus::Running);
+    state.set_message(format!(
+        "Deploying & submitting {engine_name} to {} (use Refresh Remote to track it)…",
+        host.label
+    ));
+}
+
+/// Mark the active task failed and clear it — the engine-agnostic failure path for
+/// a remote submission that never started.
+fn fail_active_task(state: &mut AppState, task_run_id: u64) {
+    mark_task_status(state, task_run_id, TaskStatus::Failed);
+    state.active_task_run = None;
+}
+
+/// Short label for a wire engine, used in remote-submission status messages.
+fn remote_engine_name(engine: &crate::wire::Engine) -> &'static str {
+    match engine {
+        crate::wire::Engine::Qm(_) => "QM",
+        crate::wire::Engine::Docking(_) => "docking",
+    }
+}
+
 /// Drain a finished detached-remote submission (any engine): record the durable
 /// row in `jobs.db`, persist the deployed worker version on the host (so the next
 /// run skips redeploy), and mark the task running or failed.
@@ -240,6 +309,9 @@ fn apply_remote_outcome(
 ) {
     match outcome {
         crate::wire::EngineOutcome::Qm(qm) => apply_remote_qm_outcome(state, row, qm),
+        crate::wire::EngineOutcome::Docking(docking) => {
+            apply_remote_docking_outcome(state, row, docking)
+        }
     }
 }
 

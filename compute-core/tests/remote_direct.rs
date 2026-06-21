@@ -72,7 +72,9 @@ fn direct_remote_qm_matches_in_process_within_tolerance() {
         .unwrap_or_else(|_| "~/.silicolab/bin/silicolab-compute".to_string());
 
     // Baseline: the same job in-process.
-    let EngineOutcome::Qm(local) = drain(run_job(h2_single_point(), Executor::InProcess));
+    let EngineOutcome::Qm(local) = drain(run_job(h2_single_point(), Executor::InProcess)) else {
+        panic!("expected a QM outcome");
+    };
     assert!(local.converged, "in-process baseline did not converge");
 
     let host = RemoteHost {
@@ -100,7 +102,9 @@ fn direct_remote_qm_matches_in_process_within_tolerance() {
     let EngineOutcome::Qm(remote) = drain(run_job(
         h2_single_point(),
         Executor::Remote(Box::new(execution)),
-    ));
+    )) else {
+        panic!("expected a QM outcome");
+    };
     let _ = std::fs::remove_dir_all(&working_dir);
 
     assert!(remote.converged, "remote run did not converge");
