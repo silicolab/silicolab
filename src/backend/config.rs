@@ -12,6 +12,9 @@ use serde::{Deserialize, Serialize};
 use crate::backend::representation::RepresentationPrefs;
 use crate::engines::registry::EngineLaunch;
 
+use compute_core::hosts::home_dir;
+pub use compute_core::hosts::{RemoteHost, config_dir};
+
 /// How the interface picks its light/dark appearance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ThemeMode {
@@ -130,44 +133,6 @@ pub enum ComputeTarget {
     Remote(String),
 }
 
-/// A remote host SilicoLab can submit external-engine jobs to over SSH. Stored in
-/// [`AppConfig::remote_hosts`] keyed by [`RemoteHost::id`]. Connection is key-based
-/// only — no passwords are ever serialized here.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RemoteHost {
-    /// Stable, opaque identifier ([`ComputeTarget::Remote`] references this). Never
-    /// shown to the user; survives label/hostname edits.
-    pub id: String,
-    /// Human-facing name shown in the target picker and settings.
-    pub label: String,
-    /// Hostname or IP the OS `ssh` client connects to.
-    pub hostname: String,
-    pub username: String,
-    #[serde(default = "default_ssh_port")]
-    pub port: u16,
-    /// Remote root under which per-run scratch dirs (`<work_root>/runs/<uuid>`) are
-    /// created. Defaults to `~/.silicolab`; `$HOME` is expanded by the remote shell.
-    #[serde(default = "default_work_root")]
-    pub work_root: String,
-    /// Shell lines run on the remote *before* the engine, joined with `&&`. A
-    /// non-interactive SSH shell does not source the login environment, so this is
-    /// where `module load gromacs` / `source /opt/gromacs/bin/GMXRC` /
-    /// `conda activate …` belong. Empty for a host where `gmx` is already on the
-    /// non-interactive PATH.
-    #[serde(default)]
-    pub prelude: Vec<String>,
-    /// Per-engine launch on this host, keyed by [`crate::engines::registry::EngineId`]
-    /// string. `program` is the remote path to the engine; `command_prefix` is
-    /// normally empty (the remote shell, not a local launcher, runs it).
-    #[serde(default)]
-    pub engines: HashMap<String, EngineLaunch>,
-    /// Cached `<engine> --version` strings, keyed by engine id. Filled by the
-    /// settings "Detect" action so the panel shows versions without re-probing over
-    /// SSH on every open.
-    #[serde(default)]
-    pub engine_versions: HashMap<String, String>,
-}
-
 /// Settings for the in-app LLM assistant. Holds only non-secret selection: the
 /// provider id, model, effort, and an optional `base_url` override for
 /// OpenAI-compatible providers. **The API key is never stored here** — it is read
@@ -212,14 +177,6 @@ impl Default for AssistantConfig {
             effort_override: None,
         }
     }
-}
-
-fn default_ssh_port() -> u16 {
-    22
-}
-
-fn default_work_root() -> String {
-    "~/.silicolab".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -446,10 +403,6 @@ pub struct RecentProject {
     pub last_accessed: u64,
 }
 
-pub fn config_dir() -> PathBuf {
-    home_dir().join(".silicolab")
-}
-
 pub fn settings_path() -> PathBuf {
     config_dir().join("settings.json")
 }
@@ -579,13 +532,6 @@ fn save_recent_projects_to(path: &Path, projects: &[RecentProject]) -> Result<()
     }
     let source = serde_json::to_string_pretty(projects)?;
     fs::write(path, source).with_context(|| format!("failed to write {}", path.display()))
-}
-
-fn home_dir() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .or_else(|| std::env::var_os("HOME"))
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 pub fn current_timestamp() -> u64 {

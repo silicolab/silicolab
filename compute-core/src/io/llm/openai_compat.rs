@@ -398,7 +398,7 @@ fn classify_status(status: u16, body: &str, retry_after: Option<Duration>) -> Ll
     }
 }
 
-pub(crate) fn extract_error_message(body: &str) -> String {
+pub fn extract_error_message(body: &str) -> String {
     serde_json::from_str::<Value>(body)
         .ok()
         .and_then(|json| {
@@ -429,7 +429,7 @@ fn truncate(text: &str, max: usize) -> String {
 /// that and point at the Base URL rather than surfacing a raw parser offset like
 /// "expected value at line 1 column 1". Shared with the live model-list fetch
 /// (`frontend::jobs`), which hits the same wrong-Base-URL failure.
-pub(crate) fn non_json_response_message(body: &str) -> String {
+pub fn non_json_response_message(body: &str) -> String {
     let trimmed = body.trim_start();
     if trimmed.is_empty() {
         "the endpoint returned an empty response, not JSON — check the Base URL".to_string()

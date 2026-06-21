@@ -857,6 +857,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "compute-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "docking",
+ "hartree",
+ "nalgebra 0.35.0",
+ "rayon",
+ "sdfrust",
+ "self_update",
+ "serde",
+ "serde_json",
+ "ureq",
+ "uuid",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5312,7 +5329,7 @@ dependencies = [
  "anyhow",
  "bytemuck",
  "clap",
- "docking",
+ "compute-core",
  "eframe",
  "egui-phosphor",
  "egui_commonmark",
@@ -5326,11 +5343,8 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "pollster",
  "raw-window-handle",
- "rayon",
  "rfd",
  "rusqlite",
- "sdfrust",
- "self_update",
  "serde",
  "serde_json",
  "sysinfo",

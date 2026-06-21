@@ -2,6 +2,7 @@ use super::*;
 
 use hartree::composite::composite;
 use hartree::props::thermo::QRRHO_W0_DEFAULT_CM1;
+use serde::{Deserialize, Serialize};
 
 use crate::domain::Structure;
 
@@ -20,7 +21,7 @@ pub(crate) const AU_DIPOLE_TO_DEBYE: f64 = 2.541_746_473;
 /// [`QmMethod::Composite`] additionally covers hartree's "3c" composites
 /// (r2scan-3c, b3lyp-3c, b97-3c, pbeh-3c), which bundle a functional, an implied
 /// basis, dispersion, and short-range corrections under one keyword.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QmMethod {
     /// Hartree–Fock; picks RHF or UHF from the spin multiplicity.
     Hf,
@@ -173,7 +174,7 @@ pub const QM_BASIS_SETS: &[&str] = &[
 ];
 
 /// A `-d3`/`-d4` dispersion correction added on top of an SCF-level method.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QmDispersion {
     /// Grimme D3 with Becke–Johnson damping.
     D3Bj,
@@ -192,7 +193,7 @@ impl QmDispersion {
 
 /// Which SCF integral backend to use. `InCore` stores the full ERI tensor (the
 /// default; required for properties, frequencies, optimization, and post-HF).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum QmScfBackend {
     /// Conventional in-core SCF (stores the nao⁴ ERI tensor).
     #[default]
@@ -221,7 +222,7 @@ impl QmScfBackend {
 /// An implicit-solvation model. The continuum models (`Cpcm`, `Smd`) enter the
 /// SCF; `Alpb`/`Gbsa` are post-SCF corrections on the converged Mulliken
 /// charges. At most one applies to a calculation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum QmSolvation {
     /// C-PCM electrostatics: a named solvent (resolved to its dielectric) or an
     /// explicit dielectric constant ε.
@@ -235,7 +236,7 @@ pub enum QmSolvation {
 }
 
 /// How a C-PCM run fixes its dielectric constant.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum CpcmDielectric {
     /// A named solvent (e.g. `water`), resolved to ε from hartree's table.
     Named(String),
@@ -246,7 +247,7 @@ pub enum CpcmDielectric {
 /// Advanced options for a [`QmRequest`], mirroring `hartree::JobOptions`. Every
 /// field defaults to hartree's own default, so `QmOptions::default()` reproduces a
 /// plain SCF single point.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QmOptions {
     /// Also compute dipole moment, Mulliken/Löwdin charges, and Mayer bond
     /// orders after the SCF.
@@ -300,7 +301,7 @@ impl Default for QmOptions {
 }
 
 /// Which calculation to run.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QmKind {
     /// Energy at the current geometry. Does not move atoms.
     SinglePoint,
@@ -322,8 +323,9 @@ impl QmKind {
 }
 
 /// A request to run a quantum-chemistry calculation on `structure`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QmRequest {
+    #[serde(with = "crate::payload::structure_serde")]
     pub structure: Structure,
     pub method: QmMethod,
     /// Basis-set name (e.g. `sto-3g`, `6-31g`, `cc-pvdz`, `def2-svp`). Ignored
@@ -342,7 +344,7 @@ pub struct QmRequest {
 /// one. Both produce a [`QmOutcome`], so the worker thread, the workflow entry
 /// point, and the result-polling UI handle the two uniformly — only the input
 /// form differs. Built by the panel/console; run by [`crate::workflows::qm`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum QmJob {
     /// A molecular (non-periodic) HF/DFT/post-HF calculation.
     Molecular(QmRequest),
@@ -356,11 +358,12 @@ pub enum QmJob {
 /// optimized geometry); everything hartree reports — properties, frequencies,
 /// thermochemistry, dispersion/solvation breakdowns, diagnostics, and the
 /// method-quality warnings — is folded into the formatted [`Self::summary`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct QmOutcome {
     pub energy_hartree: f64,
     pub converged: bool,
     /// Present only for [`QmKind::Optimize`]: the relaxed structure (Å).
+    #[serde(with = "crate::payload::structure_serde_opt")]
     pub optimized_structure: Option<Structure>,
     /// Pre-formatted, human-readable report of every result.
     pub summary: String,

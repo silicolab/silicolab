@@ -32,6 +32,7 @@ use hartree::{
     Molecule, PeriodicFunctional as HartreePeriodicFunctional, PeriodicJob, run_periodic,
 };
 use nalgebra::Vector3;
+use serde::{Deserialize, Serialize};
 
 use super::{BOHR_TO_ANGSTROM, HARTREE_TO_EV, QmOutcome, ensure_known_elements};
 use crate::domain::Structure;
@@ -44,7 +45,7 @@ const ANGSTROM_TO_BOHR: f64 = 1.0 / BOHR_TO_ANGSTROM;
 /// LDA-level exchange–correlation functional for the periodic GPW path. hartree
 /// 0.1's periodic SCF supports only these two; richer functionals remain a
 /// molecular-only feature.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum PeriodicFunctional {
     /// GTH-PADE LDA (the Goedecker–Teter–Hutter PADE parametrization), matched
     /// to the GTH-PADE pseudopotentials and basis. The robust default.
@@ -86,7 +87,7 @@ impl PeriodicFunctional {
 
 /// A Monkhorst–Pack k-point mesh given by its divisions along the three
 /// reciprocal axes. `[1, 1, 1]` means the single Γ point.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct KMesh {
     pub divisions: [u32; 3],
 }
@@ -133,8 +134,9 @@ impl KMesh {
 
 /// A request to run a periodic quantum-chemistry calculation on `structure`,
 /// which must carry a real unit cell.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PeriodicQmRequest {
+    #[serde(with = "crate::payload::structure_serde")]
     pub structure: Structure,
     pub functional: PeriodicFunctional,
     /// GTH basis-set name (e.g. `SZV-GTH`, `DZVP-GTH`). hartree validates it
