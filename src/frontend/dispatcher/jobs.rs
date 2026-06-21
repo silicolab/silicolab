@@ -209,7 +209,7 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     poll_remote_hardware(state, ctx);
     poll_remote_gpu_monitor(state, ctx);
     ensure_remote_jobs_loaded(state);
-    poll_remote_qm_submit(state, ctx);
+    poll_remote_submit(state, ctx);
     poll_remote_jobs_refresh(state, ctx);
     crate::frontend::agent::poll_agent_turn(state, ctx);
     crate::frontend::agent::poll_agent_heavy(state, ctx);

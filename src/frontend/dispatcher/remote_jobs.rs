@@ -32,17 +32,17 @@ pub(crate) fn reload_remote_jobs(state: &mut AppState) {
     state.ui.remote_jobs = rows;
 }
 
-/// Drain a finished detached-remote-QM submission: record the durable row in
-/// `jobs.db`, persist the deployed worker version on the host (so the next run
-/// skips redeploy), and mark the task running or failed.
-pub(crate) fn poll_remote_qm_submit(state: &mut AppState, ctx: &egui::Context) {
-    use crate::frontend::remote_jobs::RemoteQmSubmitOutcome;
-    let Some(submit) = state.jobs.remote_qm_submit.take() else {
+/// Drain a finished detached-remote submission (any engine): record the durable
+/// row in `jobs.db`, persist the deployed worker version on the host (so the next
+/// run skips redeploy), and mark the task running or failed.
+pub(crate) fn poll_remote_submit(state: &mut AppState, ctx: &egui::Context) {
+    use crate::frontend::remote_jobs::RemoteSubmitOutcome;
+    let Some(submit) = state.jobs.remote_submit.take() else {
         return;
     };
     match submit.receiver.try_recv() {
-        Ok(RemoteQmSubmitOutcome::Submitted(submitted)) => {
-            let crate::frontend::remote_jobs::RemoteQmSubmitted {
+        Ok(RemoteSubmitOutcome::Submitted(submitted)) => {
+            let crate::frontend::remote_jobs::RemoteSubmitted {
                 run_uuid,
                 host_id,
                 host_label,
@@ -89,24 +89,24 @@ pub(crate) fn poll_remote_qm_submit(state: &mut AppState, ctx: &egui::Context) {
             }
             reload_remote_jobs(state);
             state.set_message(format!(
-                "Submitted QM to {host_label}; use Refresh Remote to check status"
+                "Submitted to {host_label}; use Refresh Remote to check status"
             ));
         }
-        Ok(RemoteQmSubmitOutcome::Failed(error)) => {
+        Ok(RemoteSubmitOutcome::Failed(error)) => {
             if let Some(task_run_id) = submit.task_run_id {
                 mark_task_status(state, task_run_id, TaskStatus::Failed);
             }
-            state.set_message(format!("Remote QM submission failed: {error}"));
+            state.set_message(format!("Remote submission failed: {error}"));
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {
-            state.jobs.remote_qm_submit = Some(submit);
+            state.jobs.remote_submit = Some(submit);
             ctx.request_repaint_after(Duration::from_millis(400));
         }
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
             if let Some(task_run_id) = submit.task_run_id {
                 mark_task_status(state, task_run_id, TaskStatus::Failed);
             }
-            state.set_message("Remote QM submission worker stopped unexpectedly".to_string());
+            state.set_message("Remote submission worker stopped unexpectedly".to_string());
         }
     }
 }
@@ -186,7 +186,7 @@ pub(crate) fn poll_remote_jobs_refresh(state: &mut AppState, ctx: &egui::Context
                 match update.outcome {
                     RemoteJobOutcome::Done(outcome) => {
                         if let Some(row) = row {
-                            apply_remote_qm_outcome(state, &row, *outcome);
+                            apply_remote_outcome(state, &row, *outcome);
                         }
                     }
                     RemoteJobOutcome::FailedExit(code) => {
@@ -230,15 +230,27 @@ pub(crate) fn poll_remote_jobs_refresh(state: &mut AppState, ctx: &egui::Context
     }
 }
 
+/// Apply a retrieved remote outcome to the open project, dispatched by engine. The
+/// detached refresh round-trips a `wire::EngineOutcome`, so each engine's result is
+/// handled by its own applier; a new engine adds its arm here.
+fn apply_remote_outcome(
+    state: &mut AppState,
+    row: &registry::RemoteJob,
+    outcome: crate::wire::EngineOutcome,
+) {
+    match outcome {
+        crate::wire::EngineOutcome::Qm(qm) => apply_remote_qm_outcome(state, row, qm),
+    }
+}
+
 /// Apply a retrieved remote QM outcome: log the report, save it beside the run,
 /// add the optimized geometry as an entry (only when the job belongs to the open
 /// project), and mark the task complete.
 fn apply_remote_qm_outcome(
     state: &mut AppState,
     row: &registry::RemoteJob,
-    outcome: crate::wire::EngineOutcome,
+    outcome: crate::engines::qm::QmOutcome,
 ) {
-    let crate::wire::EngineOutcome::Qm(outcome) = outcome;
     for line in outcome.summary.lines() {
         state.output_log.push(line.to_string());
     }

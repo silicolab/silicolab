@@ -159,10 +159,17 @@ pub fn total_memory_bytes() -> u64 {
     sys.total_memory()
 }
 
+/// The safe in-core QM budget for a host with `total_ram` bytes of RAM. Pure, so
+/// the same fraction governs whether the target is this machine or a probed remote
+/// host — the caller picks which RAM total to pass.
+pub fn qm_incore_budget_for(total_ram: u64) -> u64 {
+    total_ram / 100 * QM_INCORE_RAM_FRACTION_PCT
+}
+
 /// The most memory an in-core QM run may be estimated to need before the guard
-/// intervenes. Computed each call (cheap: one `refresh_memory`).
+/// intervenes, on *this* machine. Computed each call (cheap: one `refresh_memory`).
 pub fn qm_incore_budget_bytes() -> u64 {
-    total_memory_bytes() / 100 * QM_INCORE_RAM_FRACTION_PCT
+    qm_incore_budget_for(total_memory_bytes())
 }
 
 #[cfg(test)]
@@ -192,6 +199,20 @@ mod tests {
             "budget {budget} must be a positive fraction of {total}"
         );
         assert_eq!(budget, total / 100 * QM_INCORE_RAM_FRACTION_PCT);
+    }
+
+    #[test]
+    fn incore_budget_for_scales_with_the_given_ram() {
+        // The same fraction applies to any RAM total (e.g. a probed remote host),
+        // and the local helper is just this applied to local RAM.
+        assert_eq!(qm_incore_budget_for(100), QM_INCORE_RAM_FRACTION_PCT);
+        assert_eq!(qm_incore_budget_for(0), 0);
+        assert_eq!(
+            qm_incore_budget_bytes(),
+            qm_incore_budget_for(total_memory_bytes())
+        );
+        // A bigger remote host yields a strictly bigger budget than a small one.
+        assert!(qm_incore_budget_for(256_u64 << 30) > qm_incore_budget_for(8_u64 << 30));
     }
 
     #[test]

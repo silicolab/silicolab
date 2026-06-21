@@ -253,11 +253,14 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
     }
     // Memory guard: estimate the in-core ERI allocation for a molecular job and
     // refuse (or offer integral-direct) before we spawn the worker and clear the
-    // prompt. Periodic jobs are exempt (no nao⁴ in-core tensor).
-    if !prompt.periodic {
+    // prompt. Periodic jobs are exempt (no nao⁴ in-core tensor). A LOCAL job is
+    // judged here against this machine's RAM; a REMOTE job defers to the off-thread
+    // submit, which probes the host and judges against ITS RAM (this machine's
+    // budget would be the wrong yardstick), so it is not pre-flighted on this path.
+    if !prompt.periodic && resolve_qm_remote_host(state).is_none() {
         let request = prompt.to_request(state.structure().clone());
         let verdict = memory_verdict(&request, crate::backend::hardware::qm_incore_budget_bytes());
-        if let Some(notification) = qm_memory_notification(&verdict) {
+        if let Some(notification) = qm_memory_notification(&verdict, "this machine") {
             state.ui.notification = Some(notification);
             return; // leave pending_qm intact so the prompt stays open
         }
@@ -300,6 +303,26 @@ fn resolve_qm_remote_host(state: &AppState) -> Option<crate::backend::config::Re
     }
 }
 
+/// The in-core RAM budget the panel's "Estimate memory" reports against, and a
+/// label naming the host it belongs to. A remote target with a detected inventory
+/// uses that host's RAM and label; otherwise this machine's RAM. The detected
+/// inventory is best-effort (the settings "Detect" action fills it); the off-thread
+/// submit re-probes and re-checks against the real host before launch regardless.
+fn qm_incore_budget_and_location(state: &AppState) -> (u64, String) {
+    use crate::backend::hardware::{qm_incore_budget_bytes, qm_incore_budget_for};
+    if let Some(host) = resolve_qm_remote_host(state)
+        && let Some(ram) = state
+            .ui
+            .settings
+            .remote_hardware
+            .get(&host.id)
+            .and_then(|info| info.ram_bytes)
+    {
+        return (qm_incore_budget_for(ram), host.label);
+    }
+    (qm_incore_budget_bytes(), "this machine".to_string())
+}
+
 /// Launch a detached remote QM job: ensure the worker is deployed, stage the
 /// bundle, and submit — all off the UI thread. The durable handle is recorded in
 /// the registry when the submission returns; status is tracked via the opt-in
@@ -333,17 +356,24 @@ fn start_remote_qm(
         .workspace
         .project()
         .map(|project| project.root.to_string_lossy().to_string());
-    let handle = crate::frontend::remote_jobs::spawn_remote_qm_submit(
+    // Per-job override → per-host default → app-wide count; the off-thread submit
+    // then clamps this to the remote host's probed CPU inventory before staging.
+    let requested_cores = crate::frontend::remote_jobs::resolve_requested_cores(
+        None,
+        &host,
+        state.config.compute_core_count,
+    );
+    let handle = crate::frontend::remote_jobs::spawn_remote_submit(
         host.clone(),
-        job,
-        Some(state.config.compute_core_count),
+        crate::wire::Engine::Qm(job),
+        Some(requested_cores),
         task.run_uuid.clone(),
         Some(task_run_id),
         task.controller_id.to_string(),
         project_root,
         local_run_dir,
     );
-    state.jobs.remote_qm_submit = Some(handle);
+    state.jobs.remote_submit = Some(handle);
     mark_task_status(state, task_run_id, TaskStatus::Running);
     state.set_message(format!(
         "Deploying & submitting QM to {} (use Refresh Remote to track it)…",
@@ -579,8 +609,11 @@ pub(crate) fn import_custom_force_field_file(state: &mut AppState) {
 /// Build the warning shown when a pending QM job would exceed the RAM budget.
 /// `ExceedsCanDirect` offers a one-click switch to integral-direct; otherwise the
 /// only path forward is editing the job, so the warning is acknowledge-only.
-pub(crate) fn qm_memory_notification(verdict: &MemoryVerdict) -> Option<Notification> {
-    let detail = verdict.detail()?;
+pub(crate) fn qm_memory_notification(
+    verdict: &MemoryVerdict,
+    location: &str,
+) -> Option<Notification> {
+    let detail = verdict.detail(location)?;
     let title = "This calculation may run out of memory";
     match verdict {
         // Unreachable: detail()? above already returned None for Ok; arm kept for exhaustiveness.
@@ -643,12 +676,15 @@ pub(crate) fn estimate_qm_memory(state: &mut AppState) {
     }
     let request = prompt.to_request(state.structure().clone());
     let signature = prompt.memory_signature(state.structure());
-    let budget = crate::backend::hardware::qm_incore_budget_bytes();
+    let (budget, location) = qm_incore_budget_and_location(state);
     match crate::engines::qm::estimate_request_memory(&request, budget) {
         Ok(report) => {
             if let Some(prompt) = state.ui.pending_qm.as_mut() {
-                prompt.memory_report =
-                    Some(crate::frontend::state::QmMemoryEstimate { report, signature });
+                prompt.memory_report = Some(crate::frontend::state::QmMemoryEstimate {
+                    report,
+                    signature,
+                    location,
+                });
             }
         }
         Err(error) => {
@@ -671,7 +707,7 @@ mod memory_guard_tests {
             estimate: 20_000_000_000,
             budget: 16_000_000_000,
         };
-        let n = qm_memory_notification(&can).expect("should warn");
+        let n = qm_memory_notification(&can, "this machine").expect("should warn");
         assert_eq!(n.buttons.len(), 2);
         assert!(matches!(
             n.buttons[0].action,
@@ -683,14 +719,14 @@ mod memory_guard_tests {
             estimate: 20_000_000_000,
             budget: 16_000_000_000,
         };
-        let n = qm_memory_notification(&must).expect("should warn");
+        let n = qm_memory_notification(&must, "this machine").expect("should warn");
         assert!(
             !n.buttons
                 .iter()
                 .any(|b| matches!(b.action, AppAction::StartQmWithDirectBackend))
         );
 
-        assert!(qm_memory_notification(&MemoryVerdict::Ok).is_none());
+        assert!(qm_memory_notification(&MemoryVerdict::Ok, "this machine").is_none());
     }
 
     #[test]

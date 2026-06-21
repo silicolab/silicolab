@@ -277,7 +277,7 @@ pub(crate) fn render_qm_task_panel(
         if let Some(estimate) = &prompt.memory_report
             && current_memory_sig == Some(estimate.signature)
         {
-            render_qm_memory_report(ui, &estimate.report);
+            render_qm_memory_report(ui, &estimate.report, &estimate.location);
         }
 
         ui.separator();
@@ -680,8 +680,12 @@ fn render_periodic_qm_form(ui: &mut egui::Ui, form: &mut crate::frontend::state:
 
 /// Render the on-demand memory estimate from the "Estimate memory" button: a peak
 /// figure with its backend and level of theory, colored by whether it fits the
-/// machine's safe RAM budget.
-fn render_qm_memory_report(ui: &mut egui::Ui, report: &crate::engines::qm::QmMemoryReport) {
+/// safe RAM budget of `location` (this machine, or a selected remote host).
+fn render_qm_memory_report(
+    ui: &mut egui::Ui,
+    report: &crate::engines::qm::QmMemoryReport,
+    location: &str,
+) {
     let pal = crate::frontend::theme::palette(ui);
     let gib = |bytes: u64| bytes as f64 / 1024.0_f64.powi(3);
     let fits = report.fits();
@@ -708,7 +712,7 @@ fn render_qm_memory_report(ui: &mut egui::Ui, report: &crate::engines::qm::QmMem
     let verdict = if fits { "fits the" } else { "exceeds the" };
     ui.label(
         RichText::new(format!(
-            "{verdict} {:.1} GiB safe budget on this machine",
+            "{verdict} {:.1} GiB safe budget on {location}",
             gib(report.budget_bytes)
         ))
         .small()

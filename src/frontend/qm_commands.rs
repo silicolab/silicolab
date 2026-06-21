@@ -154,7 +154,7 @@ fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
             bail!(
                 "{} Re-run `qm {}` with --direct (integral-direct SCF) or --ri, \
                  or choose a smaller basis.",
-                verdict.detail().unwrap_or_default(),
+                verdict.detail("this machine").unwrap_or_default(),
                 kind_keyword(kind),
             );
         }
@@ -162,7 +162,7 @@ fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
             bail!(
                 "{} This calculation type needs in-core integrals; choose a smaller \
                  basis set or a smaller system.",
-                verdict.detail().unwrap_or_default(),
+                verdict.detail("this machine").unwrap_or_default(),
             );
         }
     }

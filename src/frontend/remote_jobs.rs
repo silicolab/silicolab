@@ -11,10 +11,10 @@
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
 
-use crate::engines::qm::QmJob;
+use crate::engines::qm::{MemoryVerdict, QmJob, memory_verdict};
 
 /// The durable registry fields a successful submission produces.
-pub struct RemoteQmSubmitted {
+pub struct RemoteSubmitted {
     pub run_uuid: String,
     pub host_id: String,
     pub host_label: String,
@@ -29,71 +29,177 @@ pub struct RemoteQmSubmitted {
     pub deployed_version: String,
 }
 
-/// Result of an off-thread detached remote QM submission. The success payload is
+/// Result of an off-thread detached remote submission. The success payload is
 /// boxed — it is far larger than the failure string.
-pub enum RemoteQmSubmitOutcome {
-    Submitted(Box<RemoteQmSubmitted>),
+pub enum RemoteSubmitOutcome {
+    Submitted(Box<RemoteSubmitted>),
     Failed(String),
 }
 
-/// In-flight detached remote QM submission. The blocking deploy + SSH staging +
+/// In-flight detached remote submission. The blocking deploy + SSH staging +
 /// launch run off the UI thread; the dispatcher drains the result and records it.
-pub struct RunningRemoteQmSubmit {
+pub struct RunningRemoteSubmit {
     pub task_run_id: Option<u64>,
-    pub receiver: Receiver<RemoteQmSubmitOutcome>,
+    pub receiver: Receiver<RemoteSubmitOutcome>,
+}
+
+/// Resolve the requested core count for a remote job: an explicit per-job override
+/// wins, else the host's per-host default, else the app-wide core count. This is
+/// the *requested* count; it is clamped to the remote inventory by [`clamp_cores`]
+/// later, once the host has been probed ([`probe_remote_inventory`]).
+pub(crate) fn resolve_requested_cores(
+    per_job: Option<usize>,
+    host: &crate::backend::config::RemoteHost,
+    fallback: usize,
+) -> usize {
+    per_job.or(host.resources.cores).unwrap_or(fallback)
+}
+
+/// Clamp a requested core count to a remote host's probed inventory. Prefers the
+/// logical thread count, falls back to physical cores, and passes the request
+/// through (never below 1) when the probe found neither — an un-probeable host
+/// runs at the requested count rather than being forced to a single thread.
+fn clamp_to_remote_inventory(
+    requested: usize,
+    info: &crate::engines::remote::hardware::RemoteHardwareInfo,
+) -> usize {
+    match info.threads.or(info.cores) {
+        Some(bound) => crate::backend::hardware::clamp_core_count(requested, bound),
+        None => requested.max(1),
+    }
+}
+
+/// Probe the remote host's CPU/RAM inventory over SSH, the single source for both
+/// the core-count clamp and the in-core memory budget. `None` on a probe failure
+/// (logged): callers fall open rather than block a job the deploy step in the same
+/// closure already proved reachable, so a missing `lscpu`/`nproc`/`free` is not
+/// fatal.
+fn probe_remote_inventory(
+    target: &crate::engines::remote::RemoteTarget,
+) -> Option<crate::engines::remote::hardware::RemoteHardwareInfo> {
+    use crate::engines::remote::hardware::{PROBE_SCRIPT, parse_remote_hardware};
+    match crate::engines::remote::run_probe_command(
+        target,
+        PROBE_SCRIPT,
+        std::time::Duration::from_secs(30),
+    ) {
+        Ok(stdout) => Some(parse_remote_hardware(&stdout)),
+        Err(error) => {
+            eprintln!("remote hardware probe failed; resource limits fall open: {error}");
+            None
+        }
+    }
+}
+
+/// Clamp `requested` to the probed inventory before it is baked into `request.json`.
+/// The worker trusts `cores` verbatim to size its thread pool, so an unclamped
+/// laptop count would oversubscribe the node. An un-probed host (`None`) passes the
+/// request through (never below 1).
+fn clamp_cores(
+    requested: Option<usize>,
+    inventory: Option<&crate::engines::remote::hardware::RemoteHardwareInfo>,
+) -> Option<usize> {
+    let requested = requested?;
+    Some(match inventory {
+        Some(info) => clamp_to_remote_inventory(requested, info),
+        None => requested.max(1),
+    })
+}
+
+/// The client-side rejection message for an in-core QM job that would exceed the
+/// remote host's RAM, naming the host and the way forward; `None` if it fits. This
+/// pre-flights the verdict against the *target* host's budget (not the laptop's),
+/// so an oversized job is refused before it wastes a remote allocation.
+fn remote_qm_memory_rejection(verdict: &MemoryVerdict, host_label: &str) -> Option<String> {
+    let detail = verdict.detail(host_label)?;
+    let advice = match verdict {
+        MemoryVerdict::ExceedsCanDirect { .. } => {
+            " Switch the SCF backend to integral-direct to run the same single point with far less memory."
+        }
+        MemoryVerdict::ExceedsMustReduce { .. } => {
+            " This calculation type needs in-core integrals — choose a smaller basis set or a smaller system."
+        }
+        MemoryVerdict::Ok => "",
+    };
+    Some(format!("{detail}{advice}"))
+}
+
+/// The stable `EngineId` token recorded for a wire engine — the `jobs.db`
+/// `engine_id` for a submitted job. A new engine adds its arm here.
+fn engine_id_token(engine: &crate::wire::Engine) -> &'static str {
+    use crate::engines::registry::EngineId;
+    match engine {
+        crate::wire::Engine::Qm(_) => EngineId::HARTREE.as_str(),
+    }
 }
 
 /// Deploy the worker (fail-closed, version-pinned), stage `request.json` + a
 /// `run.sh` bundle, and launch the job detached, off the UI thread. The handle's
 /// fields become the `jobs.db` row; the job then runs without the app attached.
+/// Engine-agnostic: the engine rides in `request.json` and is dispatched by the
+/// worker, so the same path serves every built-in engine.
 #[allow(clippy::too_many_arguments)]
-pub fn spawn_remote_qm_submit(
+pub fn spawn_remote_submit(
     host: crate::backend::config::RemoteHost,
-    job: QmJob,
+    engine: crate::wire::Engine,
     cores: Option<usize>,
     run_uuid: String,
     task_run_id: Option<u64>,
     job_kind: String,
     project_root: Option<String>,
     local_run_dir: PathBuf,
-) -> RunningRemoteQmSubmit {
+) -> RunningRemoteSubmit {
     use crate::engines::remote::launcher::{self, Launcher};
     use crate::engines::remote::{self, RemoteTarget, deploy};
     use crate::wire::{Engine, EngineRequest};
 
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let result = (|| -> anyhow::Result<RemoteQmSubmitOutcome> {
+        let result = (|| -> anyhow::Result<RemoteSubmitOutcome> {
             let target = RemoteTarget::for_run(&host, &run_uuid);
+            let engine_id = engine_id_token(&engine).to_string();
+            // One probe feeds both the core clamp and the in-core memory budget.
+            let inventory = probe_remote_inventory(&target);
+            // Pre-flight an in-core QM ERI allocation against the REMOTE host's RAM,
+            // before deploying, so an oversized job is refused client-side rather
+            // than left to OOM mid-SCF on the node. Only in-core molecular QM has
+            // this tensor; every other engine (and periodic QM) skips the guard,
+            // as does a host whose RAM we could not probe (falling open).
+            if let Engine::Qm(QmJob::Molecular(request)) = &engine
+                && let Some(ram) = inventory.as_ref().and_then(|info| info.ram_bytes)
+            {
+                let verdict =
+                    memory_verdict(request, crate::backend::hardware::qm_incore_budget_for(ram));
+                if let Some(message) = remote_qm_memory_rejection(&verdict, &host.label) {
+                    return Ok(RemoteSubmitOutcome::Failed(message));
+                }
+            }
             let deployed = deploy::ensure_worker_deployed(&host, &target)?;
             std::fs::create_dir_all(&local_run_dir)?;
-            let request = EngineRequest::with_cores(Engine::Qm(job), cores);
+            let cores = clamp_cores(cores, inventory.as_ref());
+            let request = EngineRequest::with_cores(engine, cores);
             let json = serde_json::to_vec(&request)?;
             std::fs::write(local_run_dir.join(launcher::REQUEST_FILE), json)?;
             remote::write_run_record(&target, &local_run_dir);
             let handle = Launcher::Direct.submit(&target, &local_run_dir, &deployed.remote_path)?;
-            Ok(RemoteQmSubmitOutcome::Submitted(Box::new(
-                RemoteQmSubmitted {
-                    run_uuid: run_uuid.clone(),
-                    host_id: host.id.clone(),
-                    host_label: host.label.clone(),
-                    remote_dir: target.remote_dir.clone(),
-                    scheduler: Launcher::Direct.token().to_string(),
-                    launch_handle: handle.0,
-                    engine_id: crate::engines::registry::EngineId::HARTREE
-                        .as_str()
-                        .to_string(),
-                    job_kind,
-                    project_root,
-                    local_run_dir: local_run_dir.clone(),
-                    deployed_version: deployed.version,
-                },
-            )))
+            Ok(RemoteSubmitOutcome::Submitted(Box::new(RemoteSubmitted {
+                run_uuid: run_uuid.clone(),
+                host_id: host.id.clone(),
+                host_label: host.label.clone(),
+                remote_dir: target.remote_dir.clone(),
+                scheduler: Launcher::Direct.token().to_string(),
+                launch_handle: handle.0,
+                engine_id,
+                job_kind,
+                project_root,
+                local_run_dir: local_run_dir.clone(),
+                deployed_version: deployed.version,
+            })))
         })();
         let _ = sender
-            .send(result.unwrap_or_else(|error| RemoteQmSubmitOutcome::Failed(error.to_string())));
+            .send(result.unwrap_or_else(|error| RemoteSubmitOutcome::Failed(error.to_string())));
     });
-    RunningRemoteQmSubmit {
+    RunningRemoteSubmit {
         task_run_id,
         receiver,
     }
@@ -186,6 +292,80 @@ pub fn spawn_remote_jobs_refresh(
 mod tests {
     use super::*;
 
+    fn host_with_cores(cores: Option<usize>) -> crate::backend::config::RemoteHost {
+        use crate::backend::config::{RemoteHost, ResourceSpec};
+        RemoteHost {
+            id: "h".into(),
+            label: "H".into(),
+            hostname: "example.com".into(),
+            username: "alice".into(),
+            port: 22,
+            work_root: "~/.silicolab".into(),
+            prelude: Vec::new(),
+            engines: Default::default(),
+            engine_versions: Default::default(),
+            resources: ResourceSpec {
+                cores,
+                ..Default::default()
+            },
+        }
+    }
+
+    #[test]
+    fn requested_cores_precedence() {
+        let host = host_with_cores(Some(4));
+        assert_eq!(resolve_requested_cores(Some(2), &host, 16), 2); // per-job wins
+        assert_eq!(resolve_requested_cores(None, &host, 16), 4); // then per-host
+        let host = host_with_cores(None);
+        assert_eq!(resolve_requested_cores(None, &host, 16), 16); // then fallback
+    }
+
+    #[test]
+    fn clamp_prefers_threads_then_cores_then_passthrough() {
+        use crate::engines::remote::hardware::RemoteHardwareInfo;
+        let both = RemoteHardwareInfo {
+            threads: Some(8),
+            cores: Some(4),
+            ..Default::default()
+        };
+        assert_eq!(clamp_to_remote_inventory(32, &both), 8); // clamp to logical threads
+        assert_eq!(clamp_to_remote_inventory(2, &both), 2); // already under the bound
+        let phys = RemoteHardwareInfo {
+            threads: None,
+            cores: Some(4),
+            ..Default::default()
+        };
+        assert_eq!(clamp_to_remote_inventory(32, &phys), 4); // fall back to physical cores
+        let none = RemoteHardwareInfo::default();
+        assert_eq!(clamp_to_remote_inventory(32, &none), 32); // un-probeable → pass through
+        assert_eq!(clamp_to_remote_inventory(0, &none), 1); // never below 1
+    }
+
+    #[test]
+    fn remote_memory_rejection_names_host_and_advises() {
+        let can_direct = MemoryVerdict::ExceedsCanDirect {
+            estimate: 20_u64 << 30,
+            budget: 16_u64 << 30,
+        };
+        let msg = remote_qm_memory_rejection(&can_direct, "cluster").expect("should reject");
+        assert!(msg.contains("cluster"), "names the host: {msg}");
+        assert!(
+            msg.contains("integral-direct"),
+            "offers the cheaper backend"
+        );
+
+        let must_reduce = MemoryVerdict::ExceedsMustReduce {
+            estimate: 20_u64 << 30,
+            budget: 16_u64 << 30,
+        };
+        let msg = remote_qm_memory_rejection(&must_reduce, "cluster").expect("should reject");
+        assert!(msg.contains("cluster"));
+        assert!(msg.contains("smaller"), "advises reducing the system");
+
+        // A job that fits is not rejected.
+        assert!(remote_qm_memory_rejection(&MemoryVerdict::Ok, "cluster").is_none());
+    }
+
     /// End-to-end check of the detached frontend path (deploy fast-path → submit
     /// → opt-in refresh → retrieve) against a real SSH host. `#[ignore]`: a
     /// developer-occasional test requiring an SSH host (e.g. a local WSL) with
@@ -232,6 +412,7 @@ mod tests {
             prelude: Vec::new(),
             engines: Default::default(),
             engine_versions,
+            resources: Default::default(),
         };
 
         let structure = Structure::new(
@@ -261,9 +442,9 @@ mod tests {
 
         let run_uuid = uuid::Uuid::new_v4().to_string();
         let local_run_dir = std::env::temp_dir().join(format!("sl-frontend-{run_uuid}"));
-        let submit = spawn_remote_qm_submit(
+        let submit = spawn_remote_submit(
             host.clone(),
-            job,
+            crate::wire::Engine::Qm(job),
             Some(1),
             run_uuid.clone(),
             None,
@@ -272,8 +453,8 @@ mod tests {
             local_run_dir.clone(),
         );
         let submitted = match submit.receiver.recv().expect("submit worker stays alive") {
-            RemoteQmSubmitOutcome::Submitted(submitted) => *submitted,
-            RemoteQmSubmitOutcome::Failed(error) => panic!("remote submit failed: {error}"),
+            RemoteSubmitOutcome::Submitted(submitted) => *submitted,
+            RemoteSubmitOutcome::Failed(error) => panic!("remote submit failed: {error}"),
         };
 
         let row = RemoteJob {

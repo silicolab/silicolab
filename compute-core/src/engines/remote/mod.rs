@@ -954,6 +954,7 @@ mod tests {
             prelude: Vec::new(),
             engines: HashMap::new(),
             engine_versions: HashMap::new(),
+            resources: Default::default(),
         };
         let target = RemoteTarget::for_run(&host, "abc-123");
         assert_eq!(target.remote_dir, "~/.silicolab/runs/abc-123");

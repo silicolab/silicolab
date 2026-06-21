@@ -85,6 +85,7 @@ fn direct_remote_qm_matches_in_process_within_tolerance() {
         prelude: Vec::new(),
         engines: Default::default(),
         engine_versions: Default::default(),
+        resources: Default::default(),
     };
     let run_uuid = uuid::Uuid::new_v4().to_string();
     let target = RemoteTarget::for_run(&host, &run_uuid);
