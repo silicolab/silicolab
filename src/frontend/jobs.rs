@@ -24,13 +24,13 @@ use crate::{
         remote::Compute,
     },
     frontend::md_support::{FrameworkRunMetadata, MD_FRAMEWORK_FILE, write_md_system_context},
+    wire::{Engine, EngineOutcome, EngineRequest, Executor, JobUpdate, run_job},
     workflows::{
         docking::{DockingProgress, run_docking_calculation},
         optimization::{
             GeometryOptimizationProgress, GeometryOptimizationRequest, run_geometry_optimization,
         },
         packing::{PackProgress, PackReport, PackRequest, pack},
-        qm::{QmCalculationProgress, run_qm_calculation},
     },
 };
 
@@ -983,26 +983,28 @@ pub fn spawn_disorder_job(request: PackRequest) -> RunningDisorderJob {
 /// then a `Finished` outcome or `Failed` error. Caller stores the handle in
 /// [`JobManager`].
 pub fn spawn_qm_job(job: QmJob, threads: Option<usize>) -> RunningQmJob {
+    let running = run_job(
+        EngineRequest::with_cores(Engine::Qm(job), threads),
+        Executor::InProcess,
+    );
+    // The QM job rides the shared run handle; adapt its updates to the message the
+    // task UI already polls. An in-process job cancels through the shared flag.
+    let cancel = running
+        .cancel_flag()
+        .expect("an in-process job cancels via the cooperative flag");
     let (sender, receiver) = std::sync::mpsc::channel();
-    let cancel = Arc::new(AtomicBool::new(false));
-    let cancel_for_worker = Arc::clone(&cancel);
-
     std::thread::spawn(move || {
-        let progress_sender = sender.clone();
-        let result = run_qm_calculation(
-            job,
-            threads,
-            cancel_for_worker,
-            move |QmCalculationProgress { stage }| {
-                let _ = progress_sender.send(QmWorkerMessage::Progress { stage });
-            },
-        );
-        match result {
-            Ok(result) => {
-                let _ = sender.send(QmWorkerMessage::Finished(Box::new(result.outcome)));
-            }
-            Err(error) => {
-                let _ = sender.send(QmWorkerMessage::Failed(error.to_string()));
+        while let Ok(update) = running.updates().recv() {
+            let message = match update {
+                JobUpdate::Progress { stage } => QmWorkerMessage::Progress { stage },
+                JobUpdate::Finished(outcome) => {
+                    let EngineOutcome::Qm(outcome) = *outcome;
+                    QmWorkerMessage::Finished(Box::new(outcome))
+                }
+                JobUpdate::Failed(error) => QmWorkerMessage::Failed(error),
+            };
+            if sender.send(message).is_err() {
+                break;
             }
         }
     });
