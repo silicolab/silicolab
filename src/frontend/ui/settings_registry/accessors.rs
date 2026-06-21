@@ -7,7 +7,7 @@
 //! and the action that restores that default.
 
 use crate::{
-    backend::config::{AppConfig, ColorScheme, ThemeMode},
+    backend::config::{AppConfig, ColorScheme, MonitorRefresh, ThemeMode},
     frontend::{actions::AppAction, state::AppState},
 };
 
@@ -178,4 +178,43 @@ pub(crate) fn utilization_bars_is_default(state: &AppState) -> bool {
 
 pub(crate) fn utilization_bars_reset() -> AppAction {
     AppAction::SetShowUtilizationBars(AppConfig::default().show_utilization_bars)
+}
+
+pub(crate) const MONITOR_REFRESH_OPTIONS: [&str; 4] = {
+    let rates = MonitorRefresh::all();
+    [
+        rates[0].label(),
+        rates[1].label(),
+        rates[2].label(),
+        rates[3].label(),
+    ]
+};
+
+pub(crate) fn monitor_refresh_read(state: &AppState) -> usize {
+    MonitorRefresh::all()
+        .iter()
+        .position(|rate| *rate == state.config.monitor_refresh)
+        .unwrap_or(0)
+}
+
+pub(crate) fn monitor_refresh_change(index: usize) -> AppAction {
+    AppAction::SetMonitorRefresh(
+        MonitorRefresh::all()
+            .get(index)
+            .copied()
+            .unwrap_or_default(),
+    )
+}
+
+/// The refresh rate only matters while the monitor itself is shown.
+pub(crate) fn monitor_refresh_enabled(state: &AppState) -> bool {
+    state.config.show_utilization_bars
+}
+
+pub(crate) fn monitor_refresh_is_default(state: &AppState) -> bool {
+    state.config.monitor_refresh == AppConfig::default().monitor_refresh
+}
+
+pub(crate) fn monitor_refresh_reset() -> AppAction {
+    AppAction::SetMonitorRefresh(AppConfig::default().monitor_refresh)
 }

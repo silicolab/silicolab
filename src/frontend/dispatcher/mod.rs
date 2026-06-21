@@ -339,6 +339,7 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SetGlassIntensity { value, commit } => set_glass_intensity(state, value, commit),
         AppAction::SetCheckUpdates(on) => set_check_updates(state, on),
         AppAction::SetShowUtilizationBars(on) => set_show_utilization_bars(state, on),
+        AppAction::SetMonitorRefresh(rate) => set_monitor_refresh(state, rate, ctx),
         AppAction::SetAutoInstallUpdates(on) => set_auto_install_updates(state, on),
         AppAction::SetReopenLastProject(on) => set_reopen_last_project(state, on),
         AppAction::PickDefaultProjectDir => pick_default_project_dir(state),

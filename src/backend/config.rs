@@ -76,6 +76,43 @@ impl ColorScheme {
     }
 }
 
+/// How often the live system monitor samples and repaints while it is shown.
+/// Lower rates cut background CPU wakeups and, on a discrete GPU, how often the
+/// card is polled (each poll can pull it out of its deepest power state);
+/// `Pause` stops sampling entirely and the gauges hold their last values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum MonitorRefresh {
+    /// Twice a second.
+    High,
+    /// Once a second — the default.
+    #[default]
+    Standard,
+    /// Once every few seconds.
+    Low,
+    /// Suspended: no sampling until resumed.
+    Pause,
+}
+
+impl MonitorRefresh {
+    pub const fn all() -> [MonitorRefresh; 4] {
+        [
+            MonitorRefresh::High,
+            MonitorRefresh::Standard,
+            MonitorRefresh::Low,
+            MonitorRefresh::Pause,
+        ]
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            MonitorRefresh::High => "High",
+            MonitorRefresh::Standard => "Standard",
+            MonitorRefresh::Low => "Low",
+            MonitorRefresh::Pause => "Pause",
+        }
+    }
+}
+
 /// Where an engine task runs: locally (the historical default) or on a configured
 /// remote host, referenced by its [`RemoteHost::id`]. Persisted as the app-wide
 /// default and selected per task at launch.
@@ -264,9 +301,16 @@ pub struct AppConfig {
     #[serde(default = "default_compute_core_count")]
     pub compute_core_count: usize,
     /// Show live CPU/GPU utilization gauges in the status bar. Off by default:
-    /// while on, the app repaints continuously to animate the gauges.
+    /// while on, the app samples and repaints on the
+    /// [`monitor_refresh`](Self::monitor_refresh) cadence to animate the gauges.
     #[serde(default)]
     pub show_utilization_bars: bool,
+    /// How often the system monitor samples while shown. Lower rates (or
+    /// `Pause`) reduce background wakeups and how often a discrete GPU is
+    /// polled. Only takes effect while
+    /// [`show_utilization_bars`](Self::show_utilization_bars) is on.
+    #[serde(default)]
+    pub monitor_refresh: MonitorRefresh,
 }
 
 /// Persisted state of one dock area (the bottom panel or the right sidebar). The
@@ -390,6 +434,7 @@ impl Default for AppConfig {
             dock_layout: DockLayoutConfig::default(),
             compute_core_count: default_compute_core_count(),
             show_utilization_bars: false,
+            monitor_refresh: MonitorRefresh::default(),
         }
     }
 }
@@ -556,8 +601,8 @@ mod tests {
     use std::path::PathBuf;
 
     use super::{
-        AppConfig, ColorScheme, ComputeTarget, RecentProject, RemoteHost, ThemeMode,
-        back_up_corrupt_file, load_config_from, remember_recent_project, save_config_to,
+        AppConfig, ColorScheme, ComputeTarget, MonitorRefresh, RecentProject, RemoteHost,
+        ThemeMode, back_up_corrupt_file, load_config_from, remember_recent_project, save_config_to,
     };
     use crate::engines::registry::EngineLaunch;
 
@@ -763,6 +808,27 @@ mod tests {
     }
 
     #[test]
+    fn monitor_refresh_defaults_to_standard() {
+        assert_eq!(
+            AppConfig::default().monitor_refresh,
+            MonitorRefresh::Standard
+        );
+    }
+
+    #[test]
+    fn monitor_refresh_all_lists_every_variant_in_order() {
+        assert_eq!(
+            MonitorRefresh::all(),
+            [
+                MonitorRefresh::High,
+                MonitorRefresh::Standard,
+                MonitorRefresh::Low,
+                MonitorRefresh::Pause,
+            ]
+        );
+    }
+
+    #[test]
     fn config_parses_without_utilization_bars_field() {
         // A settings.json written before this field must still parse (backward
         // compat via #[serde(default)]) and yield the default (false).
@@ -775,5 +841,8 @@ mod tests {
         }"#;
         let parsed: AppConfig = serde_json::from_str(json).expect("legacy config should parse");
         assert!(!parsed.show_utilization_bars);
+        // The refresh-rate field is likewise absent in pre-existing files and
+        // must fall back to the default rather than failing the parse.
+        assert_eq!(parsed.monitor_refresh, MonitorRefresh::Standard);
     }
 }

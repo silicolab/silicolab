@@ -102,8 +102,27 @@ pub(crate) fn poll_metrics(state: &mut AppState, ctx: &egui::Context) {
             .monitor_history
             .push(metrics.cpu_pct, metrics.mem_pct, &gpu_utils);
     }
-    if state.config.show_utilization_bars {
-        ctx.request_repaint_after(std::time::Duration::from_millis(500));
+
+    // Drive the sampler's cadence from the UI. Minimized → suspend entirely
+    // (nothing on screen, so neither the sampler nor the GPU probe runs).
+    // Unfocused but still on-screen → keep the gauges live but no faster than the
+    // Low cadence, so a background window stays cheap without freezing. Pause
+    // always stays paused. Repaint only while actively sampling, so a
+    // paused/minimized monitor falls back to fully reactive painting.
+    let chosen = crate::frontend::jobs::refresh_interval(state.config.monitor_refresh);
+    let interval = if ctx.input(|i| i.viewport().minimized.unwrap_or(false)) {
+        None
+    } else if ctx.input(|i| i.focused) {
+        chosen
+    } else {
+        // Throttle an unfocused (background) window to at most the Low cadence.
+        let low =
+            crate::frontend::jobs::refresh_interval(crate::backend::config::MonitorRefresh::Low);
+        chosen.map(|c| c.max(low.unwrap_or(c)))
+    };
+    sampler.set_interval(interval);
+    if let Some(dur) = interval {
+        ctx.request_repaint_after(dur);
     }
 }
 
@@ -806,7 +825,7 @@ mod tests {
             }],
         })
         .unwrap();
-        state.jobs.metrics = Some(RunningMetricsSampler { receiver: rx });
+        state.jobs.metrics = Some(RunningMetricsSampler::for_test(rx));
         let ctx = egui::Context::default();
         poll_metrics(&mut state, &ctx);
         assert_eq!(state.ui.cpu_pct, 42.0);

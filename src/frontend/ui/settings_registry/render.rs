@@ -309,8 +309,8 @@ pub fn registry() -> Vec<SettingDescriptor> {
         group: "Monitoring",
         title: "Show system monitor (CPU / Memory / GPU)",
         description: "Live utilization bars in the sidebar footer (or the status bar when the \
-                      sidebar is hidden); click them for sparkline details. Repaints \
-                      continuously while on.",
+                      sidebar is hidden); click them for sparkline details. Set the update \
+                      speed below; it pauses on its own while the window is hidden.",
         keywords: &[
             "cpu",
             "memory",
@@ -331,6 +331,37 @@ pub fn registry() -> Vec<SettingDescriptor> {
         indent: false,
         is_default: Some(utilization_bars_is_default),
         reset: Some(utilization_bars_reset),
+    });
+
+    // Hardware ▸ Monitoring — update speed for the monitor above. Lower rates (or
+    // Pause) cut background CPU wakeups and how often a discrete GPU is polled.
+    items.push(SettingDescriptor {
+        id: "hardware.monitor_refresh",
+        category: SettingCategory::Hardware,
+        group: "Monitoring",
+        title: "Update speed",
+        description: "How often the monitor samples. Lower rates — or Pause — reduce CPU wakeups \
+                      and how often a discrete GPU is polled, saving power.",
+        keywords: &[
+            "refresh",
+            "rate",
+            "update",
+            "speed",
+            "interval",
+            "frequency",
+            "pause",
+            "power",
+            "battery",
+        ],
+        control: Control::Choice {
+            read: monitor_refresh_read,
+            options: &MONITOR_REFRESH_OPTIONS,
+            on_change: monitor_refresh_change,
+        },
+        enabled: Some(monitor_refresh_enabled),
+        indent: true,
+        is_default: Some(monitor_refresh_is_default),
+        reset: Some(monitor_refresh_reset),
     });
 
     // Hardware ▸ Remote host — static inventory of a configured remote host,
@@ -586,20 +617,25 @@ fn render_descriptor_body(
             options,
             on_change,
         } => {
+            // Honour `descriptor.enabled` like the Toggle/Slider/Value branches,
+            // greying the combo out (label stays legible) when its gate is unmet.
+            let enabled = descriptor.enabled.is_none_or(|gate| gate(state));
             let current = read(state);
             ui.horizontal(|ui| {
                 ui.label(descriptor.title);
                 let selected = options.get(current).copied().unwrap_or_default();
-                egui::ComboBox::from_id_salt(descriptor.id)
-                    .selected_text(selected)
-                    .show_ui(ui, |ui| {
-                        crate::frontend::theme::stabilize_selectable_rows(ui);
-                        for (index, option) in options.iter().enumerate() {
-                            if ui.selectable_label(index == current, *option).clicked() {
-                                actions.push(on_change(index));
+                ui.add_enabled_ui(enabled, |ui| {
+                    egui::ComboBox::from_id_salt(descriptor.id)
+                        .selected_text(selected)
+                        .show_ui(ui, |ui| {
+                            crate::frontend::theme::stabilize_selectable_rows(ui);
+                            for (index, option) in options.iter().enumerate() {
+                                if ui.selectable_label(index == current, *option).clicked() {
+                                    actions.push(on_change(index));
+                                }
                             }
-                        }
-                    });
+                        });
+                });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     reset_affordance(descriptor, state, ui, actions);
                 });
