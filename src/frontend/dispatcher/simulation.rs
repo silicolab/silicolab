@@ -397,12 +397,14 @@ pub(crate) fn persist_engine_config(state: &mut AppState, message: &str) {
 
 // --- Remote Hosts (Settings → Engines → Remote Hosts) ----------------------
 
-/// Build a validated [`RemoteHost`] from a settings draft. `prior_versions`
-/// carries forward any cached `--version` strings on an edit.
+/// Build a validated [`RemoteHost`] from a settings draft. `prior_versions` and
+/// `prior_resources` carry forward any cached `--version` strings and the per-host
+/// resource defaults on an edit, neither of which the settings draft exposes.
 fn host_from_draft(
     id: String,
     draft: &crate::frontend::state::RemoteHostDraft,
     prior_versions: std::collections::HashMap<String, String>,
+    prior_resources: crate::backend::config::ResourceSpec,
 ) -> anyhow::Result<crate::backend::config::RemoteHost> {
     let hostname = draft.hostname.trim();
     let username = draft.username.trim();
@@ -460,13 +462,19 @@ fn host_from_draft(
         prelude,
         engines,
         engine_versions: prior_versions,
+        resources: prior_resources,
     })
 }
 
 pub(crate) fn add_remote_host(state: &mut AppState) {
     let draft = state.ui.settings.new_remote_host.clone();
     let id = uuid::Uuid::new_v4().simple().to_string();
-    match host_from_draft(id.clone(), &draft, std::collections::HashMap::new()) {
+    match host_from_draft(
+        id.clone(),
+        &draft,
+        std::collections::HashMap::new(),
+        Default::default(),
+    ) {
         Ok(host) => {
             let label = host.label.clone();
             state.config.remote_hosts.insert(id, host);
@@ -481,13 +489,12 @@ pub(crate) fn save_remote_host(state: &mut AppState, id: String) {
     let Some(draft) = state.ui.settings.remote_host_drafts.get(&id).cloned() else {
         return;
     };
-    let prior_versions = state
-        .config
-        .remote_hosts
-        .get(&id)
+    let prior = state.config.remote_hosts.get(&id);
+    let prior_versions = prior
         .map(|host| host.engine_versions.clone())
         .unwrap_or_default();
-    match host_from_draft(id.clone(), &draft, prior_versions) {
+    let prior_resources = prior.map(|host| host.resources.clone()).unwrap_or_default();
+    match host_from_draft(id.clone(), &draft, prior_versions, prior_resources) {
         Ok(host) => {
             let label = host.label.clone();
             state.config.remote_hosts.insert(id, host);

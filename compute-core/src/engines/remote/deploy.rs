@@ -309,6 +309,7 @@ mod tests {
             prelude: Vec::new(),
             engines: std::collections::HashMap::new(),
             engine_versions: std::collections::HashMap::new(),
+            resources: Default::default(),
         };
         assert_eq!(worker_bin_dir(&host).unwrap(), "~/.silicolab/bin");
         assert_eq!(

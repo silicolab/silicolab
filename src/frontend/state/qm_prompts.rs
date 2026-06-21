@@ -89,6 +89,9 @@ pub struct QmMemoryEstimate {
     pub report: crate::engines::qm::QmMemoryReport,
     /// [`QmPrompt::memory_signature`] of the inputs at estimate time.
     pub signature: u64,
+    /// Host the budget belongs to ("this machine" or a remote host's label),
+    /// captured at estimate time so the displayed label matches `report.budget_bytes`.
+    pub location: String,
 }
 
 /// Panel form for a periodic (PBC) QM calculation — the periodic counterpart of

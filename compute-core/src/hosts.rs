@@ -49,6 +49,31 @@ pub struct RemoteHost {
     /// SSH on every open.
     #[serde(default)]
     pub engine_versions: HashMap<String, String>,
+    /// Per-host default resource request. Only `cores` is consumed today — it caps
+    /// the worker's thread pool so a job is a good citizen on a shared node;
+    /// resolution is per-job override → this → the app-wide core count. The other
+    /// fields parse forward-compatibly for scheduler-directive rendering.
+    #[serde(default)]
+    pub resources: ResourceSpec,
+}
+
+/// What a job asks the node (or a scheduler) for, launcher-agnostic. Every field
+/// is optional so an empty spec is valid and means "let the node decide". Only
+/// `cores` is consumed today (it sizes the worker's thread pool); the rest are
+/// reserved and round-trip untouched.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ResourceSpec {
+    /// Requested core count. Resolves per-job override → per-host default → the
+    /// app-wide core count, then is clamped to the target's inventory before it
+    /// reaches `request.json`.
+    #[serde(default)]
+    pub cores: Option<usize>,
+    #[serde(default)]
+    pub mem_mb: Option<u64>,
+    #[serde(default)]
+    pub walltime: Option<String>,
+    #[serde(default)]
+    pub extra: Vec<String>,
 }
 
 fn default_ssh_port() -> u16 {
@@ -70,4 +95,44 @@ pub fn home_dir() -> PathBuf {
         .or_else(|| std::env::var_os("HOME"))
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("."))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_legacy_host_without_resources_or_engine_maps() {
+        // A host authored before per-host resource defaults (and before the
+        // engine maps) must still load, with the new fields defaulting to empty.
+        let json = r#"{
+            "id": "h1",
+            "label": "Box",
+            "hostname": "example.com",
+            "username": "alice"
+        }"#;
+        let host: RemoteHost = serde_json::from_str(json).expect("legacy host parses");
+        assert_eq!(host.port, 22);
+        assert_eq!(host.work_root, "~/.silicolab");
+        assert!(host.prelude.is_empty());
+        assert!(host.engines.is_empty());
+        assert!(host.engine_versions.is_empty());
+        assert_eq!(host.resources, ResourceSpec::default());
+        assert_eq!(host.resources.cores, None);
+    }
+
+    #[test]
+    fn resource_spec_roundtrips_and_empty_is_default() {
+        let spec = ResourceSpec {
+            cores: Some(8),
+            ..Default::default()
+        };
+        let json = serde_json::to_string(&spec).unwrap();
+        assert_eq!(serde_json::from_str::<ResourceSpec>(&json).unwrap(), spec);
+        // An empty object yields all-defaults (forward-compatible).
+        assert_eq!(
+            serde_json::from_str::<ResourceSpec>("{}").unwrap(),
+            ResourceSpec::default()
+        );
+    }
 }

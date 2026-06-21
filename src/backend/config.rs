@@ -13,7 +13,7 @@ use crate::backend::representation::RepresentationPrefs;
 use crate::engines::registry::EngineLaunch;
 
 use compute_core::hosts::home_dir;
-pub use compute_core::hosts::{RemoteHost, config_dir};
+pub use compute_core::hosts::{RemoteHost, ResourceSpec, config_dir};
 
 /// How the interface picks its light/dark appearance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -581,6 +581,7 @@ mod tests {
                 prelude: vec!["module load gromacs".to_string()],
                 engines: HashMap::new(),
                 engine_versions: HashMap::new(),
+                resources: Default::default(),
             },
         );
 

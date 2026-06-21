@@ -134,13 +134,15 @@ fn gib(bytes: u64) -> f64 {
 }
 
 impl MemoryVerdict {
-    /// Human one-liner naming the estimate and the safe budget; `None` for `Ok`.
-    pub fn detail(&self) -> Option<String> {
+    /// Human one-liner naming the estimate and the safe budget, attributed to
+    /// `location` (e.g. `"this machine"` or a remote host's label); `None` for
+    /// `Ok`. The location is supplied by the caller so this stays host-agnostic.
+    pub fn detail(&self, location: &str) -> Option<String> {
         match self {
             MemoryVerdict::Ok => None,
             MemoryVerdict::ExceedsCanDirect { estimate, budget }
             | MemoryVerdict::ExceedsMustReduce { estimate, budget } => Some(format!(
-                "This in-core calculation needs about {:.1} GiB, but only {:.1} GiB is safe to use on this machine.",
+                "This in-core calculation needs about {:.1} GiB, but only {:.1} GiB is safe to use on {location}.",
                 gib(*estimate),
                 gib(*budget),
             )),
@@ -217,16 +219,15 @@ mod tests {
             MemoryVerdict::ExceedsMustReduce { .. }
         ));
 
-        assert!(MemoryVerdict::Ok.detail().is_none());
-        assert!(
-            MemoryVerdict::ExceedsCanDirect {
-                estimate: 20_000_000_000,
-                budget: 16_000_000_000
-            }
-            .detail()
-            .unwrap()
-            .contains("GiB")
-        );
+        assert!(MemoryVerdict::Ok.detail("this machine").is_none());
+        let msg = MemoryVerdict::ExceedsCanDirect {
+            estimate: 20_000_000_000,
+            budget: 16_000_000_000,
+        }
+        .detail("a remote host")
+        .unwrap();
+        assert!(msg.contains("GiB"));
+        assert!(msg.contains("a remote host"));
     }
 
     #[test]
