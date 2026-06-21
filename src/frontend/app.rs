@@ -44,9 +44,12 @@ pub fn run(structure: Structure, source_path: Option<PathBuf>) -> Result<()> {
                 app.state.jobs.update_check = Some(crate::frontend::jobs::spawn_update_check());
             }
             // Restart the utilization sampler when the setting was on at last exit,
-            // so the gauges animate from the first frame.
+            // so the gauges animate from the first frame, seeded with the saved
+            // refresh rate (the per-frame poll then drives it live).
             if app.state.config.show_utilization_bars && app.state.jobs.metrics.is_none() {
-                app.state.jobs.metrics = Some(crate::frontend::jobs::spawn_metrics_sampler());
+                app.state.jobs.metrics = Some(crate::frontend::jobs::spawn_metrics_sampler(
+                    crate::frontend::jobs::refresh_interval(app.state.config.monitor_refresh),
+                ));
             }
             // Debug aid: SILICOLAB_FAKE_UPDATE=<version> (or =1 for a default)
             // injects a fake "update available" so the badge, status-bar link,

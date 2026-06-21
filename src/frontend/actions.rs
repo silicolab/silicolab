@@ -309,6 +309,9 @@ pub enum AppAction {
     /// Show live CPU/GPU utilization gauges in the status bar. Persisted;
     /// turning on starts the sampler immediately, turning off stops it.
     SetShowUtilizationBars(bool),
+    /// Set how often the system monitor samples (or pause it). Persisted; the
+    /// running sampler picks up the new cadence on the next poll.
+    SetMonitorRefresh(crate::backend::config::MonitorRefresh),
     /// Whether a discovered update downloads and installs itself automatically
     /// (`true`) or waits for a one-click "Update" (`false`). Persisted; only
     /// acts when update checks are on and the install is writable.

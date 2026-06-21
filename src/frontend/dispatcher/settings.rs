@@ -74,15 +74,16 @@ pub(crate) fn set_check_updates(state: &mut AppState, on: bool) {
 }
 
 /// Persist whether live CPU/GPU utilization gauges are shown. Turning on
-/// spawns the sampler immediately (so the gauge animates at once); turning off
-/// drops the handle, which stops the background thread and returns to
-/// on-demand repainting.
+/// spawns the sampler immediately (seeded with the saved refresh rate, so the
+/// gauge animates at once); turning off drops the handle, which stops the
+/// background thread and returns to on-demand repainting.
 pub(crate) fn set_show_utilization_bars(state: &mut AppState, on: bool) {
     state.config.show_utilization_bars = on;
     if let Err(error) = save_config(&state.config) {
         state.set_message(format!("Could not save utilization preference: {error}"));
     }
-    crate::frontend::jobs::apply_metrics_sampler(&mut state.jobs, on);
+    let initial = crate::frontend::jobs::refresh_interval(state.config.monitor_refresh);
+    crate::frontend::jobs::apply_metrics_sampler(&mut state.jobs, on, initial);
     // Turning the monitor off hides the widget that owns the detail popover, so
     // close it (and drop the stale anchor) — otherwise it would keep floating
     // with frozen values until the user pressed Escape.
@@ -90,6 +91,22 @@ pub(crate) fn set_show_utilization_bars(state: &mut AppState, on: bool) {
         state.ui.layout.monitor_popover_open = false;
         state.ui.layout.monitor_anchor = None;
     }
+}
+
+/// Persist the system-monitor refresh rate. The running sampler picks up the new
+/// cadence on the next metrics poll (which reads `monitor_refresh`); request a
+/// repaint so that poll happens promptly even from a paused/idle state, where no
+/// frames would otherwise be scheduled.
+pub(crate) fn set_monitor_refresh(
+    state: &mut AppState,
+    rate: crate::backend::config::MonitorRefresh,
+    ctx: &egui::Context,
+) {
+    state.config.monitor_refresh = rate;
+    if let Err(error) = save_config(&state.config) {
+        state.set_message(format!("Could not save monitor refresh rate: {error}"));
+    }
+    ctx.request_repaint();
 }
 
 /// Persist whether discovered updates install themselves automatically. If a

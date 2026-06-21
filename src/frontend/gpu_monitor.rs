@@ -68,20 +68,46 @@ mod backend_impl {
     use nvml_wrapper::Nvml;
     use nvml_wrapper::enum_wrappers::device::TemperatureSensor;
 
-    /// NVML-backed sampler. `Nvml::init()` runs once and Errs (never panics) on
-    /// non-NVIDIA / driver-absent hosts, in which case `sample()` yields nothing.
+    /// NVML-backed sampler. The handle is acquired lazily on first use and can be
+    /// released again with [`suspend`](GpuSampler::suspend) while the monitor is
+    /// idle — holding it open (or querying it) keeps a discrete card from
+    /// dropping into its deepest runtime power state, so we let it go when there
+    /// is nothing to show. `Nvml::init()` Errs (never panics) on non-NVIDIA /
+    /// driver-absent hosts; that outcome is remembered so we don't retry it on
+    /// every resume, and `sample()` then yields nothing.
     pub struct GpuSampler {
         nvml: Option<Nvml>,
+        unavailable: bool,
     }
 
     impl GpuSampler {
         pub fn new() -> Self {
             Self {
-                nvml: Nvml::init().ok(),
+                nvml: None,
+                unavailable: false,
             }
         }
 
+        /// Acquire the NVML handle on demand. A no-op once held, and skipped once
+        /// a prior init has failed (a driverless host never gains one mid-run).
+        fn ensure(&mut self) {
+            if self.nvml.is_none() && !self.unavailable {
+                match Nvml::init() {
+                    Ok(nvml) => self.nvml = Some(nvml),
+                    Err(_) => self.unavailable = true,
+                }
+            }
+        }
+
+        /// Release the NVML/driver handle so it can't keep a discrete GPU out of
+        /// its deepest runtime power state while the monitor is idle. Re-acquired
+        /// lazily on the next [`sample`](GpuSampler::sample).
+        pub fn suspend(&mut self) {
+            self.nvml = None;
+        }
+
         pub fn sample(&mut self) -> Vec<GpuSample> {
+            self.ensure();
             let Some(nvml) = self.nvml.as_ref() else {
                 return Vec::new();
             };
@@ -121,6 +147,9 @@ mod backend_impl {
         pub fn new() -> Self {
             Self
         }
+
+        /// API parity with the NVML backend; nothing to release here.
+        pub fn suspend(&mut self) {}
 
         pub fn sample(&mut self) -> Vec<GpuSample> {
             Vec::new()
@@ -176,6 +205,10 @@ mod tests {
         // Compiles under both cfgs; on the NVML build this exercises the no-NVIDIA
         // path indirectly via an empty result when init fails in CI.
         let mut s = GpuSampler::new();
+        let _ = s.sample();
+        // Releasing the handle and sampling again must re-acquire lazily without
+        // panicking (and stays empty when there is no NVIDIA backend).
+        s.suspend();
         let _ = s.sample();
     }
 }
