@@ -80,6 +80,9 @@ pub struct QmPrompt {
     /// `None` until the user asks; hidden by the panel once the live config drifts
     /// from the fingerprint the estimate was computed for.
     pub memory_report: Option<QmMemoryEstimate>,
+    /// Where the job runs plus its resource envelope (compute target, CPU cores),
+    /// seeded from the global defaults when the panel opens.
+    pub prefs: ExecutionPrefs,
 }
 
 /// A memory estimate plus the input fingerprint it was computed for, so the panel
@@ -148,6 +151,7 @@ impl QmPrompt {
             periodic: false,
             periodic_form: PeriodicQmForm::default(),
             memory_report: None,
+            prefs: ExecutionPrefs::default(),
         }
     }
 

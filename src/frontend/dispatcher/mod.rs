@@ -291,6 +291,7 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::CheckRemoteHost(id) => check_remote_host(state, id),
         AppAction::SetupRemoteHostKey(id) => setup_remote_host_key(state, id),
         AppAction::OpenRemoteHostsSettings => open_remote_hosts_settings(state),
+        AppAction::SetDefaultComputeTarget(target) => set_default_compute_target(state, target),
         AppAction::FetchRemoteHardware(id) => fetch_remote_hardware(state, id),
         AppAction::RefreshRemoteJobs => refresh_remote_jobs(state),
         AppAction::RemoveRemoteScratch(run_uuid) => remove_remote_job_scratch(state, &run_uuid),

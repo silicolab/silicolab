@@ -72,11 +72,14 @@ GPU acceleration is **strongly recommended** — running MD on CPU alone is tech
 
 ### Remote execution over SSH (optional)
 
-Heavy MD can be offloaded to a remote machine (an HPC login node, a GPU box) while
-the GUI stays on your laptop. SilicoLab drives the OS OpenSSH client (`ssh`/`scp`)
-as subprocesses — no extra dependency to install (the OpenSSH client ships with
-macOS/Linux and is an on-by-default optional feature on Windows 11; enable it under
-*Settings → Apps → Optional features → OpenSSH Client* if it is missing).
+Heavy compute can be offloaded to a remote Linux machine (an HPC login node, a GPU
+box) while the GUI stays on your laptop. **Quantum chemistry, molecular docking, and
+MD/GROMACS can all run remotely.** SilicoLab drives the OS OpenSSH client
+(`ssh`/`scp`) as subprocesses — no extra dependency to install (the OpenSSH client
+ships with macOS/Linux and is an on-by-default optional feature on Windows 11; enable
+it under *Settings → Apps → Optional features → OpenSSH Client* if it is missing). On
+first use SilicoLab deploys a small self-contained worker to the host (pinned to the
+app version and verified against its published checksum before it runs).
 
 **Set up a host** in *Settings → Engines → Remote Hosts*:
 
@@ -89,13 +92,18 @@ macOS/Linux and is an on-by-default optional feature on Windows 11; enable it un
    one-line command to run once on the host (paste it into a terminal, or type
    `! <command>` in the SilicoLab prompt). Click **Verify** to confirm. Passwordless
    (key-based) login is required so unattended jobs never block on a password.
-3. **Detect GROMACS** — probes the host for `gmx` and records its version.
+3. **Detect GROMACS** — probes the host for `gmx` and records its version. This is
+   needed only for MD; QM and docking run inside the deployed worker, so they need
+   no host-side tool.
 
-**Run remotely:** in the Run MD or Build MD System panel, set **Compute** to your
-host. SilicoLab stages the inputs up, launches each `gmx` step detached so a dropped
-connection can't kill it, streams the live log back, and stages results down — the
-result (structure, energies, trajectory) appears exactly as for a local run. Press
-**Esc** to cancel (it kills the remote job too).
+**Run remotely:** every task panel — Run MD, Build MD System, QM, and Molecular
+Docking — carries a **Run on** selector; pick your host there. (In Build MD System the
+selector applies to the GROMACS build; the built-in geometry build always runs
+locally.) New panels start from the **Default compute target** set in *Settings →
+Engines → Remote Hosts*, and you can change it per run. SilicoLab stages the inputs up, runs the job (launching each `gmx`
+step detached so a dropped connection can't kill it), streams the live log back, and
+stages results down — the result (structure, energies, trajectory) appears exactly as
+for a local run. Press **Esc** to cancel (it kills the remote job too).
 
 v1 limitations: a remote run occupies the single engine-job slot while active;
 closing the app leaves an in-flight remote job running (a `remote_run.json` record

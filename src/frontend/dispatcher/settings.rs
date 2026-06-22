@@ -27,6 +27,19 @@ pub(crate) fn set_color_scheme(
     }
 }
 
+/// Persist the global default compute target that new task panels seed from. A
+/// target naming a since-removed host resolves leniently back to local at dispatch
+/// time, so storing one is always safe.
+pub(crate) fn set_default_compute_target(
+    state: &mut AppState,
+    target: crate::backend::config::ComputeTarget,
+) {
+    state.config.default_compute_target = target;
+    if let Err(error) = save_config(&state.config) {
+        state.set_message(format!("Could not save default compute target: {error}"));
+    }
+}
+
 /// Apply one Representation default edit and persist. These defaults only seed
 /// the appearance of *future* new entries/surfaces, so there is no live
 /// re-render here — the change lands the next time a structure is built/loaded

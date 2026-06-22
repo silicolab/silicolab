@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::frontend::ui::{execution_section, remote_host_options};
+
 /// Cations and anions offered in the System Builder. Restricted to monovalent
 /// ions, matching the solvation logic's monovalent neutralization arithmetic.
 /// Selectable ions as `(token, label)`: `token` is the GROMACS residue name
@@ -522,7 +524,13 @@ pub(crate) fn render_md_system_task_panel(
         // related). Only the GROMACS build runs external tools that can go remote;
         // the built-in path is pure-Rust geometry that always runs locally.
         if prompt.engine == MdBuildEngine::Gromacs {
-            compute_target_picker(ui, &mut prompt.target, &hosts, actions);
+            execution_section(
+                ui,
+                &mut prompt.prefs,
+                crate::frontend::state::ExecutionCaps::default(),
+                &hosts,
+                actions,
+            );
         }
         ui.horizontal(|ui| {
             let build_label = if prompt.solvate {
@@ -676,56 +684,6 @@ pub(crate) fn run_name_field(ui: &mut egui::Ui, run_name: &mut String) {
     });
 }
 
-/// The per-task execution-target dropdown ("This machine" + each configured
-/// remote host) plus an always-visible "Add host…" button that opens the Remote
-/// Hosts settings, so users can discover how to configure a host without already
-/// knowing where it lives. Mutates `target` in place (the prompt owns it);
-/// `actions` carries the open-settings request. `hosts` is `(id, label)` for
-/// every configured remote host.
-pub(crate) fn compute_target_picker(
-    ui: &mut egui::Ui,
-    target: &mut crate::backend::config::ComputeTarget,
-    hosts: &[(String, String)],
-    actions: &mut Vec<AppAction>,
-) {
-    use crate::backend::config::ComputeTarget;
-    let selected = match target {
-        ComputeTarget::Local => "This machine".to_string(),
-        ComputeTarget::Remote(id) => hosts
-            .iter()
-            .find(|(host_id, _)| host_id == id)
-            .map(|(_, label)| label.clone())
-            .unwrap_or_else(|| "(unconfigured host)".to_string()),
-    };
-    ui.horizontal(|ui| {
-        ui.label("Run on:");
-        egui::ComboBox::from_id_salt("compute_target")
-            .selected_text(selected)
-            .show_ui(ui, |ui| {
-                crate::frontend::theme::stabilize_selectable_rows(ui);
-                ui.selectable_value(target, ComputeTarget::Local, "This machine");
-                for (id, label) in hosts {
-                    ui.selectable_value(target, ComputeTarget::Remote(id.clone()), label);
-                }
-            });
-        if ui
-            .button(format!("{}  Add host…", egui_phosphor::regular::PLUS))
-            .on_hover_text("Add or manage remote hosts in Settings")
-            .clicked()
-        {
-            actions.push(AppAction::OpenRemoteHostsSettings);
-        }
-    });
-}
-
-/// `(id, label)` for every configured remote host, for the target picker.
-pub(crate) fn remote_host_options(state: &AppState) -> Vec<(String, String)> {
-    let mut hosts: Vec<(String, String)> = state
-        .config
-        .remote_hosts
-        .values()
-        .map(|host| (host.id.clone(), host.label.clone()))
-        .collect();
-    hosts.sort_by_key(|host| host.1.to_lowercase());
-    hosts
-}
+// The compute-target picker and `remote_host_options` moved to the shared
+// `frontend::ui::execution` module (reused by every task panel and Settings);
+// this file reaches them via `use super::*`.

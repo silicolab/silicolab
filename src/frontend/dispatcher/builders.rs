@@ -257,7 +257,7 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
     // judged here against this machine's RAM; a REMOTE job defers to the off-thread
     // submit, which probes the host and judges against ITS RAM (this machine's
     // budget would be the wrong yardstick), so it is not pre-flighted on this path.
-    if !prompt.periodic && resolve_remote_compute_host(state).is_none() {
+    if !prompt.periodic && resolve_remote_host(state, &prompt.prefs.target).is_none() {
         let request = prompt.to_request(state.structure().clone());
         let verdict = memory_verdict(&request, crate::backend::hardware::qm_incore_budget_bytes());
         if let Some(notification) = qm_memory_notification(&verdict, "this machine") {
@@ -266,16 +266,21 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
         }
     }
     let job = prompt.to_job(state.structure().clone());
-    let remote_host = resolve_remote_compute_host(state);
+    let remote_host = resolve_remote_host(state, &prompt.prefs.target);
     state.set_source_path(None);
     state.ui.editor = None;
     state.ui.pending_qm = None;
     match remote_host {
         // A configured remote target: deploy + submit detached, tracked via the
         // job registry and the opt-in refresh — not the in-process worker.
-        Some(host) => start_remote_qm(state, job, host),
+        Some(host) => start_remote_qm(
+            state,
+            job,
+            host,
+            (prompt.prefs.cores_per_subtask > 0).then_some(prompt.prefs.cores_per_subtask as usize),
+        ),
         None => {
-            let running = spawn_qm_job(job, Some(qm_thread_count(state)));
+            let running = spawn_qm_job(job, Some(qm_thread_count(state, &prompt.prefs)));
             state.jobs.set_qm(running);
             if let Some(task_run_id) = state.active_task_run {
                 state.tasks.mark_status(task_run_id, TaskStatus::Running);
@@ -285,22 +290,27 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
     }
 }
 
-fn qm_thread_count(state: &AppState) -> usize {
-    state
-        .config
-        .compute_core_count
-        .clamp(1, crate::backend::hardware::info().logical_cores)
+/// Local QM thread count: the per-panel core request when set (`> 0`), otherwise
+/// the global core cap; clamped to this machine's logical cores.
+fn qm_thread_count(state: &AppState, prefs: &crate::frontend::state::ExecutionPrefs) -> usize {
+    let requested = if prefs.cores_per_subtask > 0 {
+        prefs.cores_per_subtask as usize
+    } else {
+        state.config.compute_core_count
+    };
+    requested.clamp(1, crate::backend::hardware::info().logical_cores)
 }
 
-/// The remote host a built-in compute job should run on, or `None` for local.
-/// Resolves the app-wide compute target leniently: a dangling host id falls back
-/// to local, mirroring the MD path's `resolve_md_compute`. Shared by the QM and
-/// docking routers.
-pub(crate) fn resolve_remote_compute_host(
+/// The remote host a built-in compute job should run on for `target`, or `None`
+/// for local. Resolves leniently: a dangling host id (a since-deleted host) falls
+/// back to local rather than erroring. Shared by every task router (QM, docking,
+/// MD), each passing its panel's chosen target.
+pub(crate) fn resolve_remote_host(
     state: &AppState,
+    target: &crate::backend::config::ComputeTarget,
 ) -> Option<crate::backend::config::RemoteHost> {
     use crate::backend::config::ComputeTarget;
-    match &state.config.default_compute_target {
+    match target {
         ComputeTarget::Local => None,
         ComputeTarget::Remote(host_id) => state.config.remote_hosts.get(host_id).cloned(),
     }
@@ -311,9 +321,12 @@ pub(crate) fn resolve_remote_compute_host(
 /// uses that host's RAM and label; otherwise this machine's RAM. The detected
 /// inventory is best-effort (the settings "Detect" action fills it); the off-thread
 /// submit re-probes and re-checks against the real host before launch regardless.
-fn qm_incore_budget_and_location(state: &AppState) -> (u64, String) {
+fn qm_incore_budget_and_location(
+    state: &AppState,
+    target: &crate::backend::config::ComputeTarget,
+) -> (u64, String) {
     use crate::backend::hardware::{qm_incore_budget_bytes, qm_incore_budget_for};
-    if let Some(host) = resolve_remote_compute_host(state)
+    if let Some(host) = resolve_remote_host(state, target)
         && let Some(ram) = state
             .ui
             .settings
@@ -333,9 +346,10 @@ fn start_remote_qm(
     state: &mut AppState,
     job: crate::engines::qm::QmJob,
     host: crate::backend::config::RemoteHost,
+    cores_override: Option<usize>,
 ) {
     let requested_cores = crate::frontend::remote_jobs::resolve_requested_cores(
-        None,
+        cores_override,
         &host,
         state.config.compute_core_count,
     );
@@ -642,7 +656,7 @@ pub(crate) fn estimate_qm_memory(state: &mut AppState) {
     }
     let request = prompt.to_request(state.structure().clone());
     let signature = prompt.memory_signature(state.structure());
-    let (budget, location) = qm_incore_budget_and_location(state);
+    let (budget, location) = qm_incore_budget_and_location(state, &prompt.prefs.target);
     match crate::engines::qm::estimate_request_memory(&request, budget) {
         Ok(report) => {
             if let Some(prompt) = state.ui.pending_qm.as_mut() {

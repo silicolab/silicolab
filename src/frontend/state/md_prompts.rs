@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use super::ExecutionPrefs;
+
 /// Which sizing strategy the MD system panel is currently editing. Both sets of
 /// values are retained so toggling between modes does not lose the user's input.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -61,9 +63,9 @@ pub struct MdSystemPrompt {
     pub salt_concentration_molar: f32,
     pub positive_ion: String,
     pub negative_ion: String,
-    /// Where the build executes: locally or on a configured remote host. Seeded
-    /// from `config.default_compute_target` when the panel opens.
-    pub target: crate::backend::config::ComputeTarget,
+    /// Where the build runs plus its resource envelope, seeded from the global
+    /// defaults when the panel opens (see `ExecutionPrefs::seeded`).
+    pub prefs: ExecutionPrefs,
 }
 
 impl Default for MdSystemPrompt {
@@ -92,7 +94,7 @@ impl Default for MdSystemPrompt {
             salt_concentration_molar: 0.15,
             positive_ion: solv.positive_ion,
             negative_ion: solv.negative_ion,
-            target: crate::backend::config::ComputeTarget::Local,
+            prefs: ExecutionPrefs::default(),
         }
     }
 }
@@ -263,9 +265,9 @@ pub struct MdRunPrompt {
     pub show_advanced: bool,
     /// Which stage's detail view is currently expanded (one at a time).
     pub expanded_stage: Option<usize>,
-    /// Where the run executes: locally or on a configured remote host. Seeded from
-    /// `config.default_compute_target` when the panel opens.
-    pub target: crate::backend::config::ComputeTarget,
+    /// Where the run executes plus its resource envelope, seeded from the global
+    /// defaults when the panel opens (see `ExecutionPrefs::seeded`).
+    pub prefs: ExecutionPrefs,
 }
 
 impl Default for MdRunPrompt {
@@ -282,7 +284,7 @@ impl Default for MdRunPrompt {
             topology_override_path: None,
             show_advanced: false,
             expanded_stage: None,
-            target: crate::backend::config::ComputeTarget::Local,
+            prefs: ExecutionPrefs::default(),
         }
     }
 }

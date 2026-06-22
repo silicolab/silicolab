@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::frontend::ui::{execution_section, remote_host_options};
+
 pub(crate) fn render_md_run_task_panel(
     state: &mut AppState,
     ui: &mut egui::Ui,
@@ -375,7 +377,13 @@ pub(crate) fn render_md_run_task_panel(
         ui.separator();
         // The execution target sits right above the Run button — the two are
         // closely related, so the choice is prompted right where the run starts.
-        compute_target_picker(ui, &mut prompt.target, &hosts, actions);
+        execution_section(
+            ui,
+            &mut prompt.prefs,
+            crate::frontend::state::ExecutionCaps::default(),
+            &hosts,
+            actions,
+        );
         ui.horizontal(|ui| {
             if ui
                 .button(format!("{}  Run", egui_phosphor::regular::PLAY))

@@ -1,14 +1,14 @@
-//! `Control::Custom` body for the Compute Hardware settings panel: a read-only
-//! inventory of the detected CPU, GPU, and total RAM. The core-count cap for QM
-//! jobs lives next to the QM panel's Run button now, not here, so it is set where
-//! the job is launched.
+//! `Control::Custom` body for the Compute Hardware settings panel: the detected
+//! CPU / GPU / RAM inventory, and the default core cap for QM jobs. The cap is the
+//! seed a QM panel starts from; each run can override it per job in its execution
+//! controls.
 
 use eframe::egui::{self, RichText};
 
 use crate::frontend::{actions::AppAction, state::AppState};
 
 /// Render the Compute Hardware panel body.
-pub(crate) fn render(state: &mut AppState, ui: &mut egui::Ui, _actions: &mut Vec<AppAction>) {
+pub(crate) fn render(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec<AppAction>) {
     let hw = crate::backend::hardware::info();
     let pal = crate::frontend::theme::palette(ui);
 
@@ -22,6 +22,25 @@ pub(crate) fn render(state: &mut AppState, ui: &mut egui::Ui, _actions: &mut Vec
         _ => format!("{} cores, {} threads", hw.physical_cores, hw.logical_cores),
     };
     ui.label(RichText::new(cores_line).color(pal.text_tertiary));
+
+    // Default core cap for QM jobs; a QM panel seeds its per-run core count from
+    // this and can override it. (MD/docking core controls are wired separately.)
+    let logical = hw.logical_cores.max(1);
+    let mut cores = state.config.compute_core_count.clamp(1, logical);
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        ui.label("QM core cap:");
+        if ui
+            .add(egui::DragValue::new(&mut cores).range(1..=logical))
+            .on_hover_text(format!(
+                "Default cores a QM job may use ({logical} available)"
+            ))
+            .changed()
+        {
+            actions.push(AppAction::SetComputeCoreCount(cores));
+        }
+        ui.label(RichText::new(format!("/ {logical}")).color(pal.text_tertiary));
+    });
 
     let gpus = crate::backend::hardware::gpus();
     if gpus.is_empty() {

@@ -202,10 +202,9 @@ pub(crate) fn render_qm_task_panel(
         .as_ref()
         .is_some_and(|cell| !cell.is_placeholder());
 
-    // Compute-control inputs, read before the prompt is borrowed mutably.
-    let logical_cores = crate::backend::hardware::info().logical_cores.max(1);
-    let mut core_count = state.config.compute_core_count.clamp(1, logical_cores);
+    // Read before the prompt is borrowed mutably.
     let structure_is_empty = state.structure().atoms.is_empty();
+    let hosts = crate::frontend::ui::remote_host_options(state);
     // Fingerprint of the live config, to hide a memory estimate once the form or
     // structure has drifted from what it was computed for.
     let current_memory_sig = state
@@ -213,7 +212,6 @@ pub(crate) fn render_qm_task_panel(
         .pending_qm
         .as_ref()
         .map(|prompt| prompt.memory_signature(state.structure()));
-    let pal = crate::frontend::theme::palette(ui);
 
     if let Some(prompt) = &mut state.ui.pending_qm {
         // Offer molecular vs. periodic only when a cell is present; without one,
@@ -238,40 +236,35 @@ pub(crate) fn render_qm_task_panel(
         }
 
         ui.separator();
-        // Compute controls sit by Run, not in Settings: cores and the memory
-        // estimate are decisions made when launching this specific job.
-        ui.horizontal(|ui| {
-            ui.label(format!("{}  Cores:", egui_phosphor::regular::CPU));
-            if ui
-                .add(egui::DragValue::new(&mut core_count).range(1..=logical_cores))
-                .on_hover_text(format!(
-                    "How many CPU cores this QM job may use ({logical_cores} available)"
-                ))
-                .changed()
-            {
-                actions.push(AppAction::SetComputeCoreCount(core_count));
-            }
-            ui.label(RichText::new(format!("/ {logical_cores}")).color(pal.text_tertiary));
-
-            // The memory estimate models the molecular in-core ERI tensor; a
-            // periodic GPW run has none, so the button is molecular-only.
-            if !prompt.periodic {
-                ui.add_space(8.0);
-                if ui
-                    .add_enabled(
-                        !structure_is_empty,
-                        egui::Button::new(format!(
-                            "{}  Estimate memory",
-                            egui_phosphor::regular::MEMORY
-                        )),
-                    )
-                    .on_hover_text("Predict peak RAM for the current method, basis, and backend")
-                    .clicked()
-                {
-                    actions.push(AppAction::EstimateQmMemory);
-                }
-            }
-        });
+        // Where and how this job runs (compute target + cores), seeded from the
+        // global defaults and overridable per run. The memory estimate is
+        // QM-specific, so it sits just below.
+        crate::frontend::ui::execution_section(
+            ui,
+            &mut prompt.prefs,
+            crate::frontend::state::ExecutionCaps {
+                cores: true,
+                ..Default::default()
+            },
+            &hosts,
+            actions,
+        );
+        // The memory estimate models the molecular in-core ERI tensor; a periodic
+        // GPW run has none, so the button is molecular-only.
+        if !prompt.periodic
+            && ui
+                .add_enabled(
+                    !structure_is_empty,
+                    egui::Button::new(format!(
+                        "{}  Estimate memory",
+                        egui_phosphor::regular::MEMORY
+                    )),
+                )
+                .on_hover_text("Predict peak RAM for the current method, basis, and backend")
+                .clicked()
+        {
+            actions.push(AppAction::EstimateQmMemory);
+        }
         // Show the estimate only while it still matches the live config; a drifted
         // one stays in state (cheap to keep) but is hidden until re-estimated.
         if let Some(estimate) = &prompt.memory_report
@@ -328,6 +321,7 @@ pub(crate) fn render_docking_task_panel(
         .iter()
         .map(|record| (record.id, record.name.clone()))
         .collect();
+    let hosts = crate::frontend::ui::remote_host_options(state);
 
     if let Some(prompt) = &mut state.ui.pending_docking {
         let label_for = |selected: Option<u64>| -> String {
@@ -408,6 +402,15 @@ pub(crate) fn render_docking_task_panel(
         ui.checkbox(&mut prompt.score_only, "Score input pose only (no search)");
 
         ui.separator();
+        // Where this job runs. Docking is single-threaded today, so the resource
+        // knobs render disabled for now.
+        crate::frontend::ui::execution_section(
+            ui,
+            &mut prompt.prefs,
+            crate::frontend::state::ExecutionCaps::default(),
+            &hosts,
+            actions,
+        );
         ui.horizontal(|ui| {
             if ui
                 .button(format!("{}  Run", egui_phosphor::regular::PLAY))

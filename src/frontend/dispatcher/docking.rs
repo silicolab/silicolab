@@ -69,7 +69,7 @@ pub(crate) fn start_pending_docking(state: &mut AppState) {
     };
 
     state.ui.pending_docking = None;
-    match resolve_remote_compute_host(state) {
+    match resolve_remote_host(state, &prompt.prefs.target) {
         // A configured remote target: deploy + submit detached, tracked via the
         // job registry and the opt-in refresh. Docking is single-threaded, so no
         // core count rides along.
