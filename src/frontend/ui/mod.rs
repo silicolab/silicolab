@@ -20,6 +20,7 @@ use crate::{
 
 mod about;
 mod dock;
+mod execution;
 pub(crate) mod gauge;
 mod modal;
 mod notification;
@@ -49,6 +50,7 @@ mod widgets;
 
 pub(crate) use entry_item::*;
 pub(crate) use entry_list::*;
+pub(crate) use execution::*;
 pub(crate) use layout::*;
 pub(crate) use primary_sidebar::*;
 pub(crate) use title_bar::*;

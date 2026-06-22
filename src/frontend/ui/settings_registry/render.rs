@@ -232,6 +232,24 @@ pub fn registry() -> Vec<SettingDescriptor> {
         reset: None,
     });
 
+    // The global default compute target every new task panel seeds from; each
+    // panel can override it per run. Grouped with Remote Hosts, where targets live.
+    items.push(SettingDescriptor {
+        id: "engines.default_compute_target",
+        category: SettingCategory::Engines,
+        group: "Remote Hosts",
+        title: "Default compute target",
+        description: "",
+        keywords: &[
+            "remote", "compute", "target", "default", "run on", "host", "qm", "docking", "md",
+        ],
+        control: Control::Custom(render_default_compute_target),
+        enabled: None,
+        indent: false,
+        is_default: None,
+        reset: None,
+    });
+
     // Assistant: the in-app LLM agent. Custom editor (provider/model/effort/key),
     // data-driven from the agent registry. Strong keywords for search.
     items.push(SettingDescriptor {

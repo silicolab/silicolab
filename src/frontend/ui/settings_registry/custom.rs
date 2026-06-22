@@ -30,6 +30,29 @@ pub(crate) fn render_default_project_dir(
     ));
 }
 
+/// The global default compute target every task panel seeds from (each panel can
+/// override it per run). Reuses the shared compute-target picker against a copy of
+/// the config value, emitting the change so the dispatcher stays the sole mutator.
+pub(crate) fn render_default_compute_target(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+) {
+    use crate::frontend::ui::{compute_target_picker, remote_host_options};
+
+    let pal = crate::frontend::theme::palette(ui);
+    let hosts = remote_host_options(state);
+    let mut target = state.config.default_compute_target.clone();
+    compute_target_picker(ui, &mut target, &hosts, actions, "default_compute_target");
+    if target != state.config.default_compute_target {
+        actions.push(AppAction::SetDefaultComputeTarget(target));
+    }
+    ui.label(caption_text(
+        "New QM, docking, and MD panels start from this target; each can override it per run.",
+        pal.text_muted,
+    ));
+}
+
 /// Informational placeholder: there are no user-tunable global task preferences
 /// wired to anything yet (the job manager spawns a thread per job with no
 /// concurrency cap, and timeouts are fixed per operation), so we surface a note

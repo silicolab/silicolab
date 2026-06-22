@@ -233,6 +233,10 @@ pub enum AppAction {
     /// Open the Settings dialog at the Remote Hosts section (from the per-task
     /// target picker's "Add host…" button).
     OpenRemoteHostsSettings,
+    /// Set the global default compute target that new task panels seed from (each
+    /// panel can still override it per run). Written to the settings file by the
+    /// dispatcher.
+    SetDefaultComputeTarget(crate::backend::config::ComputeTarget),
     /// Fetch the static hardware inventory (CPU/memory/GPU) of the host with this
     /// id over SSH, for the Hardware ▸ Remote settings panel (worker thread).
     FetchRemoteHardware(String),

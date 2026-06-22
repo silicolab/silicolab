@@ -63,7 +63,7 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
         });
     // A remote target relays the whole pipeline to a deployed worker, which
     // resolves `gmx` and runs it on the node; the local arm runs `gmx` here.
-    if let Some(host) = resolve_md_remote_host(state, &prompt.target) {
+    if let Some(host) = resolve_remote_host(state, &prompt.prefs.target) {
         let topology = match crate::workflows::gromacs::WireTopology::from_source(&topology) {
             Ok(topology) => topology,
             Err(error) => {
@@ -195,21 +195,6 @@ pub(crate) fn resolve_md_engine_launch(
             persist_detected_engine_launch(state, EngineId::GROMACS, launch.clone());
             Ok(launch)
         }
-    }
-}
-
-/// The remote host an MD job targets, or `None` for local execution. A `Remote`
-/// target whose host id is no longer configured resolves leniently to local
-/// (mirroring the registry's fallback on a miss), so a deleted host never dangles.
-/// Pure and local — the network work happens later on the submit worker thread.
-pub(crate) fn resolve_md_remote_host(
-    state: &AppState,
-    target: &crate::backend::config::ComputeTarget,
-) -> Option<crate::backend::config::RemoteHost> {
-    use crate::backend::config::ComputeTarget;
-    match target {
-        ComputeTarget::Local => None,
-        ComputeTarget::Remote(host_id) => state.config.remote_hosts.get(host_id).cloned(),
     }
 }
 
@@ -776,6 +761,9 @@ pub(crate) fn build_md_system(
                 start_gromacs_md_build(state, prompt)
             }
         }
+        // The built-in geometry build is pure-Rust and always runs locally; it
+        // ignores `prompt.prefs.target` (the panel hides the Run-on picker for the
+        // built-in engine), so a Remote seed never routes a built-in build off-box.
         MdBuildEngine::BuiltIn => build_md_system_builtin(state, prompt),
     }
 }
@@ -822,7 +810,7 @@ pub(crate) fn start_material_md_build(
 
     // A remote target relays the build to a deployed worker, which resolves `gmx`
     // on the node; the local arm runs `gmx` here.
-    if let Some(host) = resolve_md_remote_host(state, &prompt.target) {
+    if let Some(host) = resolve_remote_host(state, &prompt.prefs.target) {
         state.ui.pending_optimization = None;
         let job = crate::workflows::gromacs::GromacsJob::BuildMaterial(
             crate::workflows::gromacs::GromacsMaterialRequest {
@@ -912,7 +900,7 @@ pub(crate) fn start_gromacs_md_build(
 
     // A remote target relays the build to a deployed worker, which resolves `gmx`
     // on the node; the local arm runs `gmx` here.
-    if let Some(host) = resolve_md_remote_host(state, &prompt.target) {
+    if let Some(host) = resolve_remote_host(state, &prompt.prefs.target) {
         state.ui.pending_optimization = None;
         let job = crate::workflows::gromacs::GromacsJob::Build(
             crate::workflows::gromacs::GromacsBuildRequest {

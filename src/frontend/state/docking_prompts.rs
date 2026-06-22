@@ -24,6 +24,9 @@ pub struct DockingPrompt {
     pub seed: u32,
     /// Score the ligand's input pose only, skipping the search.
     pub score_only: bool,
+    /// Where the job runs plus its resource envelope, seeded from the global
+    /// defaults when the panel opens.
+    pub prefs: crate::frontend::state::ExecutionPrefs,
 }
 
 impl Default for DockingPrompt {
@@ -38,6 +41,7 @@ impl Default for DockingPrompt {
             num_modes: 9,
             seed: 0,
             score_only: false,
+            prefs: crate::frontend::state::ExecutionPrefs::default(),
         }
     }
 }
