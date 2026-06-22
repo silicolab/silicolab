@@ -19,7 +19,7 @@ use super::input::{
 };
 use super::nonbonded::NonbondedScheme;
 use super::runner::{FileRef, StageFileRole, StageLinks, StageSpec};
-use crate::workflows::molecular_dynamics::run::{
+use crate::md::run::{
     BarostatKind, ConstraintScope, CouplingGroups, ForceFieldFamily, MdStage, PressureShape,
     StageKind, ThermostatKind, family_nonbonded_intent,
 };
@@ -212,7 +212,7 @@ fn map_thermostat(kind: Option<ThermostatKind>) -> Thermostat {
 /// production (Appendix D).
 fn realize_pressure(
     kind: StageKind,
-    pressure: crate::workflows::molecular_dynamics::run::PressureCoupling,
+    pressure: crate::md::run::PressureCoupling,
     version_year: Option<u32>,
 ) -> PressureCoupling {
     let is_production = matches!(kind, StageKind::Produce | StageKind::Extend);
@@ -322,10 +322,8 @@ fn advanced_raw_lines(stage: &MdStage) -> Vec<(String, String)> {
 mod tests {
     use super::*;
     use crate::engines::gromacs::input::render_mdp;
-    use crate::workflows::molecular_dynamics::run::system_context::MdSystemContext;
-    use crate::workflows::molecular_dynamics::run::{
-        MdStage, PresetId, PresetParams, RestraintScheme, SystemTypeOverrides,
-    };
+    use crate::md::run::system_context::MdSystemContext;
+    use crate::md::run::{MdStage, PresetId, PresetParams, RestraintScheme, SystemTypeOverrides};
 
     fn amber_protein_context() -> MdSystemContext {
         MdSystemContext {
@@ -441,8 +439,7 @@ mod tests {
     #[test]
     fn membrane_pressure_renders_semiisotropic_arrays() {
         let mut stage = MdStage::npt(300.0);
-        stage.pressure =
-            Some(crate::workflows::molecular_dynamics::run::PressureCoupling::semi_isotropic());
+        stage.pressure = Some(crate::md::run::PressureCoupling::semi_isotropic());
         let mdp = render_mdp(&realize_stage(
             &stage,
             ForceFieldFamily::Charmm,
@@ -486,8 +483,8 @@ mod tests {
         use crate::engines::gromacs::topology::TopologySource;
         use crate::engines::registry::EngineLaunch;
         use crate::io::formats::pdb::parse_pdb;
-        use crate::workflows::molecular_dynamics::run::{StageKind, StageLength};
-        use crate::workflows::molecular_dynamics::{BoxShape, MdSystemConfig, WaterModel};
+        use crate::md::run::{StageKind, StageLength};
+        use crate::md::{BoxShape, MdSystemConfig, WaterModel};
 
         let root = std::env::temp_dir().join("silicolab_gmx_standard_preset");
         let _ = std::fs::remove_dir_all(&root);
@@ -499,7 +496,7 @@ mod tests {
             program: "/usr/local/gromacs/bin/gmx".to_string(),
         };
 
-        let pdb = include_str!("../../workflows/molecular_dynamics/fixtures/capped_ala.pdb");
+        let pdb = include_str!("../../md/fixtures/capped_ala.pdb");
         let structure = parse_pdb(pdb).expect("fixture parses");
 
         // Build a solvated, neutralized peptide with AMBER + TIP3P (also writes

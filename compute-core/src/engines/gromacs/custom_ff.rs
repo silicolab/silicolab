@@ -10,7 +10,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::workflows::molecular_dynamics::CustomTypes;
+use crate::md::CustomTypes;
 
 /// Build the engine-neutral [`CustomTypes`] a framework build needs from a raw
 /// GROMACS `.itp` fragment.

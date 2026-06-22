@@ -433,10 +433,8 @@ fn name_uniquely(mut stages: Vec<MdStage>) -> Vec<MdStage> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflows::molecular_dynamics::run::stage::PressureShape;
-    use crate::workflows::molecular_dynamics::run::system_context::{
-        ForceFieldFamily, MdSystemContext, SystemTypeOverrides,
-    };
+    use crate::md::run::stage::PressureShape;
+    use crate::md::run::system_context::{ForceFieldFamily, MdSystemContext, SystemTypeOverrides};
 
     fn context(protein: bool, membrane: bool, ligand: bool, nucleic: bool) -> MdSystemContext {
         MdSystemContext {

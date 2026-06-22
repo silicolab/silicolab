@@ -7,7 +7,7 @@
 //! engines. Other MD engines add their own renderer alongside this one,
 //! consuming the same [`MdTopology`].
 
-use crate::workflows::molecular_dynamics::{BondedParam, BondedTerm, MdTopology, MoleculeType};
+use crate::md::{BondedParam, BondedTerm, MdTopology, MoleculeType};
 
 /// Angstrom -> nanometer (GROMACS uses nm for Lennard-Jones sigma and SETTLE
 /// geometry).
@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn rigid_framework_renders_an_exclusions_block() {
-        use crate::workflows::molecular_dynamics::FrameworkMode;
+        use crate::md::FrameworkMode;
         let topo = MdTopology::framework(&carbon_ring(), FrameworkMode::Rigid).unwrap();
         let top = render_top(&topo);
         assert!(top.contains("[ exclusions ]"), "{top}");
@@ -309,7 +309,7 @@ mod tests {
 
     #[test]
     fn flexible_framework_renders_bonded_directives() {
-        use crate::workflows::molecular_dynamics::FrameworkMode;
+        use crate::md::FrameworkMode;
         let topo = MdTopology::framework(&carbon_ring(), FrameworkMode::Flexible).unwrap();
         let top = render_top(&topo);
         // OPLS combination rule 3 and the carbon bonded parameter table.

@@ -19,9 +19,11 @@ Keep these rules short, practical, and focused on the invariants that are expens
 * Higher layers may depend on lower layers only; lower layers must not import or call higher layers. The compute stack lives in the `compute-core` crate; the GUI app (`silicolab`) and the headless worker both depend on it. Layer order, lowest to highest:
 
   ```text
-  compute-core:  domain/ <- io/ <- engines/ <- workflows/
+  compute-core:  domain/ <- io/ <- md/ <- engines/ <- workflows/
   silicolab:     backend/ <- frontend/   (the app crate; depends on compute-core)
   ```
+
+  `md/` is the engine-neutral molecular-dynamics model (system building, topology, solvation, force fields, the stage/parameter model, recommendations) that both the MD engines and the MD workflow build on — so it sits below `engines/`. The engine-coupling step (translating that model into an engine stage chain) is the one MD piece that stays in `workflows/molecular_dynamics/protocol.rs`. Do not import `workflows/` from `engines/`; reach for `md/` instead.
 
   `compute-core` also holds the remote-host descriptor (`hosts`), the serializable `payload` bridge, and the engine-job `wire` contract, and carries no GUI dependencies so the headless worker can link it alone.
 

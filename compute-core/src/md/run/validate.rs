@@ -147,11 +147,9 @@ pub fn has_errors(issues: &[ValidationIssue]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflows::molecular_dynamics::run::preset::{PresetId, PresetParams};
-    use crate::workflows::molecular_dynamics::run::stage::{MdStage, PressureCoupling};
-    use crate::workflows::molecular_dynamics::run::system_context::{
-        ForceFieldFamily, MdSystemContext, SystemTypeOverrides,
-    };
+    use crate::md::run::preset::{PresetId, PresetParams};
+    use crate::md::run::stage::{MdStage, PressureCoupling};
+    use crate::md::run::system_context::{ForceFieldFamily, MdSystemContext, SystemTypeOverrides};
 
     fn ctx(hmr: bool, restraints: bool) -> MdSystemContext {
         MdSystemContext {
