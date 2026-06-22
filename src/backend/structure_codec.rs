@@ -74,7 +74,7 @@ pub fn decode_structure(bytes: &[u8], uncompressed_len: usize) -> Result<Structu
     let json = decompress(bytes, uncompressed_len)?;
     let payload: StructurePayload =
         serde_json::from_slice(&json).context("deserialize structure")?;
-    Ok(payload_to_structure(payload))
+    payload_to_structure(payload).context("rebuild structure from payload")
 }
 
 /// Serialize and compress an undo/redo snapshot.
@@ -102,7 +102,7 @@ pub fn decode_snapshot(bytes: &[u8], uncompressed_len: usize) -> Result<EditSnap
     let json = decompress(bytes, uncompressed_len)?;
     let payload: SnapshotPayload = serde_json::from_slice(&json).context("deserialize snapshot")?;
     Ok(EditSnapshot {
-        structure: payload_to_structure(payload.structure),
+        structure: payload_to_structure(payload.structure)?,
         source_path: payload.source_path.map(PathBuf::from),
         save_path: PathBuf::from(payload.save_path),
         selection: AtomSelection::from_parts(payload.selection_atoms, payload.selection_primary),

@@ -21,9 +21,10 @@ cargo test --release -- --ignored wsl_gromacs       # needs WSL + GROMACS
 
 (See the README for installing external runtime dependencies such as GROMACS.)
 
-Tests are inline `#[cfg(test)] mod tests` blocks next to the code they cover â€”
-there is **no `tests/` directory**. Add tests alongside the code, not in a
-separate tree.
+Most tests are inline `#[cfg(test)] mod tests` blocks next to the code they cover.
+A top-level `tests/` directory holds the few true integration tests that drive the
+compiled binary end-to-end (e.g. `tests/engine_exec.rs`); prefer inline unit tests
+and reach for `tests/` only when a test must exercise the built artifact itself.
 
 Machine-specific acceptance tests â€” those that need an external tool installed â€”
 are gated with `#[ignore]` so the default `cargo test` run stays hermetic. Run
@@ -53,11 +54,14 @@ now, and hold the integration code until its real-run test exists.
 
 ### Pre-commit gates
 
-All of the following must pass before you commit:
+All of the following must pass before you commit. They mirror the CI merge gate,
+which runs with `RUSTFLAGS=-D warnings` across the whole workspace:
 
-1. `cargo fmt --check`
-2. `cargo clippy --all-targets --release -- -D warnings`
-3. `cargo test --release`
+1. `cargo fmt --all --check`
+2. `cargo clippy --workspace --all-targets --all-features`
+3. `cargo test --workspace --all-features`
+
+Set `RUSTFLAGS=-D warnings` so clippy and test fail on warnings exactly as CI does.
 
 ## Licensing
 
@@ -67,5 +71,5 @@ By contributing, you confirm that you have the right to make that grant.
 
 ## Code conventions
 - **Single-responsibility files.** Split into modules rather than letting a file
-  accumulate â€” target under 500 lines, with real discomfort past ~800. This is a
-  modular single-crate project; lean on the module system.
+  accumulate â€” keep source files under 600 *code* lines (soft target ~400), per
+  [`.rules`](.rules). This is a modular Cargo workspace; lean on the module system.

@@ -19,7 +19,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::domain::{Structure, UnitCell};
@@ -406,12 +406,31 @@ fn run_outcome(results: Vec<StageResult>) -> Result<GromacsOutcome> {
     })
 }
 
+/// Upper bound on an embedded trajectory. The `.xtc` bytes travel inside the JSON
+/// outcome — and for a remote run are encoded as a number array and read back
+/// into RAM on the client — so an unbounded read would let a long production run
+/// OOM the client. Above this, fail with an actionable message rather than
+/// producing an unusable multi-gigabyte outcome.
+const MAX_TRAJECTORY_BYTES: u64 = 512 * 1024 * 1024;
+
 fn read_trajectory(path: &Path) -> Result<GromacsTrajectory> {
     let file_name = path
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or("trajectory.xtc")
         .to_string();
+    let len = std::fs::metadata(path)
+        .with_context(|| format!("reading trajectory {}", path.display()))?
+        .len();
+    if len > MAX_TRAJECTORY_BYTES {
+        bail!(
+            "trajectory {} is {} MiB, over the {} MiB limit for inline playback; \
+             reduce the run length or trajectory output frequency (nstxout-compressed)",
+            path.display(),
+            len / (1024 * 1024),
+            MAX_TRAJECTORY_BYTES / (1024 * 1024)
+        );
+    }
     let bytes =
         std::fs::read(path).with_context(|| format!("reading trajectory {}", path.display()))?;
     Ok(GromacsTrajectory { file_name, bytes })

@@ -2609,9 +2609,9 @@ dependencies = [
 
 [[package]]
 name = "hartree"
-version = "0.1.1"
+version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7912a5fd7c4bae72d3fd8d8bbd5503674503c46e129c67253050f8998a0d070b"
+checksum = "e7b95fc9ae79405179fb4571b832334a4a1a97e4a9d5275668a1da595a56ef08"
 dependencies = [
  "faer",
  "integral",

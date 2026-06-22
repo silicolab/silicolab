@@ -1,9 +1,17 @@
 # Architecture
 
-SilicoLab is a single-crate Rust (edition 2024) desktop application for molecular
-and materials modeling. It ships two front-ends — an egui/wgpu GUI and a
-headless CLI — that are both driven by the same `.sls` scripting language defined
-in `frontend/console.rs`.
+SilicoLab is a Rust (edition 2024) **Cargo workspace** for molecular and
+materials modeling. It is split into three crates:
+
+- **`silicolab`** (repository root, `src/`) — the desktop application: an
+  egui/wgpu GUI and a headless CLI, both driven by the same `.sls` scripting
+  language defined in `src/frontend/console.rs`.
+- **`compute-core`** (`compute-core/`) — the compute stack (domain model, IO,
+  engines, workflows) plus the remote-host descriptor, the serializable payload
+  bridge, and the engine-job wire contract. It carries **no GUI dependencies**.
+- **`silicolab-compute`** (`silicolab-compute/`) — the headless compute worker, a
+  self-contained static musl binary deployed to a remote host on first use. It
+  links `compute-core` alone.
 
 A script command is defined **once** in `console.rs` and is then available in
 both the GUI console and the CLI. When you add or change a command, you do not
@@ -26,21 +34,35 @@ which is what makes the dual-front-end guarantee above hold.
 ## Module layers
 
 Code is organized as a one-directional stack; a lower layer never depends on a
-higher one:
+higher one. The stack spans two crates — the GUI app depends on `compute-core`,
+never the reverse:
 
 ```
-domain/    pure data, no UI or IO
-  → io/        file formats + outbound transport (PDB fetch, update check, LLM)
-  → backend/   persistence
-  → engines/   compute
-  → workflows/ composed operations
-  → frontend/  egui / wgpu
+compute-core crate (no GUI deps):
+  domain/    pure data, no UI or IO
+    → io/        file formats + outbound transport (PDB fetch, update check, LLM)
+    → md/        engine-neutral molecular-dynamics model (system, topology,
+                 solvation, force fields, the stage/parameter model)
+    → engines/   compute (local subprocess engines + the remote launcher)
+    → workflows/ composed operations
+  (+ hosts        remote-host descriptor
+     payload      serializable Structure <-> wire bridge
+     wire         engine-job request/outcome contract)
+
+silicolab crate (depends on compute-core):
+    → backend/   persistence (SQLite projects, config, secrets)
+    → frontend/  egui / wgpu, the .sls console, the dispatcher
+
+silicolab-compute crate (depends on compute-core):
+    the headless worker that runs wire requests on a remote host
 ```
 
-**Why:** keeping `domain/` free of UI and IO makes the core data model testable
-and reusable by both front-ends; the strict direction prevents dependency cycles
-and keeps compute and persistence independent of rendering. When adding code,
-put it in the lowest layer that can own it, and don't reach upward.
+**Why:** keeping `domain/` free of UI and IO — and `compute-core` free of GUI
+deps entirely — makes the core data model testable, reusable by both front-ends,
+and linkable by the headless worker alone. The strict direction prevents
+dependency cycles and keeps compute and persistence independent of rendering.
+When adding code, put it in the lowest layer (and lowest crate) that can own it,
+and don't reach upward.
 
 ## GUI data flow: single direction, single mutator
 
@@ -132,6 +154,28 @@ Some engines (notably GROMACS for molecular dynamics) run inside WSL. They are
 launched with `command_prefix = ["wsl.exe", "-e"]` and a Linux program path.
 Natively installed engines use an empty prefix. This prefix model lets a single
 launch path serve both WSL-hosted and natively installed tools.
+
+## Remote execution
+
+A compute job can be offloaded to a remote Linux host over SSH instead of run
+locally. This is the same `compute-core` job machinery, transported:
+
+- A job is serialized to the **wire** contract (`compute-core/src/wire.rs`) with
+  its `Structure` carried by the **payload** bridge (`payload.rs`); the host is
+  described by `hosts`.
+- On first use the headless **worker** (`silicolab-compute`) is deployed to the
+  host by `engines/remote/deploy.rs`. Deployment is **fail-closed**: the binary
+  is pinned to this build's release tag, its published SHA-256 is verified
+  **before** it is made executable, and a version mismatch forces a redeploy —
+  a stale or unverifiable worker is never run.
+- The worker executes the request and writes an outcome the client reads back.
+  QM, docking, and GROMACS/MD all run through this path; jobs are bounded by the
+  host's own CPU and RAM.
+
+**Why:** the wire/payload split keeps the GUI-free `compute-core` as the single
+implementation of each engine — local and remote runs share it, so behavior can
+not drift between them. Fail-closed deployment means a tampered or mismatched
+worker fails the job rather than silently producing wrong results.
 
 ## Storage model
 

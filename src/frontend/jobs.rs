@@ -470,6 +470,18 @@ fn fetch_model_ids(
         .build();
     let agent = ureq::Agent::new_with_config(config);
 
+    // The model-list fetch sends the same bearer key as the completion transport,
+    // so it gates on the same rule: never put the key on the wire in cleartext.
+    // (Native targets a fixed https endpoint, so it is always safe.)
+    if matches!(kind, ProviderKind::OpenAiCompat)
+        && !compute_core::io::llm::endpoint_is_safe(base_url)
+    {
+        return Err(format!(
+            "refusing to send the API key to {base_url} over plaintext HTTP; \
+             use an https:// base URL (http:// is allowed only for a localhost endpoint)"
+        ));
+    }
+
     let response = match kind {
         ProviderKind::OpenAiCompat => agent
             .get(format!("{}/models", base_url.trim_end_matches('/')))

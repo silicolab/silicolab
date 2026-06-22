@@ -5,11 +5,30 @@
 //! strictly newer, parseable `vMAJOR.MINOR.PATCH` tag counts as an update, so a
 //! malformed or pre-release-only tag never produces a false prompt.
 
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 
 /// The releases page offered to the user when an update is found (also the
 /// fallback when the API response carries no per-release URL).
 pub const RELEASES_URL: &str = "https://github.com/silicolab/silicolab/releases";
+
+/// Timeout for the small JSON/text GitHub API calls (release metadata, `.sha256`).
+const API_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Timeout for the (large) worker-binary download. Generous: the musl binary is
+/// tens of MB and a remote host may be on a slow link.
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// A ureq agent with a global timeout. Without one a hung connection wedges a
+/// deploy indefinitely; non-2xx still surfaces as an error (fail-closed).
+fn http_agent(timeout: Duration) -> ureq::Agent {
+    ureq::Agent::new_with_config(
+        ureq::Agent::config_builder()
+            .timeout_global(Some(timeout))
+            .build(),
+    )
+}
 
 /// GitHub REST base for this repo's releases. `releases/latest` (the update
 /// check) and `releases/tags/<tag>` (deploy's exact-version asset resolution)
@@ -38,7 +57,8 @@ pub struct AvailableUpdate {
 /// GitHub answers 404 then, which surfaces as an `Err` the caller reports
 /// quietly).
 pub fn check_for_update() -> Result<Option<AvailableUpdate>> {
-    let body = ureq::get(LATEST_RELEASE_API)
+    let body = http_agent(API_TIMEOUT)
+        .get(LATEST_RELEASE_API)
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", API_USER_AGENT)
         .call()
@@ -58,17 +78,28 @@ pub fn check_for_update() -> Result<Option<AvailableUpdate>> {
 /// `Err`, so a deploy never proceeds against an absent binary.
 pub fn release_asset_url(tag: &str, asset_name: &str) -> Result<String> {
     let url = format!("{RELEASES_API_BASE}/tags/{tag}");
-    let body = ureq::get(&url)
+    let body = http_agent(API_TIMEOUT)
+        .get(&url)
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", API_USER_AGENT)
         .call()
-        .with_context(|| format!("failed to query GitHub release {tag}"))?
+        .with_context(|| {
+            format!(
+                "could not fetch GitHub release {tag}. Confirm the release is published \
+                 (not a draft) and that the repository is reachable."
+            )
+        })?
         .body_mut()
         .with_config()
         .limit(MAX_RESPONSE_BYTES)
         .read_to_string()
         .context("failed to read the GitHub release response")?;
-    asset_url_from_release(&body, asset_name)
+    asset_url_from_release(&body, asset_name).with_context(|| {
+        format!(
+            "release {tag} has no asset named {asset_name}; the worker binary may not have been \
+             built for this version (the release's CI worker job is required)."
+        )
+    })
 }
 
 /// Find a named asset's `browser_download_url` in a release JSON body. Split out
@@ -90,7 +121,8 @@ fn asset_url_from_release(body: &str, asset_name: &str) -> Result<String> {
 /// Download a release asset's raw bytes from its (public) download URL, capped at
 /// `max_bytes`. Used by the worker deploy to fetch the musl binary.
 pub fn download_asset_bytes(url: &str, max_bytes: u64) -> Result<Vec<u8>> {
-    ureq::get(url)
+    http_agent(DOWNLOAD_TIMEOUT)
+        .get(url)
         .header("User-Agent", API_USER_AGENT)
         .call()
         .with_context(|| format!("failed to download {url}"))?
@@ -103,7 +135,8 @@ pub fn download_asset_bytes(url: &str, max_bytes: u64) -> Result<Vec<u8>> {
 
 /// Download a small text asset (e.g. a published `.sha256`) from its download URL.
 pub fn download_asset_text(url: &str) -> Result<String> {
-    ureq::get(url)
+    http_agent(API_TIMEOUT)
+        .get(url)
         .header("User-Agent", API_USER_AGENT)
         .call()
         .with_context(|| format!("failed to download {url}"))?
