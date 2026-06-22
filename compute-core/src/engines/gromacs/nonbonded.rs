@@ -13,10 +13,12 @@
 //! through here — its byte output is frozen by a stability test, and PME is a new
 //! path for biomolecular systems rather than a rewrite of the old one.
 
+use serde::{Deserialize, Serialize};
+
 use crate::workflows::molecular_dynamics::ForceFieldFamily;
 
 /// How a stage treats nonbonded interactions in the generated `.mdp`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum NonbondedScheme {
     /// Plain cut-off electrostatics with no force-field-specific vdW treatment.
     /// The historical default for homogeneous Lennard-Jones / framework systems;

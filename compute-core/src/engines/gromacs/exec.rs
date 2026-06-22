@@ -33,5 +33,5 @@ where
     if let Some(stdin) = stdin {
         config = config.stdin_bytes(stdin);
     }
-    run_subprocess(config, &compute.transport, cancel, report)
+    run_subprocess(config, cancel, report)
 }

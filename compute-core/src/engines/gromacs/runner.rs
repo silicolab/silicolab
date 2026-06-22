@@ -22,6 +22,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     domain::Structure,
@@ -32,7 +33,7 @@ use crate::{
             topology::TopologySource,
         },
         process::{self, ProcessConfig, ProcessEventKind},
-        remote::{self, Compute, Transport},
+        remote::Compute,
     },
 };
 
@@ -52,7 +53,7 @@ pub enum GromacsProgress {
 /// stage's `freezegrps` can reference it. `atom_indices` are 0-based into the
 /// prepared structure; a `System` group covering every atom is written
 /// alongside it (the thermostat references `System`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FreezeSelection {
     pub group: String,
     pub atom_indices: Vec<usize>,
@@ -135,7 +136,7 @@ pub struct StageResult {
 }
 
 /// Which produced file a stage link points at.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StageFileRole {
     /// The stage's final coordinates (`{stage}_out.gro`).
     OutputGro,
@@ -146,7 +147,7 @@ pub enum StageFileRole {
 }
 
 /// A reference to a file feeding a stage's `grompp` invocation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FileRef {
     /// The `conf.gro` written by [`prepare_system`].
     PreparedConf,
@@ -157,7 +158,7 @@ pub enum FileRef {
 /// Declares where a stage's coordinate (`-c`) and checkpoint (`-t`) inputs come
 /// from. Resolved against the prepared system and prior stage outputs by
 /// [`run_pipeline`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StageLinks {
     pub coordinates: FileRef,
     pub checkpoint: Option<FileRef>,
@@ -175,7 +176,7 @@ impl StageLinks {
 }
 
 /// One stage in a [`run_pipeline`] chain.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StageSpec {
     pub stage_name: String,
     pub settings: MdpSettings,
@@ -372,7 +373,6 @@ where
             ),
             Some(remaining),
         ),
-        &request.compute.transport,
         Arc::clone(&cancel),
         &mut report,
     )?;
@@ -403,30 +403,12 @@ where
             ],
             Some(remaining),
         ),
-        &request.compute.transport,
         Arc::clone(&cancel),
         &mut report,
     )?;
 
     if !mdrun.result.success() {
         return Err(subprocess_failure("mdrun", &mdrun));
-    }
-
-    // For a remote run, pull back exactly the files this stage reads locally
-    // (and the artifacts a later stage or the UI consumes). Intermediate files
-    // such as the `.tpr` stay on the remote host. Local runs are a no-op.
-    if let Transport::Remote(target) = &request.compute.transport {
-        let log_name = format!("{stage}.log");
-        let edr_name = format!("{stage}.edr");
-        let cpt_name = format!("{stage}.cpt");
-        let xtc_name = format!("{stage}.xtc");
-        remote::sync_down(
-            target,
-            &working_dir,
-            &[&out_name],
-            &[&log_name, &edr_name, &cpt_name, &xtc_name],
-        )
-        .with_context(|| format!("staging back results for stage '{stage}'"))?;
     }
 
     let output_gro = working_dir.join(&out_name);
@@ -672,7 +654,6 @@ fn extract_fatal_error(log: &str) -> Option<String> {
 
 pub(crate) fn run_subprocess<F>(
     config: ProcessConfig,
-    transport: &Transport,
     cancel: Arc<AtomicBool>,
     report: &mut F,
 ) -> Result<SubprocessOutcome>
@@ -687,34 +668,22 @@ where
         config.args.join(" ")
     );
 
-    let (result, combined_log) = match transport {
-        Transport::Local => run_subprocess_local(config, cancel)?,
-        Transport::Remote(target) => {
-            // The remote branch streams console lines live (the local branch can't,
-            // so it tails the last few lines after completion — see below).
-            remote::run_remote(&config, target, cancel, &mut |line| {
-                report(GromacsProgress::Log(line))
-            })?
-        }
-    };
+    let (result, combined_log) = run_subprocess_local(config, cancel)?;
 
     // Persist the full output to the run directory so a failed run is always
     // debuggable, even though only the tail is streamed to the UI.
     append_gromacs_log(&log_path, &command_line, result.exit_code, &combined_log);
 
-    // The local path doesn't stream during the run; surface its tail now. The
-    // remote path already streamed each line as it arrived.
-    if matches!(transport, Transport::Local) {
-        for line in combined_log
-            .lines()
-            .rev()
-            .take(5)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-        {
-            report(GromacsProgress::Log(line.to_string()));
-        }
+    // The child's output is not streamed during the run; surface its tail now.
+    for line in combined_log
+        .lines()
+        .rev()
+        .take(5)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+    {
+        report(GromacsProgress::Log(line.to_string()));
     }
 
     Ok(SubprocessOutcome {

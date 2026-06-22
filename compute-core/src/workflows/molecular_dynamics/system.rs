@@ -21,6 +21,7 @@
 
 use anyhow::{Result, bail};
 use nalgebra::Point3;
+use serde::{Deserialize, Serialize};
 
 use crate::domain::{Atom, Structure, UnitCell};
 
@@ -31,7 +32,7 @@ use crate::domain::{Atom, Structure, UnitCell};
 pub const DEFAULT_PADDING_ANGSTROM: f32 = 10.0;
 
 /// How the simulation cell's per-axis edge lengths are determined.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub enum BoxSizing {
     /// Edge along each axis = molecule extent on that axis + 2·padding (a vacuum
     /// margin on each side). Always encloses the molecule.
@@ -58,7 +59,7 @@ impl Default for BoxSizing {
 /// cube of the same periodic-image distance, so they need fewer solvent
 /// molecules. The enum is `#[non_exhaustive]` to leave room for further
 /// geometries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum BoxShape {
     /// Rectangular cuboid: three independent edge lengths, all angles 90°.
@@ -103,7 +104,7 @@ impl BoxShape {
 
 /// Configuration for [`build_md_system`]: the sizing strategy and the lattice
 /// geometry the resulting edges map onto.
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct MdSystemConfig {
     pub sizing: BoxSizing,
     pub shape: BoxShape,

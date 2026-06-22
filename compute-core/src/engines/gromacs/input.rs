@@ -10,6 +10,7 @@
 //! electrostatics, no bond constraints, single `System` thermostat group.
 
 use anyhow::{Result, anyhow};
+use serde::{Deserialize, Serialize};
 
 use crate::domain::Structure;
 use crate::engines::gromacs::nonbonded::{NonbondedScheme, force_field_block};
@@ -19,7 +20,7 @@ const ANGSTROM_TO_NM: f32 = 0.1;
 
 /// Which time-integration scheme GROMACS should run for this stage. Maps
 /// directly to the `integrator =` line in the generated `.mdp`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Integrator {
     /// Steepest-descent energy minimization (`integrator = steep`).
     SteepestDescent,
@@ -43,7 +44,7 @@ impl Integrator {
 /// Which bonds GROMACS converts to holonomic constraints. `None` on
 /// [`MdpSettings`] leaves them flexible (`constraints = none`); constraining
 /// hydrogen bonds (`h-bonds`) lets MD use a 2 fs timestep.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConstraintKind {
     HBonds,
     AllBonds,
@@ -59,7 +60,7 @@ impl ConstraintKind {
 }
 
 /// Constraint solver algorithm (`constraint-algorithm =`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConstraintAlgorithm {
     Lincs,
     Shake,
@@ -76,7 +77,7 @@ impl ConstraintAlgorithm {
 
 /// Thermostat algorithm (`tcoupl =`), rendered only when temperature coupling is
 /// active. Defaults to velocity rescaling, the robust standard choice.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Thermostat {
     VRescale,
     NoseHoover,
@@ -97,7 +98,7 @@ impl Thermostat {
 /// Barostat algorithm (`pcoupl =`). Stochastic cell rescaling is the modern
 /// default and needs GROMACS >= 2021; older engines fall back to the
 /// Berendsen-equilibration / Parrinello-Rahman-production pair.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Barostat {
     CRescale,
     ParrinelloRahman,
@@ -117,7 +118,7 @@ impl Barostat {
 
 /// A simulated-annealing temperature ramp applied to every coupling group:
 /// `(time_ps, temperature_k)` control points.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Annealing {
     pub points: Vec<(f32, f32)>,
 }
@@ -125,7 +126,7 @@ pub struct Annealing {
 /// Temperature-coupling configuration. `tc_grps`, `tau_t` and `ref_t` are
 /// parallel: one entry per coupling group. The thermostat is velocity-rescaling
 /// (`V-rescale`), the standard robust choice.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TemperatureCoupling {
     pub tc_grps: Vec<String>,
     pub tau_t: Vec<f32>,
@@ -148,7 +149,7 @@ impl TemperatureCoupling {
 /// Pressure-coupling configuration. `ref_p`/`compressibility` are parallel
 /// vectors: one entry for isotropic, two for semi-isotropic (xy, z), more for
 /// anisotropic.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PressureCoupling {
     pub barostat: Barostat,
     pub pcoupltype: String,
@@ -184,7 +185,7 @@ impl PressureCoupling {
 
 /// Initial-velocity generation (`gen_vel =`). Present only for the first MD
 /// stage (NVT); later stages continue from the checkpoint instead.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct VelocityGen {
     pub gen_temp: f32,
     /// Random seed; `-1` lets GROMACS pick one.
@@ -192,7 +193,7 @@ pub struct VelocityGen {
 }
 
 /// Trajectory/energy output frequencies (steps between writes).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct OutputFrequency {
     pub nstxout: u32,
     pub nstvout: u32,
@@ -229,7 +230,7 @@ impl OutputFrequency {
 /// `.mdp` parameters shared across all GROMACS stages. Stage-specific fields
 /// (e.g. `emtol` for minimization, `dt` for MD) are kept on the same struct;
 /// [`render_mdp`] picks the right subset depending on `integrator`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MdpSettings {
     pub integrator: Integrator,
     pub nsteps: u64,
@@ -285,7 +286,7 @@ pub struct MdpSettings {
 
 /// A set of atoms frozen in place during a run. Only full (3D) freezing is
 /// supported, which is the only mode the Verlet cutoff scheme honors reliably.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FreezeGroup {
     /// Index group name (must appear in the `.ndx` file given to `grompp -n`).
     pub group: String,

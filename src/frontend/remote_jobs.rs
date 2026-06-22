@@ -131,6 +131,7 @@ fn engine_id_token(engine: &crate::wire::Engine) -> &'static str {
     match engine {
         crate::wire::Engine::Qm(_) => EngineId::HARTREE.as_str(),
         crate::wire::Engine::Docking(_) => EngineId::DOCKING.as_str(),
+        crate::wire::Engine::Gromacs(_) => EngineId::GROMACS.as_str(),
     }
 }
 
@@ -628,5 +629,180 @@ mod tests {
         let _ = std::fs::remove_dir_all(&local_run_dir);
         assert_eq!(outcome.poses.len(), 1, "ScoreOnly returns one pose");
         assert!(outcome.poses[0].affinity.is_finite());
+    }
+
+    /// The detached GROMACS relay against a real SSH host with GROMACS installed:
+    /// submit a tiny single-stage `gmx` Run (energy-minimize a hermetic 8-atom
+    /// argon box with an inline topology), let the worker run the whole pipeline in
+    /// one allocation, then refresh until it finishes and assert the structure +
+    /// stage report came back in `EngineOutcome::Gromacs`. `#[ignore]` — it needs a
+    /// host with a pre-placed worker AND a working `gmx`. Set the optional
+    /// `SILICOLAB_TEST_GMX_PRELUDE` to a shell line (e.g. `. /usr/local/gromacs/bin/GMXRC`)
+    /// when `gmx` needs its environment sourced first. Run with:
+    ///
+    /// ```text
+    /// SILICOLAB_TEST_SSH_HOST=<ip> SILICOLAB_TEST_SSH_USER=<user> \
+    /// cargo test -p silicolab --lib -- --ignored remote_gromacs_submit_then_refresh
+    /// ```
+    #[test]
+    #[ignore = "requires an SSH host with a pre-placed worker and a working gmx (set SILICOLAB_TEST_SSH_HOST)"]
+    fn remote_gromacs_submit_then_refresh_against_ssh_host() {
+        use crate::backend::config::RemoteHost;
+        use crate::backend::storage::jobs::{RemoteJob, RemoteJobStatus};
+        use crate::domain::{Atom, Structure, UnitCell};
+        use crate::engines::gromacs::{MdpSettings, StageLinks, StageSpec};
+        use crate::engines::remote::deploy::WORKER_VERSION_KEY;
+        use crate::workflows::gromacs::{GromacsJob, GromacsRunRequest, WireTopology};
+        use nalgebra::Point3;
+        use std::time::Duration;
+
+        // A hermetic argon topology: Lennard-Jones only, no external force-field
+        // data, eight single-atom `AR` molecules matching the eight box atoms.
+        const ARGON_TOP: &str = "\
+[ defaults ]
+1         2          no         1.0      1.0
+
+[ atomtypes ]
+  Ar    18      39.948    0.000   A      0.34050   0.99600
+
+[ moleculetype ]
+  AR    1
+
+[ atoms ]
+  1    Ar    1      AR       Ar    1     0.000   39.948
+
+[ system ]
+Argon
+
+[ molecules ]
+AR  8
+";
+
+        let Ok(hostname) = std::env::var("SILICOLAB_TEST_SSH_HOST") else {
+            eprintln!("skip: set SILICOLAB_TEST_SSH_HOST to run the remote GROMACS test");
+            return;
+        };
+        let username =
+            std::env::var("SILICOLAB_TEST_SSH_USER").unwrap_or_else(|_| "root".to_string());
+        let prelude = std::env::var("SILICOLAB_TEST_GMX_PRELUDE")
+            .ok()
+            .map(|line| vec![line])
+            .unwrap_or_default();
+
+        let mut engine_versions = std::collections::HashMap::new();
+        engine_versions.insert(
+            WORKER_VERSION_KEY.to_string(),
+            env!("CARGO_PKG_VERSION").to_string(),
+        );
+        let host = RemoteHost {
+            id: "wsl".to_string(),
+            label: "WSL".to_string(),
+            hostname,
+            username,
+            port: 22,
+            work_root: "~/.silicolab".to_string(),
+            prelude,
+            engines: Default::default(),
+            engine_versions,
+            resources: Default::default(),
+        };
+
+        // A 2×2×2 argon grid centered in a 30 Å cubic cell — finite starting energy,
+        // box well over twice the 1 nm cutoff.
+        let mut atoms = Vec::with_capacity(8);
+        for x in [10.0_f32, 15.0] {
+            for y in [10.0_f32, 15.0] {
+                for z in [10.0_f32, 15.0] {
+                    atoms.push(Atom {
+                        element: "Ar".to_string(),
+                        position: Point3::new(x, y, z),
+                        charge: 0.0,
+                    });
+                }
+            }
+        }
+        let structure = Structure::with_cell(
+            "argon",
+            atoms,
+            UnitCell::from_parameters(30.0, 30.0, 30.0, 90.0, 90.0, 90.0),
+        );
+        let job = GromacsJob::Run(GromacsRunRequest {
+            structure,
+            topology: WireTopology {
+                top: ARGON_TOP.to_string(),
+                includes: Vec::new(),
+            },
+            stages: vec![StageSpec {
+                stage_name: "em".to_string(),
+                settings: MdpSettings::energy_minimization(),
+                links: StageLinks::from_prepared(),
+            }],
+            max_duration_per_stage: Duration::from_secs(120),
+            freeze: None,
+        });
+
+        let run_uuid = uuid::Uuid::new_v4().to_string();
+        let local_run_dir = std::env::temp_dir().join(format!("sl-frontend-gmx-{run_uuid}"));
+        let submit = spawn_remote_submit(
+            host.clone(),
+            crate::wire::Engine::Gromacs(job),
+            None,
+            run_uuid.clone(),
+            None,
+            "run-md".to_string(),
+            None,
+            local_run_dir.clone(),
+        );
+        let submitted = match submit.receiver.recv().expect("submit worker stays alive") {
+            RemoteSubmitOutcome::Submitted(submitted) => *submitted,
+            RemoteSubmitOutcome::Failed(error) => panic!("remote GROMACS submit failed: {error}"),
+        };
+
+        let row = RemoteJob {
+            run_uuid: submitted.run_uuid,
+            host_id: submitted.host_id,
+            host_label: submitted.host_label,
+            remote_dir: submitted.remote_dir,
+            scheduler: submitted.scheduler,
+            launch_handle: submitted.launch_handle,
+            engine_id: submitted.engine_id,
+            job_kind: submitted.job_kind,
+            project_root: submitted.project_root,
+            local_run_dir: submitted.local_run_dir.to_string_lossy().to_string(),
+            status: RemoteJobStatus::Running,
+            submitted_at_ms: 0,
+            last_polled_at_ms: None,
+            exit_code: None,
+        };
+
+        let outcome = loop {
+            let refresh = spawn_remote_jobs_refresh(vec![(row.clone(), host.clone())]);
+            let mut updates = refresh.receiver.recv().expect("refresh worker stays alive");
+            match updates.pop().expect("one update per job").outcome {
+                RemoteJobOutcome::Done(outcome) => break *outcome,
+                RemoteJobOutcome::Running => std::thread::sleep(Duration::from_millis(500)),
+                RemoteJobOutcome::FailedExit(code) => panic!("remote job exited {code}"),
+                RemoteJobOutcome::Lost => panic!("remote job was lost"),
+                RemoteJobOutcome::OutcomeUnreadable(error) => {
+                    panic!("outcome unreadable: {error}")
+                }
+                RemoteJobOutcome::ProbeError(error) => panic!("probe error: {error}"),
+            }
+        };
+
+        let crate::wire::EngineOutcome::Gromacs(outcome) = outcome else {
+            panic!("expected a GROMACS outcome");
+        };
+        let _ = std::fs::remove_dir_all(&local_run_dir);
+        assert_eq!(
+            outcome.structure.atoms.len(),
+            8,
+            "the relayed run preserves all argon atoms"
+        );
+        assert_eq!(outcome.stages.len(), 1, "one stage was relayed");
+        assert!(
+            outcome.stages[0].final_potential_energy.is_some(),
+            "energy minimization reports a final potential energy"
+        );
     }
 }

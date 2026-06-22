@@ -61,7 +61,31 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
             }
             meta.freeze_selection()
         });
-    let compute = match resolve_md_compute(state, prompt.engine, &prompt.target) {
+    // A remote target relays the whole pipeline to a deployed worker, which
+    // resolves `gmx` and runs it on the node; the local arm runs `gmx` here.
+    if let Some(host) = resolve_md_remote_host(state, &prompt.target) {
+        let topology = match crate::workflows::gromacs::WireTopology::from_source(&topology) {
+            Ok(topology) => topology,
+            Err(error) => {
+                state.set_message(format!("could not read the run topology: {error}"));
+                return;
+            }
+        };
+        let job = crate::workflows::gromacs::GromacsJob::Run(
+            crate::workflows::gromacs::GromacsRunRequest {
+                structure: state.structure().clone(),
+                topology,
+                stages,
+                max_duration_per_stage: Duration::from_secs(60 * 60),
+                freeze: framework_freeze,
+            },
+        );
+        state.optimization_origin = None;
+        state.ui.pending_md_run = None;
+        relay_gromacs_job(state, host, prompt.engine.label(), job);
+        return;
+    }
+    let compute = match resolve_md_compute(state, prompt.engine) {
         Ok(compute) => compute,
         Err(error) => {
             state.set_message(error.to_string());
@@ -174,59 +198,32 @@ pub(crate) fn resolve_md_engine_launch(
     }
 }
 
-/// Resolve a [`ComputeTarget`] into a [`Compute`] (launch + transport) for a
-/// GROMACS job. This is the single place a target becomes runnable.
-///
-/// - `Local` → today's launch resolution (override / PATH / WSL auto-detect),
-///   wrapped as a local transport.
-/// - `Remote(host)` → the host's per-engine launch (remote `gmx` path) bound to a
-///   [`RemoteTarget`] anchored at the active task's durable run UUID. A configured
-///   host that lacks GROMACS yields a guidance error that blocks the run; a
-///   dangling host id (deleted/renamed) resolves leniently back to `Local`.
-///
-/// Only **local** checks run here (this is the UI thread): the OS `ssh` presence
-/// check is a cheap PATH lookup. All network work — reachability, the passwordless
-/// check, the remote `--version` probe — happens later on the worker thread, so a
-/// slow or dead host never freezes the UI.
+/// The remote host an MD job targets, or `None` for local execution. A `Remote`
+/// target whose host id is no longer configured resolves leniently to local
+/// (mirroring the registry's fallback on a miss), so a deleted host never dangles.
+/// Pure and local — the network work happens later on the submit worker thread.
+pub(crate) fn resolve_md_remote_host(
+    state: &AppState,
+    target: &crate::backend::config::ComputeTarget,
+) -> Option<crate::backend::config::RemoteHost> {
+    use crate::backend::config::ComputeTarget;
+    match target {
+        ComputeTarget::Local => None,
+        ComputeTarget::Remote(host_id) => state.config.remote_hosts.get(host_id).cloned(),
+    }
+}
+
+/// The local [`Compute`] for an MD job: the resolved `gmx` launch (override / PATH
+/// / WSL auto-detect). A remote MD job does not build a `Compute` — it relays
+/// through [`start_remote_engine`] and the worker resolves `gmx` on the node — so
+/// this only ever yields a local launch.
 pub(crate) fn resolve_md_compute(
     state: &mut AppState,
     engine: crate::frontend::state::MdEngineChoice,
-    target: &crate::backend::config::ComputeTarget,
 ) -> anyhow::Result<crate::engines::remote::Compute> {
-    use crate::backend::config::ComputeTarget;
-    use crate::engines::remote::{Compute, RemoteTarget};
-
-    match target {
-        ComputeTarget::Local => Ok(Compute::local(resolve_md_engine_launch(state, engine)?)),
-        ComputeTarget::Remote(host_id) => {
-            let Some(host) = state.config.remote_hosts.get(host_id).cloned() else {
-                // Lenient fallback: a deleted/renamed host routes to Local rather
-                // than dangling (mirrors the registry's PATH fallback on a miss).
-                return Ok(Compute::local(resolve_md_engine_launch(state, engine)?));
-            };
-            crate::engines::remote::ensure_ssh_available()?;
-            let launch = host
-                .engines
-                .get(EngineId::GROMACS.as_str())
-                .filter(|launch| !launch.is_empty())
-                .cloned()
-                .ok_or_else(|| {
-                    anyhow!(
-                        "Configure GROMACS for host {} in Settings → Remote Hosts before running there.",
-                        host.label
-                    )
-                })?;
-            let run_uuid = state
-                .active_task_run
-                .and_then(|id| state.tasks.task_run(id))
-                .map(|task| task.run_uuid.clone())
-                .ok_or_else(|| anyhow!("no active task run to anchor the remote run directory"))?;
-            Ok(Compute::remote(
-                launch,
-                RemoteTarget::for_run(&host, &run_uuid),
-            ))
-        }
-    }
+    Ok(crate::engines::remote::Compute::local(
+        resolve_md_engine_launch(state, engine)?,
+    ))
 }
 
 /// Cache an auto-detected engine launch into `engine_overrides` and save the
@@ -815,13 +812,35 @@ pub(crate) fn start_material_md_build(
             return false;
         }
     };
-    // Resolve the compute target after the run dir exists so the remote dir can be
-    // anchored at the active task's run UUID.
-    let compute = match resolve_md_compute(
-        state,
-        crate::frontend::state::MdEngineChoice::Gromacs,
-        &prompt.target,
-    ) {
+    // The box is the user-edited crystal cell, preserving its (e.g. hexagonal)
+    // shape. Falling back to the structure's own cell keeps non-GUI callers
+    // working. When an explicit cell is supplied, build_material_system uses it
+    // verbatim instead of opening the out-of-plane axis itself.
+    let cell_override = prompt.framework_cell.map(|[a, b, c, alpha, beta, gamma]| {
+        crate::domain::UnitCell::from_parameters(a, b, c, alpha, beta, gamma)
+    });
+
+    // A remote target relays the build to a deployed worker, which resolves `gmx`
+    // on the node; the local arm runs `gmx` here.
+    if let Some(host) = resolve_md_remote_host(state, &prompt.target) {
+        state.ui.pending_optimization = None;
+        let job = crate::workflows::gromacs::GromacsJob::BuildMaterial(
+            crate::workflows::gromacs::GromacsMaterialRequest {
+                structure: state.structure().clone(),
+                mode: prompt.framework_mode,
+                solvation: prompt.solvation_options(),
+                custom_force_field: prompt.custom_force_field_text.clone(),
+                cell_override,
+                solvent_gap_angstrom: FRAMEWORK_C_FLOOR_ANGSTROM,
+                cutoff_nm: crate::workflows::molecular_dynamics::DEFAULT_CUTOFF_NM,
+                max_duration: Duration::from_secs(60 * 60),
+            },
+        );
+        relay_gromacs_job(state, host, "GROMACS", job);
+        return true;
+    }
+
+    let compute = match resolve_md_compute(state, crate::frontend::state::MdEngineChoice::Gromacs) {
         Ok(compute) => compute,
         Err(error) => {
             state.set_message(error.to_string());
@@ -835,14 +854,6 @@ pub(crate) fn start_material_md_build(
             .set_engine_label(task_run_id, Some("GROMACS".to_string()));
         sync_task_manifest(state, task_run_id);
     }
-
-    // The box is the user-edited crystal cell, preserving its (e.g. hexagonal)
-    // shape. Falling back to the structure's own cell keeps non-GUI callers
-    // working. When an explicit cell is supplied, build_material_system uses it
-    // verbatim instead of opening the out-of-plane axis itself.
-    let cell_override = prompt.framework_cell.map(|[a, b, c, alpha, beta, gamma]| {
-        crate::domain::UnitCell::from_parameters(a, b, c, alpha, beta, gamma)
-    });
 
     state.ui.pending_optimization = None;
     let job = crate::frontend::jobs::spawn_material_build_job(MaterialBuildRequest {
@@ -886,14 +897,41 @@ pub(crate) fn start_gromacs_md_build(
             return false;
         }
     };
+    // Only attach an ion step when solvation is on and the user asked for ions;
+    // genion needs the solvent it replaces.
+    let ions = if prompt.solvate && (prompt.neutralize || prompt.add_salt) {
+        Some(IonOptions {
+            neutralize: prompt.neutralize,
+            concentration_molar: prompt.add_salt.then_some(prompt.salt_concentration_molar),
+            positive_ion: prompt.positive_ion.clone(),
+            negative_ion: prompt.negative_ion.clone(),
+        })
+    } else {
+        None
+    };
+
+    // A remote target relays the build to a deployed worker, which resolves `gmx`
+    // on the node; the local arm runs `gmx` here.
+    if let Some(host) = resolve_md_remote_host(state, &prompt.target) {
+        state.ui.pending_optimization = None;
+        let job = crate::workflows::gromacs::GromacsJob::Build(
+            crate::workflows::gromacs::GromacsBuildRequest {
+                structure: state.structure().clone(),
+                force_field: prompt.force_field.clone(),
+                water: prompt.water,
+                box_config: prompt.config(),
+                solvate: prompt.solvate,
+                ions,
+                max_duration: Duration::from_secs(60 * 60),
+            },
+        );
+        relay_gromacs_job(state, host, "GROMACS", job);
+        return true;
+    }
+
     // GROMACS is required for this build; we never silently fall back to a
-    // topology-less geometry build. Resolve after the run dir exists so a remote
-    // run dir can be anchored at the active task's run UUID.
-    let compute = match resolve_md_compute(
-        state,
-        crate::frontend::state::MdEngineChoice::Gromacs,
-        &prompt.target,
-    ) {
+    // topology-less geometry build.
+    let compute = match resolve_md_compute(state, crate::frontend::state::MdEngineChoice::Gromacs) {
         Ok(compute) => compute,
         Err(error) => {
             state.set_message(error.to_string());
@@ -907,19 +945,6 @@ pub(crate) fn start_gromacs_md_build(
             .set_engine_label(task_run_id, Some("GROMACS".to_string()));
         sync_task_manifest(state, task_run_id);
     }
-
-    // Only attach an ion step when solvation is on and the user asked for ions;
-    // genion needs the solvent it replaces.
-    let ions = if prompt.solvate && (prompt.neutralize || prompt.add_salt) {
-        Some(IonOptions {
-            neutralize: prompt.neutralize,
-            concentration_molar: prompt.add_salt.then_some(prompt.salt_concentration_molar),
-            positive_ion: prompt.positive_ion.clone(),
-            negative_ion: prompt.negative_ion.clone(),
-        })
-    } else {
-        None
-    };
 
     state.ui.pending_optimization = None;
     let job = spawn_gromacs_build_job(BuildRequest {
