@@ -11,6 +11,7 @@
 
 use anyhow::{Result, bail};
 use nalgebra::{Point3, Rotation3, Vector3};
+use serde::{Deserialize, Serialize};
 
 use crate::domain::{AppendedResidue, Atom, Structure, extend_biopolymer_coverage};
 
@@ -32,7 +33,7 @@ const AVOGADRO: f64 = 6.022_140_76e23;
 /// The solvent water model token to fill the box with. Placement uses a generic
 /// rigid three-point water geometry regardless of the choice; the model is
 /// metadata a simulation engine uses when it later parameterizes the system.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum WaterModel {
     /// TIP 4-point.
@@ -97,7 +98,7 @@ impl WaterModel {
 /// How to solvate and ionize a built MD box. Ion names (`positive_ion`,
 /// `negative_ion`) become the element labels of the placed ions (e.g. `NA`,
 /// `CL`).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SolvationOptions {
     pub water: WaterModel,
     pub positive_ion: String,

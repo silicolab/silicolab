@@ -18,6 +18,7 @@
 use std::collections::BTreeSet;
 
 use anyhow::{Result, bail};
+use serde::{Deserialize, Serialize};
 
 use crate::domain::{Bond, Structure, chemistry::normalized_symbol};
 
@@ -29,7 +30,7 @@ use super::topology::{BondedTerm, MdTopology, MoleculeAtom, MoleculeRun, Molecul
 const FRAMEWORK_MOLECULE: &str = "SHT";
 
 /// How a covalent framework is modeled when building its topology.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FrameworkMode {
     /// Frozen framework: Lennard-Jones sites held fixed, with explicit
     /// exclusions and no bonded terms. Works for any supported element.

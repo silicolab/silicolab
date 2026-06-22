@@ -257,14 +257,29 @@ pub fn detect_wsl_gromacs_launch() -> Option<EngineLaunch> {
             command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
             program: (*candidate).to_string(),
         };
-        wsl_gromacs_responds(&launch).then_some(launch)
+        gromacs_responds(&launch).then_some(launch)
     })
+}
+
+/// Best-effort auto-detection of a native GROMACS launch, trying the shared
+/// [`GMX_REMOTE_CANDIDATES`](crate::engines::remote::GMX_REMOTE_CANDIDATES) in
+/// priority order via the local PATH (bare names) or the conventional install
+/// path. Returns `None` when none responds. The headless worker calls this after
+/// the host prelude has set PATH/modules, so a bare `gmx` resolves the way the
+/// interactive shell would.
+pub fn detect_local_gromacs() -> Option<EngineLaunch> {
+    crate::engines::remote::GMX_REMOTE_CANDIDATES
+        .iter()
+        .find_map(|candidate| {
+            let launch = EngineLaunch::native(*candidate);
+            gromacs_responds(&launch).then_some(launch)
+        })
 }
 
 /// Whether `<launch> --version` actually runs GROMACS: exits cleanly and
 /// identifies itself as GROMACS. The identity check rejects false positives
 /// from a missing binary, whose error text would otherwise look like output.
-fn wsl_gromacs_responds(launch: &EngineLaunch) -> bool {
+fn gromacs_responds(launch: &EngineLaunch) -> bool {
     let config = launch.to_process_config(
         std::env::temp_dir(),
         ["--version".to_string()],

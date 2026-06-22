@@ -122,6 +122,41 @@ fn secondary_kind_from_tag(tag: u8) -> SecondaryStructureKind {
     }
 }
 
+/// Mirror a [`UnitCell`] into its serializable payload (carrying the exact lattice
+/// vectors, so a non-orthogonal cell's orientation survives the round trip).
+fn cell_to_payload(cell: &UnitCell) -> CellPayload {
+    CellPayload {
+        a: cell.a,
+        b: cell.b,
+        c: cell.c,
+        alpha: cell.alpha,
+        beta: cell.beta,
+        gamma: cell.gamma,
+        vectors: [
+            [cell.vectors[0].x, cell.vectors[0].y, cell.vectors[0].z],
+            [cell.vectors[1].x, cell.vectors[1].y, cell.vectors[1].z],
+            [cell.vectors[2].x, cell.vectors[2].y, cell.vectors[2].z],
+        ],
+    }
+}
+
+/// Rebuild a [`UnitCell`] from its payload.
+fn payload_to_cell(cell: CellPayload) -> UnitCell {
+    UnitCell {
+        a: cell.a,
+        b: cell.b,
+        c: cell.c,
+        alpha: cell.alpha,
+        beta: cell.beta,
+        gamma: cell.gamma,
+        vectors: [
+            Vector3::new(cell.vectors[0][0], cell.vectors[0][1], cell.vectors[0][2]),
+            Vector3::new(cell.vectors[1][0], cell.vectors[1][1], cell.vectors[1][2]),
+            Vector3::new(cell.vectors[2][0], cell.vectors[2][1], cell.vectors[2][2]),
+        ],
+    }
+}
+
 /// Mirror a live [`Structure`] into its serializable payload.
 pub fn structure_to_payload(structure: &Structure) -> StructurePayload {
     let mut elements = Vec::with_capacity(structure.atoms.len());
@@ -143,19 +178,7 @@ pub fn structure_to_payload(structure: &Structure) -> StructurePayload {
             t: bond_type_tag(bond.bond_type),
         })
         .collect();
-    let cell = structure.cell.as_ref().map(|cell| CellPayload {
-        a: cell.a,
-        b: cell.b,
-        c: cell.c,
-        alpha: cell.alpha,
-        beta: cell.beta,
-        gamma: cell.gamma,
-        vectors: [
-            [cell.vectors[0].x, cell.vectors[0].y, cell.vectors[0].z],
-            [cell.vectors[1].x, cell.vectors[1].y, cell.vectors[1].z],
-            [cell.vectors[2].x, cell.vectors[2].y, cell.vectors[2].z],
-        ],
-    });
+    let cell = structure.cell.as_ref().map(cell_to_payload);
     let biopolymer = structure.biopolymer.as_ref().map(biopolymer_to_payload);
     StructurePayload {
         title: structure.title.clone(),
@@ -237,19 +260,7 @@ pub fn payload_to_structure(payload: StructurePayload) -> Structure {
         .into_iter()
         .map(|bond| Bond::with_type(bond.a, bond.b, bond_type_from_tag(bond.t)))
         .collect();
-    let cell = payload.cell.map(|cell| UnitCell {
-        a: cell.a,
-        b: cell.b,
-        c: cell.c,
-        alpha: cell.alpha,
-        beta: cell.beta,
-        gamma: cell.gamma,
-        vectors: [
-            Vector3::new(cell.vectors[0][0], cell.vectors[0][1], cell.vectors[0][2]),
-            Vector3::new(cell.vectors[1][0], cell.vectors[1][1], cell.vectors[1][2]),
-            Vector3::new(cell.vectors[2][0], cell.vectors[2][1], cell.vectors[2][2]),
-        ],
-    });
+    let cell = payload.cell.map(payload_to_cell);
     let biopolymer = payload.biopolymer.map(payload_to_biopolymer);
     Structure {
         title: payload.title,
@@ -352,6 +363,30 @@ pub mod structure_serde_boxed {
     ) -> Result<Box<Structure>, D::Error> {
         let payload = StructurePayload::deserialize(deserializer)?;
         Ok(Box::new(payload_to_structure(payload)))
+    }
+}
+
+/// `#[serde(with = ...)]` adapter for an `Option<UnitCell>` field, serializing
+/// through the same cell mirror [`StructurePayload`] uses so a nalgebra-backed
+/// cell crosses the wire without a serde derive on the domain type.
+pub mod cell_serde_opt {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::{CellPayload, cell_to_payload, payload_to_cell};
+    use crate::domain::UnitCell;
+
+    pub fn serialize<S: Serializer>(
+        cell: &Option<UnitCell>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        cell.as_ref().map(cell_to_payload).serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Option<UnitCell>, D::Error> {
+        let payload = Option::<CellPayload>::deserialize(deserializer)?;
+        Ok(payload.map(payload_to_cell))
     }
 }
 

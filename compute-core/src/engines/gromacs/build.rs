@@ -21,6 +21,7 @@ use std::{
 };
 
 use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::{
     domain::Structure,
@@ -29,7 +30,7 @@ use crate::{
             exec::run_gmx,
             runner::{GromacsProgress, subprocess_failure},
         },
-        remote::{self, Compute, Transport},
+        remote::Compute,
     },
     io::formats::{gro::parse_gro, pdb::to_pdb},
     workflows::molecular_dynamics::{BoxShape, BoxSizing, MdSystemConfig, WaterModel},
@@ -51,7 +52,7 @@ rcoulomb      = 1.0
 ";
 
 /// Ion placement for the build's `genion` step.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IonOptions {
     /// Add the minimum ions needed to make the system net-neutral.
     pub neutralize: bool,
@@ -251,20 +252,6 @@ where
             run(genion, Some(b"SOL\n".to_vec()), "genion", &mut report)?;
             current = "ionized.gro".to_string();
         }
-    }
-
-    // For a remote build, stage back the final coordinates and the topology a
-    // later run reuses (topol.top is rewritten by solvate/genion; posre.itp, when
-    // pdb2gmx wrote it, gives the run its restraint group). Intermediate files
-    // (processed/boxed/solvated GROs, ions.tpr) stay on the remote host.
-    if let Transport::Remote(target) = &req.compute.transport {
-        remote::sync_down(
-            target,
-            &wd,
-            &[current.as_str(), "topol.top"],
-            &["posre.itp"],
-        )
-        .context("staging back the built system")?;
     }
 
     // 6. Load the final coordinates back as the entry structure.

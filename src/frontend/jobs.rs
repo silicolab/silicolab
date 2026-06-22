@@ -1092,9 +1092,6 @@ pub fn spawn_gromacs_pipeline_job(request: GromacsPipelineRequest) -> RunningEng
 
     std::thread::spawn(move || {
         let report_sender = sender.clone();
-        if let Some(target) = request.compute.remote_target() {
-            crate::engines::remote::write_run_record(target, &request.working_dir);
-        }
         let system = prepare_system(crate::engines::gromacs::PrepareSystemRequest {
             structure: request.structure,
             topology: request.topology,
@@ -1162,9 +1159,6 @@ pub fn spawn_gromacs_build_job(request: BuildRequest) -> RunningEngineJob {
 
     std::thread::spawn(move || {
         let report_sender = sender.clone();
-        if let Some(target) = request.compute.remote_target() {
-            crate::engines::remote::write_run_record(target, &request.working_dir);
-        }
         let outcome = build_system(request, cancel_for_worker, move |progress| match progress {
             GromacsProgress::Stage(stage) => {
                 let _ = report_sender.send(EngineWorkerMessage::Stage(stage));
@@ -1243,9 +1237,6 @@ pub fn spawn_material_build_job(request: MaterialBuildRequest) -> RunningEngineJ
 
     std::thread::spawn(move || {
         let report_sender = sender.clone();
-        if let Some(target) = request.compute.remote_target() {
-            crate::engines::remote::write_run_record(target, &request.working_dir);
-        }
         let outcome =
             build_material_system(request, cancel_for_worker, move |progress| match progress {
                 GromacsProgress::Stage(stage) => {

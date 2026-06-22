@@ -19,9 +19,11 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::engines::docking::{DockingInput, DockingOutcome, DockingRequest};
+use crate::engines::gromacs::GromacsProgress;
 use crate::engines::qm::{QmJob, QmOutcome};
 use crate::engines::remote::launcher::{self, Liveness, RemoteExecution};
 use crate::workflows::docking::{DockingProgress, run_docking_calculation};
+use crate::workflows::gromacs::{GromacsJob, GromacsOutcome, run_gromacs_calculation};
 use crate::workflows::qm::{QmCalculationProgress, run_qm_calculation};
 
 /// A complete engine job, independent of where it runs. `cores` travels with the
@@ -58,6 +60,7 @@ impl EngineRequest {
 pub enum Engine {
     Qm(QmJob),
     Docking(DockingRequest),
+    Gromacs(GromacsJob),
 }
 
 /// The typed result of an [`EngineRequest`], discriminated to match [`Engine`].
@@ -69,6 +72,7 @@ pub enum Engine {
 pub enum EngineOutcome {
     Qm(QmOutcome),
     Docking(DockingOutcome),
+    Gromacs(GromacsOutcome),
 }
 
 /// Where a job runs.
@@ -350,7 +354,28 @@ fn validate_request(request: &EngineRequest) -> Result<()> {
     match &request.engine {
         Engine::Qm(job) => validate_qm_job(job),
         Engine::Docking(docking) => validate_docking_request(docking),
+        Engine::Gromacs(job) => validate_gromacs_job(job),
     }
+}
+
+fn validate_gromacs_job(job: &GromacsJob) -> Result<()> {
+    let structure = match job {
+        GromacsJob::Run(req) => &req.structure,
+        GromacsJob::Build(req) => &req.structure,
+        GromacsJob::BuildMaterial(req) => &req.structure,
+    };
+    if structure.atoms.is_empty() {
+        bail!("the GROMACS request structure has no atoms");
+    }
+    if let Some((index, _)) = structure
+        .atoms
+        .iter()
+        .enumerate()
+        .find(|(_, atom)| !atom.position.coords.iter().all(|c| c.is_finite()))
+    {
+        bail!("atom {index} has a non-finite coordinate");
+    }
+    Ok(())
 }
 
 fn validate_qm_job(job: &QmJob) -> Result<()> {
@@ -452,6 +477,17 @@ fn run_request(
                 progress(stage)
             })?;
             Ok(EngineOutcome::Docking(result.outcome))
+        }
+        Engine::Gromacs(job) => {
+            // GROMACS drives the external `gmx` (single-threaded via `mdrun -nt 1`),
+            // so the requested core count does not size a thread pool here either;
+            // both progress variants collapse onto the one console channel.
+            let outcome = run_gromacs_calculation(job, cancel, |event| {
+                progress(match event {
+                    GromacsProgress::Stage(text) | GromacsProgress::Log(text) => text,
+                })
+            })?;
+            Ok(EngineOutcome::Gromacs(outcome))
         }
     }
 }
@@ -827,5 +863,207 @@ mod tests {
         };
         assert_eq!(outcome.poses.len(), 1);
         assert!(outcome.poses[0].affinity.is_finite());
+    }
+
+    #[test]
+    fn gromacs_run_request_round_trips_through_the_payload_bridge() {
+        use crate::domain::UnitCell;
+        use crate::engines::gromacs::{FreezeSelection, MdpSettings, StageLinks, StageSpec};
+        use crate::workflows::gromacs::{GromacsJob, GromacsRunRequest, WireTopology};
+
+        let structure = Structure::with_cell(
+            "argon",
+            vec![
+                Atom {
+                    element: "Ar".to_string(),
+                    position: Point3::new(1.0, 1.0, 1.0),
+                    charge: 0.0,
+                },
+                Atom {
+                    element: "Ar".to_string(),
+                    position: Point3::new(2.0, 1.0, 1.0),
+                    charge: 0.0,
+                },
+            ],
+            UnitCell::from_parameters(20.0, 20.0, 20.0, 90.0, 90.0, 90.0),
+        );
+        let request = EngineRequest::new(Engine::Gromacs(GromacsJob::Run(GromacsRunRequest {
+            structure,
+            topology: WireTopology {
+                top: "; topol\n".to_string(),
+                includes: vec![("posre.itp".to_string(), "; restraints\n".to_string())],
+            },
+            stages: vec![
+                StageSpec {
+                    stage_name: "em".to_string(),
+                    settings: MdpSettings::energy_minimization(),
+                    links: StageLinks::from_prepared(),
+                },
+                StageSpec {
+                    stage_name: "nvt".to_string(),
+                    settings: MdpSettings::nvt(300.0),
+                    links: StageLinks::from_prepared(),
+                },
+            ],
+            max_duration_per_stage: Duration::from_secs(3600),
+            freeze: Some(FreezeSelection {
+                group: "Framework".to_string(),
+                atom_indices: vec![0, 1],
+            }),
+        })));
+        let json = serde_json::to_vec(&request).unwrap();
+        let back: EngineRequest = serde_json::from_slice(&json).unwrap();
+        let Engine::Gromacs(GromacsJob::Run(req)) = back.engine else {
+            panic!("expected a GROMACS run job");
+        };
+        assert_eq!(req.structure.atoms.len(), 2);
+        assert!(req.structure.cell.is_some());
+        assert_eq!(req.stages.len(), 2);
+        assert_eq!(req.topology.includes.len(), 1);
+        assert_eq!(
+            req.freeze.expect("freeze survives").atom_indices,
+            vec![0, 1]
+        );
+    }
+
+    #[test]
+    fn gromacs_build_request_round_trips() {
+        use crate::engines::gromacs::IonOptions;
+        use crate::workflows::gromacs::{GromacsBuildRequest, GromacsJob};
+        use crate::workflows::molecular_dynamics::{BoxShape, MdSystemConfig, WaterModel};
+
+        let structure = Structure::new(
+            "solute",
+            vec![Atom {
+                element: "C".to_string(),
+                position: Point3::new(0.0, 0.0, 0.0),
+                charge: 0.0,
+            }],
+        );
+        let request = EngineRequest::new(Engine::Gromacs(GromacsJob::Build(GromacsBuildRequest {
+            structure,
+            force_field: "amber99sb-ildn".to_string(),
+            water: WaterModel::Tip3p,
+            box_config: MdSystemConfig::with_uniform_padding(10.0, BoxShape::Cubic),
+            solvate: true,
+            ions: Some(IonOptions {
+                neutralize: true,
+                concentration_molar: Some(0.15),
+                positive_ion: "NA".to_string(),
+                negative_ion: "CL".to_string(),
+            }),
+            max_duration: Duration::from_secs(3600),
+        })));
+        let json = serde_json::to_vec(&request).unwrap();
+        let back: EngineRequest = serde_json::from_slice(&json).unwrap();
+        let Engine::Gromacs(GromacsJob::Build(req)) = back.engine else {
+            panic!("expected a GROMACS build job");
+        };
+        assert_eq!(req.force_field, "amber99sb-ildn");
+        assert_eq!(req.water, WaterModel::Tip3p);
+        assert!(req.solvate);
+        let ions = req.ions.expect("ions survive");
+        assert!(ions.neutralize);
+        assert_eq!(ions.positive_ion, "NA");
+    }
+
+    #[test]
+    fn gromacs_material_request_round_trips_with_cell_override() {
+        use crate::domain::UnitCell;
+        use crate::workflows::gromacs::{GromacsJob, GromacsMaterialRequest};
+        use crate::workflows::molecular_dynamics::FrameworkMode;
+
+        let structure = Structure::new(
+            "sheet",
+            vec![Atom {
+                element: "C".to_string(),
+                position: Point3::new(0.0, 0.0, 0.0),
+                charge: 0.0,
+            }],
+        );
+        // A hexagonal (gamma = 120°) cell: confirms the lattice VECTORS survive the
+        // cell payload bridge, not just the six scalar parameters.
+        let cell = UnitCell::from_parameters(2.46, 2.46, 12.0, 90.0, 90.0, 120.0);
+        let original_vectors = cell.vectors;
+        let request = EngineRequest::new(Engine::Gromacs(GromacsJob::BuildMaterial(
+            GromacsMaterialRequest {
+                structure,
+                mode: FrameworkMode::Rigid,
+                solvation: None,
+                custom_force_field: Some("[ atomtypes ]\n".to_string()),
+                cell_override: Some(cell),
+                solvent_gap_angstrom: 25.0,
+                cutoff_nm: 1.0,
+                max_duration: Duration::from_secs(3600),
+            },
+        )));
+        let json = serde_json::to_vec(&request).unwrap();
+        let back: EngineRequest = serde_json::from_slice(&json).unwrap();
+        let Engine::Gromacs(GromacsJob::BuildMaterial(req)) = back.engine else {
+            panic!("expected a GROMACS material job");
+        };
+        assert_eq!(req.mode, FrameworkMode::Rigid);
+        assert!(req.custom_force_field.is_some());
+        let restored = req.cell_override.expect("cell survives the bridge");
+        for (original, restored) in original_vectors.iter().zip(restored.vectors.iter()) {
+            assert!((original.x - restored.x).abs() < 1e-6);
+            assert!((original.y - restored.y).abs() < 1e-6);
+            assert!((original.z - restored.z).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn gromacs_outcome_round_trips_with_trajectory() {
+        use crate::workflows::gromacs::{GromacsOutcome, GromacsStageReport, GromacsTrajectory};
+
+        let outcome = EngineOutcome::Gromacs(GromacsOutcome {
+            structure: Structure::new(
+                "final",
+                vec![Atom {
+                    element: "Ar".to_string(),
+                    position: Point3::new(0.0, 0.0, 0.0),
+                    charge: 0.0,
+                }],
+            ),
+            summary: "GROMACS MD complete".to_string(),
+            stages: vec![GromacsStageReport {
+                stage_name: "em".to_string(),
+                final_potential_energy: Some(-12.3),
+                wall_time: Duration::from_millis(500),
+            }],
+            trajectory: Some(GromacsTrajectory {
+                file_name: "prod.xtc".to_string(),
+                bytes: vec![1, 2, 3, 4],
+            }),
+            topology: None,
+            system_context: None,
+            material: None,
+        });
+        let json = serde_json::to_vec(&outcome).unwrap();
+        let EngineOutcome::Gromacs(back) = serde_json::from_slice(&json).unwrap() else {
+            panic!("expected a GROMACS outcome");
+        };
+        assert_eq!(back.structure.atoms.len(), 1);
+        assert_eq!(back.stages.len(), 1);
+        let trajectory = back.trajectory.expect("trajectory survives");
+        assert_eq!(trajectory.file_name, "prod.xtc");
+        assert_eq!(trajectory.bytes, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn validate_gromacs_rejects_an_empty_structure() {
+        use crate::workflows::gromacs::{GromacsBuildRequest, GromacsJob};
+        use crate::workflows::molecular_dynamics::{BoxShape, MdSystemConfig, WaterModel};
+
+        let request = EngineRequest::new(Engine::Gromacs(GromacsJob::Build(GromacsBuildRequest {
+            structure: Structure::new("empty", Vec::new()),
+            force_field: "amber99sb-ildn".to_string(),
+            water: WaterModel::Spc,
+            box_config: MdSystemConfig::with_uniform_padding(10.0, BoxShape::Cubic),
+            solvate: false,
+            ions: None,
+            max_duration: Duration::from_secs(60),
+        })));
+        assert!(validate_request(&request).is_err());
     }
 }

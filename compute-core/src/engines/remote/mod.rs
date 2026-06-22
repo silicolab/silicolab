@@ -6,32 +6,11 @@
 //! through the existing [`crate::engines::process`] layer (reusing its timeout,
 //! cancel, and shell-free spawn).
 //!
-//! ## How it plugs into the engine layer
-//!
-//! A GROMACS launch and the transport it runs over are always paired, so instead
-//! of threading a separate executor through a dozen signatures, the two travel
-//! together as a [`Compute`]: `{ launch, transport }`. `Compute` replaces the
-//! `gmx_launch` field wherever it flowed, and the **only** behavioral branch is in
-//! `gromacs::runner::run_subprocess`, which calls [`run_remote`] for the
-//! [`Transport::Remote`] case.
-//!
-//! ## Per-command remote model
-//!
-//! For one `gmx` command in local run dir `D` ↔ remote `R = <work_root>/runs/<uuid>`:
-//!
-//! 1. **Stage up** (incremental, [`sync_up`]): upload files in `D` that are new or
-//!    changed vs a local manifest (`path → size+mtime`), recorded on both up and
-//!    down so a pulled-back file is never re-uploaded.
-//! 2. **Launch detached**: one SSH call starts the command under `setsid` in its
-//!    own process group, writing its PGID to `<cmd>.pgid`, its exit code to
-//!    `<cmd>.exit` (the authoritative done-signal), and merged stdout/stderr to
-//!    `<cmd>.console`.
-//! 3. **Poll**: short SSH calls read the console (streamed to the UI line-by-line)
-//!    and check `<cmd>.exit`; a transient failure is retried, not fatal. The cancel
-//!    flag and the wall-clock timeout both `kill -- -<PGID>` the remote group.
-//! 4. **Stage down** is **orchestrator-driven** ([`sync_down`]) — the run-stage /
-//!    build pipeline pulls exactly the files it reads locally — so large
-//!    intermediate artifacts never round-trip.
+//! [`RemoteTarget`], the hardened SSH option block, the incremental
+//! [`sync_up`]/[`sync_down`] file transfer, and the host probes
+//! ([`detect_remote_engine`], [`run_probe_command`]) are the shared spine the
+//! detached [`launcher`] drives to deploy and run the pre-deployed headless worker
+//! on a host. A GROMACS launch travels with [`Compute`].
 
 pub mod bootstrap;
 #[cfg(feature = "network")]
@@ -46,73 +25,34 @@ use std::{
     collections::HashMap,
     fs,
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
-    time::{Duration, Instant, UNIX_EPOCH},
+    time::{Duration, UNIX_EPOCH},
 };
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::engines::process::{self, ProcessConfig, ProcessResult};
+use crate::engines::process::{self, ProcessConfig};
 use crate::engines::registry::EngineLaunch;
 use crate::hosts::RemoteHost;
 
-/// Where an engine command runs. Plain data; cheaply `Clone` (so the per-stage
-/// clone in `run_pipeline` is just a refcount-free copy of small fields).
-#[derive(Debug, Clone)]
-pub enum Transport {
-    /// On this machine, via `std::process::Command` (the historical path).
-    Local,
-    /// On a remote host over SSH. Boxed so the `Local` variant stays small (a
-    /// `RemoteTarget` is ~200 bytes and `Compute` is cloned per pipeline stage).
-    Remote(Box<RemoteTarget>),
-}
-
-/// An engine launch paired with the transport it runs over. Replaces the bare
-/// `gmx_launch` field everywhere it flowed; the launch stays the pure command
-/// descriptor, the transport says *where* it runs.
+/// How to invoke `gmx`: the launch descriptor threaded through the GROMACS
+/// pipeline so a run and its launch travel together. `gmx` always runs as a local
+/// subprocess of whichever host executes the pipeline — the laptop for a local
+/// run, the compute node for a relayed remote run — so there is no transport here.
 #[derive(Debug, Clone)]
 pub struct Compute {
     pub launch: EngineLaunch,
-    pub transport: Transport,
 }
 
 impl Compute {
-    /// A local launch (the default everywhere).
+    /// Run `gmx` as a local subprocess with this launch.
     pub fn local(launch: EngineLaunch) -> Self {
-        Self {
-            launch,
-            transport: Transport::Local,
-        }
-    }
-
-    /// A launch bound to a remote host.
-    pub fn remote(launch: EngineLaunch, target: RemoteTarget) -> Self {
-        Self {
-            launch,
-            transport: Transport::Remote(Box::new(target)),
-        }
-    }
-
-    pub fn is_remote(&self) -> bool {
-        matches!(self.transport, Transport::Remote(_))
-    }
-
-    /// The remote target, if this is a remote launch.
-    pub fn remote_target(&self) -> Option<&RemoteTarget> {
-        match &self.transport {
-            Transport::Remote(target) => Some(target.as_ref()),
-            Transport::Local => None,
-        }
+        Self { launch }
     }
 }
 
 impl From<EngineLaunch> for Compute {
-    /// A bare launch is a local launch — keeps existing call sites terse
-    /// (`launch.into()`).
+    /// Keeps existing call sites terse (`launch.into()`).
     fn from(launch: EngineLaunch) -> Self {
         Self::local(launch)
     }
@@ -174,13 +114,6 @@ impl RemoteTarget {
     }
 }
 
-/// How often the poll loop checks the remote console/exit state.
-const POLL_INTERVAL: Duration = Duration::from_secs(4);
-/// Granularity at which the poll sleep wakes to check the cancel flag.
-const CANCEL_TICK: Duration = Duration::from_millis(250);
-/// Consecutive failed polls (≈ this × `POLL_INTERVAL` of unreachability) before a
-/// remote run is declared lost.
-const MAX_POLL_FAILURES: u32 = 30;
 /// Filename of the local incremental-sync manifest (excluded from upload).
 const MANIFEST_FILE: &str = ".silicolab_remote_manifest.json";
 
@@ -286,59 +219,6 @@ fn sh_quote(s: &str) -> String {
 /// preserved for the inner shell to evaluate.
 fn single_quote_wrap(body: &str) -> String {
     format!("'{}'", body.replace('\'', "'\\''"))
-}
-
-/// The remote script that launches one engine command detached. `gmx_tokens` is
-/// `[program, args…]`; each is `sh_quote`d. `cmd_id` is the per-command basename
-/// for the `.console`/`.exit`/`.pgid`/`.stdin` files.
-fn launch_script(
-    target: &RemoteTarget,
-    cmd_id: &str,
-    gmx_tokens: &[String],
-    has_stdin: bool,
-) -> String {
-    let mut gmx = gmx_tokens
-        .iter()
-        .map(|t| sh_quote(t))
-        .collect::<Vec<_>>()
-        .join(" ");
-    if has_stdin {
-        gmx.push_str(&format!(" < {cmd_id}.stdin"));
-    }
-    // The pgid/console/exit names are safe tokens (cmd-<hex>.<ext>). `$$` (set by
-    // setsid as the session/group leader) is the PGID; the subshell groups the
-    // prelude + engine so prelude failures are captured in the console too.
-    let body = format!(
-        "echo $$ > {cmd_id}.pgid; ( {prelude}{gmx} ) >> {cmd_id}.console 2>&1; echo $? > {cmd_id}.exit",
-        prelude = target.prelude_prefix(),
-    );
-    format!(
-        "mkdir -p {dir} && cd {dir} && : > {cmd_id}.console && {{ setsid sh -c {body} </dev/null >/dev/null 2>&1 & }}",
-        dir = target.remote_dir,
-        body = single_quote_wrap(&body),
-    )
-}
-
-/// The remote script for one poll: a status line (`SILICOLAB_DONE <code>` /
-/// `SILICOLAB_RUNNING` / `SILICOLAB_NODIR`) followed by the full console.
-fn poll_script(target: &RemoteTarget, cmd_id: &str) -> String {
-    format!(
-        "cd {dir} 2>/dev/null || {{ echo SILICOLAB_NODIR; exit 0; }}; \
-         if [ -f {cmd_id}.exit ]; then printf 'SILICOLAB_DONE %s\\n' \"$(cat {cmd_id}.exit 2>/dev/null)\"; \
-         else echo SILICOLAB_RUNNING; fi; \
-         cat {cmd_id}.console 2>/dev/null",
-        dir = target.remote_dir,
-    )
-}
-
-/// The remote script that kills the command's process group (TERM, then KILL).
-fn cancel_script(target: &RemoteTarget, cmd_id: &str) -> String {
-    format!(
-        "cd {dir} 2>/dev/null || exit 0; \
-         PGID=$(cat {cmd_id}.pgid 2>/dev/null); \
-         if [ -n \"$PGID\" ]; then kill -TERM -- -$PGID 2>/dev/null; sleep 1; kill -KILL -- -$PGID 2>/dev/null; fi; true",
-        dir = target.remote_dir,
-    )
 }
 
 // ---------------------------------------------------------------------------
@@ -618,194 +498,6 @@ pub fn sync_down(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Detached launch + poll (the run_subprocess remote branch).
-// ---------------------------------------------------------------------------
-
-/// Run one engine command on the remote host: incremental stage-up → detached
-/// launch → poll until the remote `.exit` appears (streaming console lines via
-/// `report_line`), honoring `cancel` and `config.timeout` with a remote group
-/// kill. Returns the aggregated [`ProcessResult`] (with `stdout` = the full
-/// console) and that console text (for the engine's `gromacs.log`/fatal-error
-/// extraction). Stage-**down** is the orchestrator's job — see [`sync_down`].
-pub fn run_remote(
-    config: &ProcessConfig,
-    target: &RemoteTarget,
-    cancel: Arc<AtomicBool>,
-    report_line: &mut dyn FnMut(String),
-) -> Result<(ProcessResult, String)> {
-    let started_at = Instant::now();
-    let working_dir = &config.working_dir;
-
-    // A unique id per command so concurrent/serial commands in the same run dir
-    // don't collide on their .console/.exit/.pgid files.
-    let cmd_id = format!("cmd-{}", uuid::Uuid::new_v4().simple());
-
-    // Materialize any stdin payload as a file so the remote command can redirect
-    // from it (GROMACS selection prompts: `gmx … < cmd.stdin`).
-    let has_stdin = config.stdin.is_some();
-    if let Some(payload) = &config.stdin {
-        let stdin_path = working_dir.join(format!("{cmd_id}.stdin"));
-        fs::write(&stdin_path, payload)
-            .with_context(|| format!("writing remote stdin file {}", stdin_path.display()))?;
-    }
-
-    // 1. Stage up (incremental). Picks up the freshly written .mdp/.stdin/etc.
-    sync_up(target, working_dir)?;
-
-    // 2. Build the [program, args…] token list and launch detached.
-    let mut tokens = Vec::with_capacity(config.args.len() + 1);
-    tokens.push(config.executable.to_string_lossy().into_owned());
-    tokens.extend(config.args.iter().cloned());
-    let launch = launch_script(target, &cmd_id, &tokens, has_stdin);
-    let launch_config = ssh_config(target, &launch, Some(Duration::from_secs(30)));
-    let launch_result =
-        process::run(launch_config).context("failed to launch the remote command over SSH")?;
-    if !launch_result.success() {
-        bail!(
-            "remote launch failed (exit {}): {}",
-            launch_result.exit_code,
-            launch_result.stderr.trim()
-        );
-    }
-
-    // 3. Poll loop.
-    let mut full_console = String::new();
-    let mut forwarded_lines = 0usize;
-    let mut consecutive_failures = 0u32;
-    let timeout = config.timeout;
-
-    loop {
-        // Cancel-responsive sleep between polls.
-        let mut slept = Duration::ZERO;
-        let mut aborted = false;
-        while slept < POLL_INTERVAL {
-            if cancel.load(Ordering::Relaxed) {
-                aborted = true;
-                break;
-            }
-            std::thread::sleep(CANCEL_TICK);
-            slept += CANCEL_TICK;
-        }
-
-        let cancelled = aborted || cancel.load(Ordering::Relaxed);
-        let timed_out = timeout.is_some_and(|limit| started_at.elapsed() >= limit);
-        if cancelled || timed_out {
-            // Best-effort remote group kill, then a final console fetch.
-            let kill = ssh_config(
-                target,
-                &cancel_script(target, &cmd_id),
-                Some(Duration::from_secs(20)),
-            );
-            let _ = process::run(kill);
-            if let Ok((console, _)) = poll_once(target, &cmd_id) {
-                full_console = console;
-            }
-            forward_new_lines(&full_console, &mut forwarded_lines, report_line);
-            return Ok((
-                ProcessResult {
-                    exit_code: -1,
-                    stdout: full_console.clone(),
-                    stderr: String::new(),
-                    wall_time: started_at.elapsed(),
-                    timed_out,
-                    cancelled,
-                },
-                full_console,
-            ));
-        }
-
-        match poll_once(target, &cmd_id) {
-            Ok((console, status)) => {
-                consecutive_failures = 0;
-                full_console = console;
-                forward_new_lines(&full_console, &mut forwarded_lines, report_line);
-                match status {
-                    PollStatus::Done(code) => {
-                        return Ok((
-                            ProcessResult {
-                                exit_code: code,
-                                stdout: full_console.clone(),
-                                stderr: String::new(),
-                                wall_time: started_at.elapsed(),
-                                timed_out: false,
-                                cancelled: false,
-                            },
-                            full_console,
-                        ));
-                    }
-                    PollStatus::NoDir => {
-                        bail!(
-                            "remote run directory {} disappeared (scratch purged?) before the command finished",
-                            target.remote_dir
-                        );
-                    }
-                    PollStatus::Running => {}
-                }
-            }
-            Err(_) => {
-                // Transient drop: retry on the next tick, fail only after a long
-                // run of unreachability.
-                consecutive_failures += 1;
-                if consecutive_failures >= MAX_POLL_FAILURES {
-                    bail!(
-                        "lost contact with remote host {} after {} consecutive failed polls",
-                        target.host_label,
-                        consecutive_failures
-                    );
-                }
-            }
-        }
-    }
-}
-
-enum PollStatus {
-    Running,
-    Done(i32),
-    NoDir,
-}
-
-/// One poll round: returns (full console text, status).
-fn poll_once(target: &RemoteTarget, cmd_id: &str) -> Result<(String, PollStatus)> {
-    let config = ssh_config(
-        target,
-        &poll_script(target, cmd_id),
-        Some(Duration::from_secs(30)),
-    );
-    let result = process::run(config)?;
-    if !result.success() {
-        bail!("poll failed (exit {})", result.exit_code);
-    }
-    let mut lines = result.stdout.lines();
-    let status = match lines.next().unwrap_or("") {
-        "SILICOLAB_RUNNING" => PollStatus::Running,
-        "SILICOLAB_NODIR" => PollStatus::NoDir,
-        other => {
-            if let Some(code) = other.strip_prefix("SILICOLAB_DONE ") {
-                PollStatus::Done(code.trim().parse().unwrap_or(-1))
-            } else {
-                // Unrecognized first line: treat the whole output as console and
-                // keep waiting (defensive).
-                PollStatus::Running
-            }
-        }
-    };
-    let console = lines.collect::<Vec<_>>().join("\n");
-    Ok((console, status))
-}
-
-/// Forward console lines that appeared since the last forward (best-effort live
-/// streaming; the authoritative full console is captured at completion).
-fn forward_new_lines(console: &str, forwarded: &mut usize, report_line: &mut dyn FnMut(String)) {
-    let lines: Vec<&str> = console.lines().collect();
-    for line in lines.iter().skip(*forwarded) {
-        report_line((*line).to_string());
-    }
-    if lines.len() > *forwarded {
-        *forwarded = lines.len();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -855,57 +547,6 @@ mod tests {
     }
 
     #[test]
-    fn launch_script_detaches_with_process_group_and_captures_exit() {
-        let tokens = vec![
-            "/usr/local/gromacs/bin/gmx".to_string(),
-            "grompp".to_string(),
-            "-f".to_string(),
-            "em.mdp".to_string(),
-        ];
-        let script = launch_script(&test_target(), "cmd-x", &tokens, false);
-        // New session/process group + detached.
-        assert!(script.contains("setsid sh -c"));
-        assert!(script.contains("</dev/null >/dev/null 2>&1 &"));
-        // Authoritative done-signal + PGID capture + prelude applied. (The whole
-        // `sh -c` body is single-quote-wrapped, so the prelude's spaces survive;
-        // the `&&` chaining the prelude to the engine is present.)
-        assert!(script.contains("cmd-x.pgid"));
-        assert!(script.contains("cmd-x.exit"));
-        assert!(script.contains("module load gromacs"));
-        // The engine program and its args all reach the script (each token is
-        // sh-quoted then the whole body single-quote-wrapped — exact escaping is
-        // covered by `sh_quote_is_injection_safe`).
-        assert!(script.contains("grompp"));
-        assert!(script.contains("em.mdp"));
-        assert!(script.contains("/usr/local/gromacs/bin/gmx"));
-        // cd into the run dir before launching.
-        assert!(script.contains("cd ~/.silicolab/runs/abc-123"));
-    }
-
-    #[test]
-    fn launch_script_redirects_stdin_file_when_present() {
-        let tokens = vec!["gmx".to_string(), "genion".to_string()];
-        let script = launch_script(&test_target(), "cmd-y", &tokens, true);
-        assert!(script.contains("< cmd-y.stdin"));
-    }
-
-    #[test]
-    fn poll_script_reports_status_then_console() {
-        let script = poll_script(&test_target(), "cmd-z");
-        assert!(script.contains("SILICOLAB_DONE"));
-        assert!(script.contains("SILICOLAB_RUNNING"));
-        assert!(script.contains("SILICOLAB_NODIR"));
-        assert!(script.contains("cat cmd-z.console"));
-    }
-
-    #[test]
-    fn cancel_script_kills_the_process_group() {
-        let script = cancel_script(&test_target(), "cmd-z");
-        assert!(script.contains("kill -TERM -- -$PGID"));
-        assert!(script.contains("kill -KILL -- -$PGID"));
-    }
-
-    #[test]
     fn validate_work_root_rejects_metacharacters() {
         assert!(validate_work_root("~/.silicolab").is_ok());
         assert!(validate_work_root("/scratch/alice/sl").is_ok());
@@ -932,13 +573,9 @@ mod tests {
     }
 
     #[test]
-    fn compute_from_launch_is_local() {
+    fn compute_from_launch_carries_it() {
         let compute: Compute = EngineLaunch::native("gmx").into();
-        assert!(!compute.is_remote());
-        assert!(compute.remote_target().is_none());
-        let remote = Compute::remote(EngineLaunch::native("gmx"), test_target());
-        assert!(remote.is_remote());
-        assert_eq!(remote.remote_target().unwrap().host_id, "hpc");
+        assert_eq!(compute.launch.program, "gmx");
     }
 
     #[test]

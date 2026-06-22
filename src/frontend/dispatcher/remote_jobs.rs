@@ -98,6 +98,7 @@ fn remote_engine_name(engine: &crate::wire::Engine) -> &'static str {
     match engine {
         crate::wire::Engine::Qm(_) => "QM",
         crate::wire::Engine::Docking(_) => "docking",
+        crate::wire::Engine::Gromacs(_) => "GROMACS",
     }
 }
 
@@ -299,9 +300,39 @@ pub(crate) fn poll_remote_jobs_refresh(state: &mut AppState, ctx: &egui::Context
     }
 }
 
-/// Apply a retrieved remote outcome to the open project, dispatched by engine. The
-/// detached refresh round-trips a `wire::EngineOutcome`, so each engine's result is
-/// handled by its own applier; a new engine adds its arm here.
+/// Whether a retrieved remote job's result belongs in the **currently open
+/// workspace**. A job's origin (`project_root`, captured at submit) must match
+/// what is open now: an ownerless job — submitted from a scratch session, so
+/// `project_root` is `None` — belongs to a scratch session (also `None`); an owned
+/// job belongs only to its own project. When this is false the job was launched
+/// from a *different* project, so its result is left untouched (open that project
+/// and refresh) rather than dumped into an unrelated workspace.
+///
+/// This is the gate every engine's remote applier shares before it materializes a
+/// result entry + run-dir artifacts. It deliberately admits the `(None, None)`
+/// case: a build submitted with no project open used to be silently discarded.
+pub(crate) fn outcome_belongs_to_current_workspace(
+    state: &AppState,
+    row: &registry::RemoteJob,
+) -> bool {
+    let current_root = state
+        .workspace
+        .project()
+        .map(|project| project.root.to_string_lossy().to_string());
+    project_root_matches(row.project_root.as_deref(), current_root.as_deref())
+}
+
+/// Pure core of [`outcome_belongs_to_current_workspace`], split out so the gate is
+/// unit-testable without an `AppState`. `(None, None)` is the scratch-session case
+/// — an ownerless job materializes into scratch — which the earlier `is_some()`
+/// guard wrongly excluded, discarding the retrieved result.
+fn project_root_matches(job_root: Option<&str>, current_root: Option<&str>) -> bool {
+    job_root == current_root
+}
+
+/// Apply a retrieved remote outcome to the current workspace, dispatched by engine.
+/// The detached refresh round-trips a `wire::EngineOutcome`, so each engine's result
+/// is handled by its own applier; a new engine adds its arm here.
 fn apply_remote_outcome(
     state: &mut AppState,
     row: &registry::RemoteJob,
@@ -312,12 +343,16 @@ fn apply_remote_outcome(
         crate::wire::EngineOutcome::Docking(docking) => {
             apply_remote_docking_outcome(state, row, docking)
         }
+        crate::wire::EngineOutcome::Gromacs(gromacs) => {
+            apply_remote_gromacs_outcome(state, row, gromacs)
+        }
     }
 }
 
 /// Apply a retrieved remote QM outcome: log the report, save it beside the run,
-/// add the optimized geometry as an entry (only when the job belongs to the open
-/// project), and mark the task complete.
+/// add the optimized geometry as an entry (only when the job belongs to the
+/// current workspace — see [`outcome_belongs_to_current_workspace`]), and mark the
+/// task complete.
 fn apply_remote_qm_outcome(
     state: &mut AppState,
     row: &registry::RemoteJob,
@@ -336,17 +371,13 @@ fn apply_remote_qm_outcome(
         .ok()
         .map(|()| run_dir.join(QM_OUTPUT_FILE));
 
-    let current_root = state
-        .workspace
-        .project()
-        .map(|project| project.root.to_string_lossy().to_string());
-    let same_project = row.project_root.is_some() && row.project_root == current_root;
+    let belongs_here = outcome_belongs_to_current_workspace(state, row);
     let task_id = state
         .tasks
         .task_run_by_uuid(&row.run_uuid)
         .map(|task| task.id);
 
-    if same_project && let Some(optimized) = outcome.optimized_structure {
+    if belongs_here && let Some(optimized) = outcome.optimized_structure {
         let save_path = structure_io::default_structure_save_path(&optimized, None);
         let entry_id = add_and_show_entry(state, optimized, None, save_path);
         if let Some(task_id) = task_id {
@@ -404,4 +435,31 @@ pub(crate) fn remove_remote_job_scratch(state: &mut AppState, run_uuid: &str) {
 
 fn short_uuid(uuid: &str) -> &str {
     uuid.get(..8).unwrap_or(uuid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::project_root_matches;
+
+    #[test]
+    fn ownerless_job_in_scratch_session_belongs_here() {
+        // The reported regression: a build submitted with no project open (`None`)
+        // and refreshed in a scratch session (`None`) was discarded by the old
+        // `is_some()` guard. Equality of origins now materializes it into scratch.
+        assert!(project_root_matches(None, None));
+    }
+
+    #[test]
+    fn matching_project_belongs_here() {
+        assert!(project_root_matches(Some("/work/a"), Some("/work/a")));
+    }
+
+    #[test]
+    fn mismatched_origin_is_left_for_its_own_workspace() {
+        // A different project open, an owned job with no project open, or an
+        // ownerless job with a project open: none is dumped into the wrong place.
+        assert!(!project_root_matches(Some("/work/a"), Some("/work/b")));
+        assert!(!project_root_matches(Some("/work/a"), None));
+        assert!(!project_root_matches(None, Some("/work/b")));
+    }
 }

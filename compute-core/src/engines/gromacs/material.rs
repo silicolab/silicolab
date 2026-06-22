@@ -23,6 +23,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use serde::{Deserialize, Serialize};
 
 use crate::domain::{Structure, UnitCell};
 use crate::engines::gromacs::{
@@ -33,7 +34,7 @@ use crate::engines::gromacs::{
     runner::{GromacsProgress, subprocess_failure},
     topgen::render_top,
 };
-use crate::engines::remote::{self, Compute, Transport};
+use crate::engines::remote::Compute;
 use crate::io::formats::gro::parse_gro;
 use crate::workflows::molecular_dynamics::{
     FrameworkMode, MdTopology, SolvationOptions, WaterModel, ensure_periodic_cutoff_fits,
@@ -45,7 +46,7 @@ use crate::workflows::molecular_dynamics::{
 /// is both the `freezegrps` name and the index group [`prepare_system`] writes.
 ///
 /// [`prepare_system`]: super::prepare_system
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameworkRunHints {
     pub periodic_molecules: bool,
     pub freeze_group: Option<String>,
@@ -308,13 +309,6 @@ where
             }
             run(genion, Some(b"SOL\n".to_vec()), "genion", &mut report)?;
             final_coords = "ionized.gro".to_string();
-        }
-
-        // For a remote build, stage back the solvated/ionized coordinates and the
-        // topology the run reuses (solvate/genion rewrite topol.top's [molecules]).
-        if let Transport::Remote(target) = &req.compute.transport {
-            remote::sync_down(target, &wd, &[final_coords.as_str(), "topol.top"], &[])
-                .context("staging back the solvated framework system")?;
         }
 
         let gro = std::fs::read_to_string(wd.join(&final_coords))

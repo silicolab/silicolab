@@ -167,8 +167,9 @@ pub(crate) fn poll_docking_job(state: &mut AppState, ctx: &egui::Context) {
 
 /// Apply a retrieved remote docking outcome: log the summary, save the poses
 /// beside the run, add a pose entry per pose (only when the job belongs to the
-/// open project), and mark the task complete. The detached analogue of the local
-/// `poll_docking_job` finish path; mirrors `apply_remote_qm_outcome`.
+/// current workspace — see [`outcome_belongs_to_current_workspace`]), and mark the
+/// task complete. The detached analogue of the local `poll_docking_job` finish
+/// path; mirrors `apply_remote_qm_outcome`.
 pub(crate) fn apply_remote_docking_outcome(
     state: &mut AppState,
     row: &crate::backend::storage::jobs::RemoteJob,
@@ -188,17 +189,13 @@ pub(crate) fn apply_remote_docking_outcome(
             .map(|()| path)
     };
 
-    let current_root = state
-        .workspace
-        .project()
-        .map(|project| project.root.to_string_lossy().to_string());
-    let same_project = row.project_root.is_some() && row.project_root == current_root;
+    let belongs_here = outcome_belongs_to_current_workspace(state, row);
     let task_id = state
         .tasks
         .task_run_by_uuid(&row.run_uuid)
         .map(|task| task.id);
 
-    if same_project {
+    if belongs_here {
         add_dock_pose_entries(state, &outcome, task_id, poses_path);
     }
     if let Some(task_id) = task_id {
