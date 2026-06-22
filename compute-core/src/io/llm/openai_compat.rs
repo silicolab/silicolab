@@ -105,6 +105,13 @@ impl LlmProvider for OpenAiCompatProvider {
         if cancel.load(Ordering::Relaxed) {
             return Err(LlmError::Cancelled);
         }
+        if !super::endpoint_is_safe(&self.base_url) {
+            return Err(LlmError::BadRequest(format!(
+                "refusing to send the API key to {} over plaintext HTTP; use an https:// base URL \
+                 (http:// is allowed only for a localhost endpoint)",
+                self.base_url
+            )));
+        }
 
         let body = self.build_request_body(cfg, tools, history);
         let payload = serde_json::to_vec(&body)

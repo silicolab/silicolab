@@ -51,7 +51,7 @@ The GUI uses an Elm-style flow.
 # Commit and PR hygiene
 
 * Use Conventional Commits for commit messages, matching the existing project style.
-* Before opening a PR, make CI's checks pass locally with `RUSTFLAGS=-D warnings`: `cargo fmt --all --check`, `cargo clippy --all-targets --all-features`, `cargo test --all-features`.
+* Before opening a PR, make CI's checks pass locally with `RUSTFLAGS=-D warnings`: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --all-features`, `cargo test --workspace --all-features`.
 
 # Rules hygiene
 

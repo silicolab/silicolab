@@ -790,11 +790,25 @@ fn parse_fixed_width_i32_or_default(
 }
 
 fn field(line: &str, start: usize, end: usize) -> &str {
-    if start >= line.len() {
-        return "";
-    }
+    // PDB is a fixed-column format, but the columns are byte offsets: a stray
+    // multibyte character in a malformed file would put a boundary mid-codepoint
+    // and panic the slice. Clamp both ends down to a char boundary so a bad line
+    // degrades to a short/empty field instead of crashing the reader.
+    let end = floor_char_boundary(line, end.min(line.len()));
+    let start = floor_char_boundary(line, start.min(end));
+    &line[start..end]
+}
 
-    &line[start..line.len().min(end)]
+/// The largest char boundary `<= index` (stable-Rust stand-in for the unstable
+/// `str::floor_char_boundary`). A no-op for the ASCII columns of a well-formed PDB.
+fn floor_char_boundary(line: &str, mut index: usize) -> usize {
+    if index >= line.len() {
+        return line.len();
+    }
+    while index > 0 && !line.is_char_boundary(index) {
+        index -= 1;
+    }
+    index
 }
 
 fn ordered_pair<T: Ord>(first: T, second: T) -> (T, T) {

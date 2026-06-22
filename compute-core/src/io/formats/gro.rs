@@ -62,6 +62,12 @@ fn parse_atom_line(line: &str, line_number: usize) -> Result<ParsedAtom> {
     if line.len() < 20 {
         bail!("GRO atom line {line_number} is shorter than 20 characters");
     }
+    // The columns below are byte offsets; a multibyte character inside them would
+    // panic the slices. GRO fixed columns are ASCII, so reject such a line as
+    // malformed rather than crashing.
+    if ![5, 10, 15, 20].iter().all(|&at| line.is_char_boundary(at)) {
+        bail!("GRO atom line {line_number} has non-ASCII characters in its fixed columns");
+    }
 
     // GRO fixed columns: residue number 0..5, residue name 5..10, atom name
     // 10..15. The residue name is essential context for inferring elements (see
@@ -156,7 +162,15 @@ fn parse_float_fields(fields: &str, line_number: usize) -> Result<Vec<f32>> {
     for field_index in 0..field_count {
         let start = field_index * width;
         let end = start + width;
-        let value = trimmed[start..end].trim().parse::<f32>().with_context(|| {
+        // `width` is a byte gap between decimal points, so a multibyte character
+        // in the coordinate columns could land a field boundary mid-codepoint;
+        // reject the line rather than panicking the slice (coordinates are ASCII).
+        let field = trimmed.get(start..end).ok_or_else(|| {
+            anyhow!(
+                "GRO atom line {line_number} has non-ASCII characters in its coordinate columns"
+            )
+        })?;
+        let value = field.trim().parse::<f32>().with_context(|| {
             format!(
                 "invalid floating-point field {} on GRO atom line {}",
                 field_index + 1,
@@ -443,5 +457,22 @@ triclinic
         assert!((vectors[2].x - 5.0).abs() < 0.0001);
         assert!((vectors[2].y - 6.0).abs() < 0.0001);
         assert!((vectors[2].z - 20.0).abs() < 0.0001);
+    }
+
+    #[test]
+    fn malformed_non_ascii_coordinate_column_errors_instead_of_panicking() {
+        // A multibyte character in the fixed-width coordinate columns used to land
+        // a field boundary mid-codepoint and panic the byte slice; it must now be
+        // rejected as malformed, mirroring the residue/atom-name column guard. The
+        // `é` straddles the inferred 7-byte field boundary at byte 14.
+        let result = parse_gro(
+            "\
+malformed coords
+    1
+    1WATER  OW1    1   1.23   1.2é3   1.23
+   1.82060   1.82060   1.82060
+",
+        );
+        assert!(result.is_err());
     }
 }

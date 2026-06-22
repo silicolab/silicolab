@@ -104,11 +104,6 @@ struct EngineSpec {
     version_arg: Option<&'static str>,
 }
 
-/// Version of the bundled `hartree` quantum-chemistry library. hartree exposes no
-/// version constant, so keep this in sync with the `hartree` dependency in
-/// `Cargo.toml`.
-const HARTREE_VERSION: &str = "0.1.0";
-
 const ENGINE_SPECS: &[EngineSpec] = &[EngineSpec {
     id: EngineId::GROMACS,
     name: "GROMACS",
@@ -149,7 +144,7 @@ impl EngineRegistry {
             name: "hartree",
             description: "Pure-Rust quantum chemistry: molecular HF, DFT, MP2, and coupled cluster, plus periodic (crystalline) DFT.",
             launch: None,
-            version: Some(HARTREE_VERSION.to_string()),
+            version: Some(hartree::VERSION.to_string()),
             built_in: true,
         });
         capabilities.push(EngineCapability {

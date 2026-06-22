@@ -236,22 +236,39 @@ fn biopolymer_to_payload(biopolymer: &Biopolymer) -> BiopolymerPayload {
     }
 }
 
-/// Rebuild a live [`Structure`] from its payload.
-pub fn payload_to_structure(payload: StructurePayload) -> Structure {
+/// Rebuild a live [`Structure`] from its payload. Fails on an inconsistent
+/// payload (a truncated or corrupt blob whose flat arrays disagree on the atom
+/// count) rather than silently fabricating origin atoms or zero charges to fill
+/// the gap — the arrays are written together by [`structure_to_payload`], so a
+/// length mismatch means the data is bad.
+pub fn payload_to_structure(payload: StructurePayload) -> anyhow::Result<Structure> {
+    let count = payload.elements.len();
+    anyhow::ensure!(
+        payload.coords.len() == count * 3,
+        "structure payload has {} coordinate values for {count} atoms (expected {})",
+        payload.coords.len(),
+        count * 3
+    );
+    anyhow::ensure!(
+        payload.charges.len() == count,
+        "structure payload has {} charges for {count} atoms",
+        payload.charges.len()
+    );
     let atoms = payload
         .elements
         .into_iter()
         .enumerate()
         .map(|(index, element)| {
             let base = index * 3;
+            // In-bounds: the lengths were checked against `count` above.
             Atom {
                 element,
                 position: Point3::new(
-                    payload.coords.get(base).copied().unwrap_or(0.0),
-                    payload.coords.get(base + 1).copied().unwrap_or(0.0),
-                    payload.coords.get(base + 2).copied().unwrap_or(0.0),
+                    payload.coords[base],
+                    payload.coords[base + 1],
+                    payload.coords[base + 2],
                 ),
-                charge: payload.charges.get(index).copied().unwrap_or(0.0),
+                charge: payload.charges[index],
             }
         })
         .collect();
@@ -262,13 +279,13 @@ pub fn payload_to_structure(payload: StructurePayload) -> Structure {
         .collect();
     let cell = payload.cell.map(payload_to_cell);
     let biopolymer = payload.biopolymer.map(payload_to_biopolymer);
-    Structure {
+    Ok(Structure {
         title: payload.title,
         atoms,
         bonds,
         cell,
         biopolymer,
-    }
+    })
 }
 
 fn payload_to_biopolymer(payload: BiopolymerPayload) -> Biopolymer {
@@ -336,7 +353,7 @@ pub mod structure_serde {
 
     pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Structure, D::Error> {
         let payload = StructurePayload::deserialize(deserializer)?;
-        Ok(payload_to_structure(payload))
+        payload_to_structure(payload).map_err(serde::de::Error::custom)
     }
 }
 
@@ -362,7 +379,9 @@ pub mod structure_serde_boxed {
         deserializer: D,
     ) -> Result<Box<Structure>, D::Error> {
         let payload = StructurePayload::deserialize(deserializer)?;
-        Ok(Box::new(payload_to_structure(payload)))
+        payload_to_structure(payload)
+            .map(Box::new)
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -412,7 +431,10 @@ pub mod structure_serde_opt {
         deserializer: D,
     ) -> Result<Option<Structure>, D::Error> {
         let payload = Option::<StructurePayload>::deserialize(deserializer)?;
-        Ok(payload.map(payload_to_structure))
+        payload
+            .map(payload_to_structure)
+            .transpose()
+            .map_err(serde::de::Error::custom)
     }
 }
 
@@ -445,7 +467,7 @@ mod tests {
 
         let json = serde_json::to_vec(&structure_to_payload(&structure)).unwrap();
         let payload = serde_json::from_slice(&json).unwrap();
-        let decoded = payload_to_structure(payload);
+        let decoded = payload_to_structure(payload).unwrap();
 
         assert_eq!(decoded.title, "ethene");
         assert_eq!(decoded.atoms.len(), 2);
@@ -466,7 +488,7 @@ END
         let structure = crate::io::formats::pdb::parse_pdb(pdb).unwrap();
         let json = serde_json::to_vec(&structure_to_payload(&structure)).unwrap();
         let payload = serde_json::from_slice(&json).unwrap();
-        let decoded = payload_to_structure(payload);
+        let decoded = payload_to_structure(payload).unwrap();
 
         let bio = decoded.biopolymer.expect("biopolymer survives");
         assert_eq!(bio.atom_name(0), Some("N"));

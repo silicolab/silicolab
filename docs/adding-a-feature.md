@@ -9,8 +9,13 @@ them — read the named module for the current code.
 
 See [ARCHITECTURE.md](../ARCHITECTURE.md) for *why* the layers and the
 `AppAction → dispatch` flow exist, and [CONTRIBUTING.md](../CONTRIBUTING.md) for
-build/test/land. Layer order (lowest owns it): `domain → io → backend → engines
-→ workflows → frontend`.
+build/test/land. Layer order (lowest owns it) spans two crates: **compute-core**
+`domain → io → md → engines → workflows` (no GUI deps; also holds `hosts`/
+`payload`/`wire`; `md` is the engine-neutral molecular-dynamics model), then
+**silicolab** `backend → frontend` (depends on compute-core); the headless
+worker crate `silicolab-compute` links compute-core alone. The module paths
+below are relative to a crate: `md/`, `engines/`, `io/`, `workflows/` live under
+`compute-core/src/`; `backend/`, `frontend/` under `src/`.
 
 ## Pick the template
 
@@ -18,6 +23,7 @@ build/test/land. Layer order (lowest owns it): `domain → io → backend → en
 |---|---|---|
 | In-process pure-Rust compute | `engines/qm/` (+ `engines/forcefield/uff`) | Free functions, **no `Engine` trait**; register a built-in `EngineId` + capability in `engines/registry.rs`. |
 | External subprocess engine | `engines/gromacs/` (+ `engines/process`, `engines/remote`) | Declare an `EngineSpec` in `registry.rs`; runs on a `JobManager` thread, never the UI thread. |
+| Run an existing engine on a **remote** host | `engines/remote/` (`deploy`, `launcher`, `run_record`) + `frontend/dispatcher/` (`remote_jobs`, `builders`) | Mirror the `resolve_remote_compute_host → start_remote_engine → apply_remote_*_outcome` dispatch; the job crosses the `wire`/`payload` bridge to the deployed `silicolab-compute` worker. Reuses each engine's `compute-core` impl, so local and remote can't diverge. |
 | Background compute **task** (panel + result entries) | the `qm-energy` task, end-to-end — see the checklist | For a CPU loop that streams intermediate structures, also study `build-disordered-system`. |
 | Multi-entry picker panel | `disorder` | `SetDisorderComponentEntry`, `with_disorder_prompt`, and the `ensure_panel_form` seeding. |
 | Inline edit task (no panel, acts on the active structure) | `add-hydrogens` / `recompute-bonds` | Executor runs the op and marks the task complete; no prompt state. |
