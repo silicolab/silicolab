@@ -36,7 +36,7 @@ use crate::engines::gromacs::{
 };
 use crate::engines::remote::Compute;
 use crate::io::formats::gro::parse_gro;
-use crate::workflows::molecular_dynamics::{
+use crate::md::{
     FrameworkMode, MdTopology, SolvationOptions, WaterModel, ensure_periodic_cutoff_fits,
     set_slab_c_axis, solvent_definitions,
 };
@@ -390,7 +390,7 @@ mod tests {
         prepare_system, render_top, run_stage,
     };
     use crate::engines::registry::EngineLaunch;
-    use crate::workflows::molecular_dynamics::{MdTopology, SolvationOptions, set_slab_c_axis};
+    use crate::md::{MdTopology, SolvationOptions, set_slab_c_axis};
     use crate::workflows::nanosheet::{NanosheetSpec, SheetKind, build_nanosheet};
 
     fn wsl_gmx_launch() -> EngineLaunch {
@@ -538,7 +538,7 @@ mod tests {
         // box, proving that path is grompp-valid and mdrun-runnable end-to-end.
         let box_cell = sheet.cell.clone();
         let solvation = SolvationOptions {
-            water: crate::workflows::molecular_dynamics::WaterModel::Spc,
+            water: crate::md::WaterModel::Spc,
             positive_ion: "NA".to_string(),
             negative_ion: "CL".to_string(),
             neutralize: true,

@@ -1165,7 +1165,8 @@ AR  8
     #[ignore = "requires GROMACS inside WSL (Windows acceptance environment)"]
     fn wsl_gromacs_generated_topology_runs_full_md() {
         use crate::engines::gromacs::render_top;
-        use crate::workflows::molecular_dynamics::{MdProtocolOptions, MdTopology, full_protocol};
+        use crate::md::MdTopology;
+        use crate::workflows::molecular_dynamics::{MdProtocolOptions, full_protocol};
 
         let working_dir = std::env::temp_dir().join("silicolab_gmx_generated_top_integration");
         let _ = fs::remove_dir_all(&working_dir);

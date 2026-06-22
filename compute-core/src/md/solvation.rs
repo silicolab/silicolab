@@ -485,7 +485,7 @@ pub fn splitmix64(x: u64) -> u64 {
 mod tests {
     use super::*;
     use crate::domain::Atom;
-    use crate::workflows::molecular_dynamics::{MdSystemConfig, build_md_system, system::BoxShape};
+    use crate::md::{MdSystemConfig, build_md_system, system::BoxShape};
     use nalgebra::Point3;
 
     fn argon_box(edge_a: f32) -> Structure {

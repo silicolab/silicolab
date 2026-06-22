@@ -79,7 +79,7 @@ pub fn assemble(mut base: MdStage, family: ForceFieldFamily, edits: &StageEdits)
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflows::molecular_dynamics::run::stage::MdStage;
+    use crate::md::run::stage::MdStage;
 
     #[test]
     fn charmm_intent_fills_one_point_two_cutoffs_when_unset() {

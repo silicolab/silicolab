@@ -179,9 +179,7 @@ fn low_confidence(eff: &EffectiveContext) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::workflows::molecular_dynamics::run::system_context::{
-        ForceFieldFamily, MdSystemContext, SystemTypeOverrides,
-    };
+    use crate::md::run::system_context::{ForceFieldFamily, MdSystemContext, SystemTypeOverrides};
 
     fn ctx() -> MdSystemContext {
         MdSystemContext {

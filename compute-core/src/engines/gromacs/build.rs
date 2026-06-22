@@ -33,7 +33,7 @@ use crate::{
         remote::Compute,
     },
     io::formats::{gro::parse_gro, pdb::to_pdb},
-    workflows::molecular_dynamics::{BoxShape, BoxSizing, MdSystemConfig, WaterModel},
+    md::{BoxShape, BoxSizing, MdSystemConfig, WaterModel},
 };
 
 const ANGSTROM_TO_NM: f32 = 0.1;
@@ -315,7 +315,7 @@ fn solvent_box(water: WaterModel) -> &'static str {
 mod tests {
     use super::*;
     use crate::engines::registry::EngineLaunch;
-    use crate::workflows::molecular_dynamics::{BoxShape, MdSystemConfig};
+    use crate::md::{BoxShape, MdSystemConfig};
 
     #[test]
     fn padding_box_uses_largest_clearance_and_shape() {
@@ -351,7 +351,7 @@ mod tests {
         let working_dir = std::env::temp_dir().join("silicolab_gmx_build_peptide");
         let _ = std::fs::remove_dir_all(&working_dir);
 
-        let pdb = include_str!("../../workflows/molecular_dynamics/fixtures/capped_ala.pdb");
+        let pdb = include_str!("../../md/fixtures/capped_ala.pdb");
         let structure = parse_pdb(pdb).expect("fixture parses");
         let solute_atoms = structure.atoms.len();
 
@@ -419,7 +419,7 @@ mod tests {
         let build_dir = root.join("build");
         let run_dir = root.join("run");
 
-        let pdb = include_str!("../../workflows/molecular_dynamics/fixtures/capped_ala.pdb");
+        let pdb = include_str!("../../md/fixtures/capped_ala.pdb");
         let structure = parse_pdb(pdb).expect("fixture parses");
 
         let launch = EngineLaunch {

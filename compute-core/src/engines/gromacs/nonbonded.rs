@@ -15,7 +15,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::workflows::molecular_dynamics::ForceFieldFamily;
+use crate::md::ForceFieldFamily;
 
 /// How a stage treats nonbonded interactions in the generated `.mdp`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
