@@ -4,7 +4,7 @@ Keep these rules short, practical, and focused on the invariants that are expens
 
 # Rust coding guidelines
 
-* Avoid comments that merely restate code. Use comments for non-obvious invariants, design constraints, edge cases, or why a straightforward-looking alternative is wrong.
+* Default to no comment, and never one that merely restates the code. Comment only to state a fact about the *code* the reader cannot infer — a non-obvious invariant, edge case, footgun, or why an obvious alternative is actually incorrect (a guard against a plausible-but-broken refactor). Never comment to justify how the code is organized or to narrate intent ("extracted so…", "first because…", "so X stays clean").
 * Do not create shallow one-function modules just to look organized. Add a new file or module when it represents a real domain concept, layer boundary, or reusable component.
 * Keep source files under 600 *code* lines (soft target ~400); blank lines, comments, and the trailing `#[cfg(test)]` module do not count.
 * Avoid panics in production paths that handle user data, external files, subprocess output, or network responses. Return useful errors instead.
