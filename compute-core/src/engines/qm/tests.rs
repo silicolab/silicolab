@@ -39,6 +39,7 @@ fn request(structure: Structure, method: QmMethod, basis: &str, kind: QmKind) ->
         multiplicity: 1,
         kind,
         options: QmOptions::default(),
+        ts: None,
     }
 }
 
@@ -158,6 +159,213 @@ fn invalid_spin_is_rejected() {
     // Two electrons (H2, neutral) cannot be a doublet.
     let err = molecule_from_structure(&h2(), 0, 2);
     assert!(err.is_err());
+}
+
+/// A linear H3 (doublet) near its symmetric exchange saddle — the canonical cheap
+/// transition state, used to exercise the TS-option plumbing.
+fn h3_linear() -> Structure {
+    Structure::new(
+        "h3",
+        vec![
+            Atom {
+                element: "H".into(),
+                position: Point3::new(0.0, 0.0, -0.93),
+                charge: 0.0,
+            },
+            Atom {
+                element: "H".into(),
+                position: Point3::new(0.0, 0.0, 0.0),
+                charge: 0.0,
+            },
+            Atom {
+                element: "H".into(),
+                position: Point3::new(0.0, 0.0, 0.93),
+                charge: 0.0,
+            },
+        ],
+    )
+}
+
+fn build_ts_job(structure: &Structure, ts: Option<&QmTsConfig>) -> super::build::ResolvedJob {
+    build_job(
+        structure,
+        &QmMethod::Uhf,
+        "sto-3g",
+        0,
+        2,
+        QmKind::TransitionState,
+        &QmOptions::default(),
+        ts,
+    )
+    .expect("TS job should build")
+}
+
+/// The TS kind sets hartree's `transition_state` flag (and not `optimize_geometry`);
+/// the single-guess route leaves both guess inputs empty.
+#[test]
+fn ts_single_guess_sets_transition_state_flag() {
+    let resolved = build_ts_job(&h3_linear(), Some(&QmTsConfig::default()));
+    assert!(resolved.job.options.transition_state);
+    assert!(!resolved.job.options.optimize_geometry);
+    assert!(resolved.job.options.ts_guess.is_none());
+    assert!(resolved.job.options.ts_coord_scan.is_none());
+    // A TS request with no config behaves like the single-guess default.
+    let none = build_ts_job(&h3_linear(), None);
+    assert!(none.job.options.transition_state);
+    assert!(none.job.options.ts_guess.is_none());
+}
+
+/// The search algorithm and IRC toggle map onto hartree's `TsOptions`.
+#[test]
+fn ts_options_map_algorithm_and_irc() {
+    use crate::engines::qm::{QmTsAlgorithm, QmTsCoordinates};
+    let ts = QmTsConfig {
+        guess: QmTsGuess::Single,
+        algorithm: QmTsAlgorithm::Dimer,
+        coordinates: QmTsCoordinates::Internal,
+        confirm_irc: true,
+    };
+    let resolved = build_ts_job(&h3_linear(), Some(&ts));
+    let opts = &resolved.job.options.ts_options;
+    assert_eq!(opts.algorithm, hartree::opt::ts::TsAlgorithm::Dimer);
+    assert_eq!(opts.coordinates, hartree::opt::ts::Coordinates::Internal);
+    assert!(opts.confirm_irc);
+}
+
+/// A distinguished-coordinate scan converts 1-based UI atom indices to 0-based
+/// hartree internals and the range from Ångström to Bohr for a bond.
+#[test]
+fn ts_coord_scan_converts_indices_and_units() {
+    use crate::engines::qm::{QmInternalCoordinate, QmTsCoordinateScan};
+    let ts = QmTsConfig {
+        guess: QmTsGuess::CoordinateScan(QmTsCoordinateScan {
+            coordinate: QmInternalCoordinate::Bond(1, 3),
+            start: 1.0,
+            end: 2.0,
+            n_points: 5,
+        }),
+        ..QmTsConfig::default()
+    };
+    let resolved = build_ts_job(&h3_linear(), Some(&ts));
+    let spec = resolved
+        .job
+        .options
+        .ts_coord_scan
+        .expect("coord-scan spec set");
+    assert_eq!(
+        spec.coordinate,
+        hartree::opt::internals::Internal::Bond(0, 2)
+    );
+    // 1.0 Å → ~1.889 Bohr.
+    assert!((spec.start - 1.0 / BOHR_TO_ANGSTROM).abs() < 1e-9);
+    assert_eq!(spec.n_points, 5);
+}
+
+/// A coordinate scan rejects an out-of-range atom index and a too-coarse grid.
+#[test]
+fn ts_coord_scan_validates_inputs() {
+    use crate::engines::qm::{QmInternalCoordinate, QmTsCoordinateScan};
+    let bad_atom = QmTsConfig {
+        guess: QmTsGuess::CoordinateScan(QmTsCoordinateScan {
+            // h3 has 3 atoms; atom 9 is out of range.
+            coordinate: QmInternalCoordinate::Bond(1, 9),
+            start: 1.0,
+            end: 2.0,
+            n_points: 5,
+        }),
+        ..QmTsConfig::default()
+    };
+    assert!(
+        build_job(
+            &h3_linear(),
+            &QmMethod::Uhf,
+            "sto-3g",
+            0,
+            2,
+            QmKind::TransitionState,
+            &QmOptions::default(),
+            Some(&bad_atom),
+        )
+        .is_err()
+    );
+
+    // A coordinate over a repeated atom (Bond from an atom to itself) is degenerate.
+    let repeated = QmTsConfig {
+        guess: QmTsGuess::CoordinateScan(QmTsCoordinateScan {
+            coordinate: QmInternalCoordinate::Bond(2, 2),
+            start: 1.0,
+            end: 2.0,
+            n_points: 5,
+        }),
+        ..QmTsConfig::default()
+    };
+    assert!(
+        build_job(
+            &h3_linear(),
+            &QmMethod::Uhf,
+            "sto-3g",
+            0,
+            2,
+            QmKind::TransitionState,
+            &QmOptions::default(),
+            Some(&repeated),
+        )
+        .is_err()
+    );
+}
+
+/// Transition-state search rejects the options hartree cannot run a saddle search
+/// with (post-HF, non-in-core backends, solvation), before the job is assembled.
+#[test]
+fn ts_rejects_incompatible_options() {
+    let ts = QmTsConfig::default();
+    let build = |method: QmMethod, options: QmOptions| {
+        build_job(
+            &h3_linear(),
+            &method,
+            "sto-3g",
+            0,
+            2,
+            QmKind::TransitionState,
+            &options,
+            Some(&ts),
+        )
+    };
+    // Post-HF: no analytic gradient path for the saddle search.
+    assert!(build(QmMethod::Mp2, QmOptions::default()).is_err());
+    // Integral-direct backend.
+    let direct = QmOptions {
+        scf_backend: crate::engines::qm::QmScfBackend::Direct,
+        ..QmOptions::default()
+    };
+    assert!(build(QmMethod::Uhf, direct).is_err());
+    // Implicit solvation.
+    let solvated = QmOptions {
+        solvation: Some(crate::engines::qm::QmSolvation::Smd("water".into())),
+        ..QmOptions::default()
+    };
+    assert!(build(QmMethod::Uhf, solvated).is_err());
+}
+
+/// End-to-end saddle search on linear H3. Marked `#[ignore]`: a full P-RFO climb
+/// with finite-difference Hessians is slow and its convergence is not a contract
+/// the build guards, so it is run on demand rather than in the default suite.
+#[test]
+#[ignore = "slow: full transition-state search (run on demand)"]
+fn ts_h3_finds_a_saddle() {
+    let mut req = request(
+        h3_linear(),
+        QmMethod::Uhf,
+        "sto-3g",
+        QmKind::TransitionState,
+    );
+    req.multiplicity = 2;
+    req.ts = Some(QmTsConfig::default());
+    let outcome = run_qm(req, no_cancel(), |_| {}).expect("TS search should run");
+    // The best saddle geometry is surfaced even if the search did not fully
+    // converge, and the summary reports the transition-state section.
+    assert!(outcome.optimized_structure.is_some());
+    assert!(outcome.summary.contains("transition state"));
 }
 
 #[test]

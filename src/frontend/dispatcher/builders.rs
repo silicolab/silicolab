@@ -223,6 +223,27 @@ pub(crate) fn cancel_pending_optimization_request(state: &mut AppState) {
     close_active_task_panel(state);
 }
 
+/// Resolve the product structure for a two-endpoint transition-state search from
+/// the prompt's chosen entry, loading it on demand. `None` for any other route or
+/// when no usable (non-empty) entry is chosen.
+fn resolve_ts_product(
+    state: &mut AppState,
+    prompt: &crate::frontend::state::QmPrompt,
+) -> Option<crate::domain::Structure> {
+    if prompt.kind != crate::engines::qm::QmKind::TransitionState
+        || prompt.ts.route != crate::frontend::state::TsRouteKind::TwoEndpoint
+    {
+        return None;
+    }
+    let entry_id = prompt.ts.product_entry?;
+    state.ensure_entry_loaded(entry_id);
+    state
+        .entries
+        .entry(entry_id)
+        .map(|entry| entry.structure.clone())
+        .filter(|structure| !structure.atoms.is_empty())
+}
+
 pub(crate) fn start_pending_qm(state: &mut AppState) {
     bind_active_panel_task(state, TaskPanelKind::QmPrompt);
     let Some(prompt) = state.ui.pending_qm.clone() else {
@@ -257,15 +278,39 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
     // judged here against this machine's RAM; a REMOTE job defers to the off-thread
     // submit, which probes the host and judges against ITS RAM (this machine's
     // budget would be the wrong yardstick), so it is not pre-flighted on this path.
+    // Two-endpoint transition-state searches need a product structure; resolve it
+    // from the chosen entry and reject early with a clear message if it is missing
+    // (the panel can outlive the entry it pointed at).
+    let ts_product = resolve_ts_product(state, &prompt);
+    if prompt.kind == crate::engines::qm::QmKind::TransitionState
+        && prompt.ts.route == crate::frontend::state::TsRouteKind::TwoEndpoint
+    {
+        if ts_product.is_none() {
+            state.set_message(
+                "choose a product structure for the two-endpoint transition-state search"
+                    .to_string(),
+            );
+            return;
+        }
+        // The reactant is the active entry; identical endpoints give a degenerate
+        // (zero-displacement) guess, so reject the active entry as its own product.
+        if prompt.ts.product_entry == state.entries.active_entry_id() {
+            state.set_message(
+                "the product must be a different structure than the reactant (the active entry)"
+                    .to_string(),
+            );
+            return;
+        }
+    }
     if !prompt.periodic && resolve_remote_host(state, &prompt.prefs.target).is_none() {
-        let request = prompt.to_request(state.structure().clone());
+        let request = prompt.to_request(state.structure().clone(), ts_product.clone());
         let verdict = memory_verdict(&request, crate::backend::hardware::qm_incore_budget_bytes());
         if let Some(notification) = qm_memory_notification(&verdict, "this machine") {
             state.ui.notification = Some(notification);
             return; // leave pending_qm intact so the prompt stays open
         }
     }
-    let job = prompt.to_job(state.structure().clone());
+    let job = prompt.to_job(state.structure().clone(), ts_product);
     let remote_host = resolve_remote_host(state, &prompt.prefs.target);
     state.set_source_path(None);
     state.ui.editor = None;
@@ -654,7 +699,10 @@ pub(crate) fn estimate_qm_memory(state: &mut AppState) {
         state.set_message("open a structure before estimating QM memory".to_string());
         return;
     }
-    let request = prompt.to_request(state.structure().clone());
+    // The product does not change the in-core estimate (the guess shares the
+    // reactant's composition), so estimate against the reactant alone.
+    let prompt = prompt.clone();
+    let request = prompt.to_request(state.structure().clone(), None);
     let signature = prompt.memory_signature(state.structure());
     let (budget, location) = qm_incore_budget_and_location(state, &prompt.prefs.target);
     match crate::engines::qm::estimate_request_memory(&request, budget) {

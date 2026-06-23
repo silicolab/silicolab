@@ -16,9 +16,12 @@ use std::sync::{Arc, atomic::AtomicBool};
 use anyhow::{Result, anyhow, bail};
 
 use crate::{
-    domain::Structure,
     engines::docking::{DockingConfig, DockingInput, DockingKind, DockingOutcome, DockingRequest},
-    frontend::{console::DockArgs, state::AppState},
+    frontend::{
+        console::DockArgs,
+        entry_ref::{entry_structure, resolve_entry_id},
+        state::AppState,
+    },
     io::structure_paths::default_structure_save_path,
     workflows::docking::run_docking_calculation,
 };
@@ -109,47 +112,6 @@ fn assemble_request(
         config,
         kind,
     })
-}
-
-/// Resolve `active`, `#id`/`id`, or an entry name to an entry id.
-fn resolve_entry_id(state: &AppState, reference: &str) -> Result<u64> {
-    if reference.eq_ignore_ascii_case("active") {
-        return state
-            .entries
-            .active_entry_id()
-            .ok_or_else(|| anyhow!("no active entry to use for `{reference}`"));
-    }
-    if let Some(id) = reference
-        .strip_prefix('#')
-        .unwrap_or(reference)
-        .parse::<u64>()
-        .ok()
-        .filter(|id| state.entries.entry(*id).is_some())
-    {
-        return Ok(id);
-    }
-    state
-        .entries
-        .records
-        .iter()
-        .find(|record| record.name.eq_ignore_ascii_case(reference))
-        .map(|record| record.id)
-        .ok_or_else(|| {
-            anyhow!(
-                "no open entry matches `{reference}` (use active, an id like #2, or an entry name)"
-            )
-        })
-}
-
-fn entry_structure(state: &AppState, entry_id: u64, role: &str) -> Result<Structure> {
-    let entry = state
-        .entries
-        .entry(entry_id)
-        .ok_or_else(|| anyhow!("{role} entry #{entry_id} not found"))?;
-    if entry.structure.atoms.is_empty() {
-        bail!("{role} entry #{entry_id} has no atoms");
-    }
-    Ok(entry.structure.clone())
 }
 
 /// Parse `--center`/`--size`: three numbers separated by `,` or `x`.

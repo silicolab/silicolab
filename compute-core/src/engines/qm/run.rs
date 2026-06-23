@@ -25,6 +25,7 @@ pub fn run_qm(
         multiplicity,
         kind,
         options,
+        ts,
     } = request;
 
     if structure.atoms.is_empty() {
@@ -43,6 +44,7 @@ pub fn run_qm(
         multiplicity,
         kind,
         &options,
+        ts.as_ref(),
     )?;
 
     if cancel.load(Ordering::Relaxed) {
@@ -52,6 +54,7 @@ pub fn run_qm(
         QmKind::SinglePoint => "running scf",
         QmKind::Optimize => "optimizing geometry",
         QmKind::Frequencies => "running scf and hessian",
+        QmKind::TransitionState => "searching for transition state",
     });
 
     let result = resolved
@@ -64,20 +67,36 @@ pub fn run_qm(
     let energy_hartree = result.best_energy();
     let converged = result.converged();
 
-    let optimized_structure = match (kind, &result.optimized_geometry) {
-        (QmKind::Optimize, Some(opt)) => {
-            let mut relaxed = structure_with_positions(&structure, &opt.positions)?;
-            // Distinguish the relaxed copy from the original in the entry list.
-            relaxed.title = format!(
-                "{} ({}/{} opt)",
-                structure.title,
-                method.label(),
-                resolved.basis
-            );
-            Some(relaxed)
-        }
-        _ => None,
-    };
+    // A TS search surfaces its best saddle even when it did not converge, so the
+    // geometry survives for inspection / restart.
+    let optimized_structure = match kind {
+        QmKind::Optimize => result.optimized_geometry.as_ref().map(|opt| {
+            let mut relaxed = structure_with_positions(&structure, &opt.positions);
+            if let Ok(relaxed) = &mut relaxed {
+                relaxed.title = format!(
+                    "{} ({}/{} opt)",
+                    structure.title,
+                    method.label(),
+                    resolved.basis
+                );
+            }
+            relaxed
+        }),
+        QmKind::TransitionState => result.transition_state.as_ref().map(|ts| {
+            let mut saddle = structure_with_positions(&structure, &ts.positions);
+            if let Ok(saddle) = &mut saddle {
+                saddle.title = format!(
+                    "{} ({}/{} TS)",
+                    structure.title,
+                    method.label(),
+                    resolved.basis
+                );
+            }
+            saddle
+        }),
+        QmKind::SinglePoint | QmKind::Frequencies => None,
+    }
+    .transpose()?;
 
     let summary = format_summary(&method, &resolved, kind, &structure, &result);
 

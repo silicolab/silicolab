@@ -52,6 +52,7 @@ pub(crate) fn qm_default_kind(kind: TaskKind) -> crate::engines::qm::QmKind {
     match kind {
         TaskKind::RunQmOptimize => QmKind::Optimize,
         TaskKind::RunQmFrequencies => QmKind::Frequencies,
+        TaskKind::RunQmTransitionState => QmKind::TransitionState,
         _ => QmKind::SinglePoint,
     }
 }
@@ -62,6 +63,7 @@ pub(crate) fn complete_active_qm_task(state: &mut AppState, status: TaskStatus) 
     complete_active_task(state, TaskKind::RunQmEnergy, status);
     complete_active_task(state, TaskKind::RunQmOptimize, status);
     complete_active_task(state, TaskKind::RunQmFrequencies, status);
+    complete_active_task(state, TaskKind::RunQmTransitionState, status);
 }
 
 pub(crate) fn complete_active_task(state: &mut AppState, kind: TaskKind, status: TaskStatus) {

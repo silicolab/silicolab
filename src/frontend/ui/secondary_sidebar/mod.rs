@@ -13,11 +13,13 @@ use crate::frontend::{
 mod disorder;
 mod md_run;
 mod md_system;
+mod qm_form;
 mod stage_detail;
 mod task_panels;
 
 pub(crate) use disorder::*;
 pub(crate) use md_run::*;
 pub(crate) use md_system::*;
+pub(crate) use qm_form::*;
 pub(crate) use stage_detail::*;
 pub(crate) use task_panels::*;

@@ -440,6 +440,7 @@ mod tests {
             multiplicity: 1,
             kind: QmKind::SinglePoint,
             options: QmOptions::default(),
+            ts: None,
         });
 
         let run_uuid = uuid::Uuid::new_v4().to_string();

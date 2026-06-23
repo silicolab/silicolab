@@ -2609,9 +2609,9 @@ dependencies = [
 
 [[package]]
 name = "hartree"
-version = "0.1.3"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e7b95fc9ae79405179fb4571b832334a4a1a97e4a9d5275668a1da595a56ef08"
+checksum = "cfcf9e98ac8d12fc156224bb4c74d868d13a911d7622e7a4afe101cfe7699214"
 dependencies = [
  "faer",
  "integral",
@@ -2956,9 +2956,9 @@ dependencies = [
 
 [[package]]
 name = "integral"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "88749432f15a8abe1f4815aadb35f1436476a39d2df869a102bf84353a9e51c0"
+checksum = "5f9cdd38a31085a45718bd420c9da9bb9477c51410e70d9299a9c1903ab39e5e"
 dependencies = [
  "latx",
  "rayon",

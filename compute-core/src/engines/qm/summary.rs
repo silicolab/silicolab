@@ -127,6 +127,7 @@ pub(crate) fn format_summary(
     push_post_hf(&mut out, result);
     push_properties(&mut out, structure, result);
     push_frequencies(&mut out, result);
+    push_transition_state(&mut out, structure, result);
     push_method_warnings(&mut out, result);
 
     out.trim_end().to_string()
@@ -420,6 +421,95 @@ fn push_frequencies(out: &mut String, result: &JobResult) {
         "    Gibbs G (quasi-RRHO, ω₀={:.0} cm⁻¹): {:.8} Eh\n",
         t.qrrho_w0_cm1, t.gibbs_qrrho
     ));
+}
+
+/// Transition-state search outcome: the saddle status, the verifying imaginary
+/// mode, the reactant→product atom-mapping confidence, and any IRC confirmation.
+fn push_transition_state(out: &mut String, structure: &Structure, result: &JobResult) {
+    use hartree::opt::ts::TsStatus;
+    let Some(ts) = &result.transition_state else {
+        return;
+    };
+
+    let status = match ts.status {
+        TsStatus::Converged => "converged (verified first-order saddle)",
+        TsStatus::NotConverged => "NOT converged (best point reached returned)",
+        TsStatus::WrongImaginaryModeCount => {
+            "converged geometrically, but the Hessian has the wrong number of \
+             negative modes (not a first-order saddle)"
+        }
+        TsStatus::StoppedEarly => "stopped early",
+        // `TsStatus` is #[non_exhaustive]; treat any future variant as not-a-saddle.
+        _ => "not a verified saddle",
+    };
+    out.push_str(&format!(
+        "  transition state: {status} in {} iterations\n",
+        ts.iterations
+    ));
+    out.push_str(&format!("  saddle energy: {:.8} Eh\n", ts.energy));
+
+    // The verifying spectrum: a clean first-order saddle has exactly one
+    // imaginary (reaction) mode.
+    if let Some(verification) = &ts.verification {
+        let n_negative = verification.negative_eigenvalues.len();
+        out.push_str(&format!("  negative Hessian modes: {n_negative}\n"));
+        if let Some(freq) = verification.imaginary_frequency_cm1 {
+            // hartree reports the imaginary frequency as negative; show it with
+            // the conventional trailing `i`.
+            out.push_str(&format!(
+                "  imaginary frequency: {:.1}i cm^-1\n",
+                freq.abs()
+            ));
+        }
+    }
+
+    // Two-endpoint searches report how uniquely the reactant→product atom map was
+    // resolved; a low confidence flags interchangeable (e.g. symmetric) atoms.
+    if let Some(mapping) = &result.mapping_confidence {
+        out.push_str(&format!(
+            "  atom-mapping confidence: {:.0}%\n",
+            mapping.confidence * 100.0
+        ));
+        if !mapping.ambiguous.is_empty() {
+            let atoms = mapping
+                .ambiguous
+                .iter()
+                .map(|&i| match structure.atoms.get(i) {
+                    Some(atom) => format!("{}{}", atom.element, i + 1),
+                    None => format!("#{}", i + 1),
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            out.push_str(&format!("    ambiguous atoms: {atoms}\n"));
+        }
+    }
+
+    // IRC confirmation that the saddle connects two distinct minima.
+    if let Some(irc) = &ts.irc {
+        out.push_str("  IRC confirmation (endpoint energies):\n");
+        out.push_str(&format!(
+            "    forward: {:.8} Eh ({})\n",
+            irc.forward_energy,
+            if irc.forward_converged {
+                "reached a minimum"
+            } else {
+                "did not converge"
+            }
+        ));
+        out.push_str(&format!(
+            "    reverse: {:.8} Eh ({})\n",
+            irc.reverse_energy,
+            if irc.reverse_converged {
+                "reached a minimum"
+            } else {
+                "did not converge"
+            }
+        ));
+    }
+
+    if let Some(diagnostic) = &ts.diagnostic {
+        out.push_str(&format!("  note: {diagnostic}\n"));
+    }
 }
 
 /// hartree's method-quality guardrails (always populated; empty prints nothing).

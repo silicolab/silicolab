@@ -4,6 +4,10 @@
 //! * `qm optimize` — relax the geometry on the QM surface; the relaxed structure
 //!   is added as a new entry (the original is preserved).
 //! * `qm freq`     — harmonic vibrational frequencies at the current geometry.
+//! * `qm ts`       — climb to a first-order saddle point (transition state); the
+//!   saddle structure is added as a new entry. The guess starts from the current
+//!   geometry, a reactant→product pair (`--product`), or a driven coordinate
+//!   (`--scan-bond`/`--scan-angle`/`--scan-dihedral`).
 //!
 //! All run synchronously via [`crate::engines::qm`] (pure-Rust hartree), which
 //! suits headless `.sls`/CLI use and small molecules; the GUI drives the same
@@ -16,8 +20,10 @@ use anyhow::{Result, anyhow, bail};
 
 use crate::{
     engines::qm::{
-        CpcmDielectric, KMesh, PeriodicFunctional, PeriodicQmRequest, QmDispersion, QmJob, QmKind,
-        QmMethod, QmOptions, QmRequest, QmScfBackend, QmSolvation, periodic,
+        CpcmDielectric, KMesh, PeriodicFunctional, PeriodicQmRequest, QmDispersion,
+        QmInternalCoordinate, QmJob, QmKind, QmMethod, QmOptions, QmRequest, QmScfBackend,
+        QmSolvation, QmTsAlgorithm, QmTsConfig, QmTsCoordinateScan, QmTsCoordinates, QmTsEndpoints,
+        QmTsGuess, periodic,
     },
     frontend::state::AppState,
     io::structure_paths::default_structure_save_path,
@@ -28,7 +34,7 @@ use crate::{
 pub fn qm_command(state: &mut AppState, args: &[String]) -> Result<String> {
     let Some(sub) = args.first().map(String::as_str) else {
         bail!(
-            "usage: qm <energy|optimize|freq|periodic> [options]\n\
+            "usage: qm <energy|optimize|freq|ts|periodic> [options]\n\
              \n\
              core:     --method <m>   hf|rhf|uhf|rohf|mp2|ccsd|ccsd(t), a functional \
              (pbe, b3lyp, r2scan, wb97m-v, b2plyp, …) with an optional -d3/-d4 suffix, \
@@ -39,6 +45,10 @@ pub fn qm_command(state: &mut AppState, args: &[String]) -> Result<String> {
              solvation:  --solvent <name> | --eps <ε> | --smd <name> | --alpb <name> | --gbsa <name>\n\
              backend:    --direct | --ri | --cosx   --ri-mp2   --x2c   --all-electron   --grid <0..4>\n\
              advanced:   --smear <K>   --fod   --sph   --symmetry-number <int>   --qrrho-w0 <cm-1>\n\
+             transition state (qm ts): --ts-algo prfo|dimer   --ts-coords mass-weighted|internal   --irc\n\
+             \x20         guess: (default) climb from the current geometry;\n\
+             \x20                --product <entry> [--neb --neb-images <n> | --idpp-scan <n>] [--no-map-atoms];\n\
+             \x20                --scan-bond i,j | --scan-angle i,j,k | --scan-dihedral i,j,k,l --scan-from <v> --scan-to <v> [--scan-steps <n>]\n\
              periodic:   qm periodic (needs a unit cell)  --functional pade|lda  --basis <gth-set>\n\
              \x20         --kmesh <n|nxnxn>   --cutoff <Ry>   --max-iter <n>   --forces   --stress"
         );
@@ -57,10 +67,11 @@ pub fn qm_command(state: &mut AppState, args: &[String]) -> Result<String> {
         "energy" | "sp" | "single-point" => QmKind::SinglePoint,
         "optimize" | "opt" => QmKind::Optimize,
         "freq" | "frequencies" => QmKind::Frequencies,
+        "ts" | "saddle" | "transition-state" => QmKind::TransitionState,
         other => {
             bail!(
                 "unknown qm subcommand `{other}` \
-                 (expected energy, optimize, freq, periodic, or recommend)"
+                 (expected energy, optimize, freq, ts, periodic, or recommend)"
             )
         }
     };
@@ -106,6 +117,11 @@ fn assemble_qm_request(state: &AppState, kind: QmKind, args: &[String]) -> Resul
     let charge = flags.int("charge")?.unwrap_or(0);
     let multiplicity = flags.uint("spin")?.or(flags.uint("mult")?).unwrap_or(1);
     let options = build_options(&flags, suffix_dispersion)?;
+    let ts = if kind == QmKind::TransitionState {
+        Some(build_ts_config(state, &flags)?)
+    } else {
+        None
+    };
     Ok(QmRequest {
         structure: state.structure().clone(),
         method,
@@ -114,7 +130,123 @@ fn assemble_qm_request(state: &AppState, kind: QmKind, args: &[String]) -> Resul
         multiplicity,
         kind,
         options,
+        ts,
     })
+}
+
+/// Assemble the [`QmTsConfig`] for a `qm ts` run from parsed flags. The guess
+/// route is chosen by which flags are present: `--product` (two-endpoint),
+/// `--scan-bond`/`--scan-angle`/`--scan-dihedral` (coordinate scan), or neither
+/// (single guess from the current geometry).
+fn build_ts_config(state: &AppState, flags: &QmFlags) -> Result<QmTsConfig> {
+    let algorithm = match flags.str("ts-algo") {
+        None => QmTsAlgorithm::default(),
+        Some("prfo") => QmTsAlgorithm::Prfo,
+        Some("dimer") => QmTsAlgorithm::Dimer,
+        Some(other) => bail!("--ts-algo must be prfo or dimer, got `{other}`"),
+    };
+    let coordinates = match flags.str("ts-coords") {
+        None => QmTsCoordinates::default(),
+        Some("mass-weighted") | Some("cartesian") => QmTsCoordinates::MassWeighted,
+        Some("internal") => QmTsCoordinates::Internal,
+        Some(other) => bail!("--ts-coords must be mass-weighted or internal, got `{other}`"),
+    };
+    let confirm_irc = flags.flag("irc");
+
+    // Exactly one guess route. `--product` and a `--scan-*` coordinate are
+    // mutually exclusive.
+    let scan_coordinate = parse_scan_coordinate(flags)?;
+    let guess = match (flags.str("product"), scan_coordinate) {
+        (Some(_), Some(_)) => bail!(
+            "choose one transition-state guess: --product (two-endpoint) or a \
+             --scan-bond/--scan-angle/--scan-dihedral (coordinate scan), not both"
+        ),
+        (Some(reference), None) => {
+            let product_id = crate::frontend::entry_ref::resolve_entry_id(state, reference)?;
+            // The reactant is the active structure; identical endpoints give a
+            // zero-displacement, direction-less guess, so reject them.
+            if state.entries.active_entry_id() == Some(product_id) {
+                bail!(
+                    "the --product must be a different structure than the reactant (the active entry)"
+                );
+            }
+            let product =
+                crate::frontend::entry_ref::entry_structure(state, product_id, "product")?;
+            let mut endpoints = QmTsEndpoints::new(product);
+            endpoints.use_neb = flags.flag("neb");
+            // hartree's energy-peaked IDPP scan needs ≥3 points; below that, fall
+            // back to the single geometric image (matching the GUI form) rather
+            // than failing deep in the engine.
+            endpoints.scan_points = flags
+                .uint("idpp-scan")?
+                .filter(|&n| n >= 3)
+                .map(|n| n as usize);
+            if let Some(images) = flags.uint("neb-images")? {
+                endpoints.neb_images = images.max(1) as usize;
+            }
+            endpoints.map_atoms = !flags.flag("no-map-atoms");
+            QmTsGuess::TwoEndpoint(Box::new(endpoints))
+        }
+        (None, Some(coordinate)) => {
+            let start = flags
+                .float("scan-from")?
+                .ok_or_else(|| anyhow!("a coordinate scan needs --scan-from <value>"))?;
+            let end = flags
+                .float("scan-to")?
+                .ok_or_else(|| anyhow!("a coordinate scan needs --scan-to <value>"))?;
+            let n_points = flags.uint("scan-steps")?.unwrap_or(7) as usize;
+            QmTsGuess::CoordinateScan(QmTsCoordinateScan {
+                coordinate,
+                start,
+                end,
+                n_points,
+            })
+        }
+        (None, None) => QmTsGuess::Single,
+    };
+
+    Ok(QmTsConfig {
+        guess,
+        algorithm,
+        coordinates,
+        confirm_irc,
+    })
+}
+
+/// Parse the `--scan-bond`/`--scan-angle`/`--scan-dihedral` coordinate (1-based
+/// atom indices, comma-separated), if any. At most one may be given.
+fn parse_scan_coordinate(flags: &QmFlags) -> Result<Option<QmInternalCoordinate>> {
+    let specs = [
+        ("scan-bond", 2usize),
+        ("scan-angle", 3),
+        ("scan-dihedral", 4),
+    ];
+    let mut found: Option<QmInternalCoordinate> = None;
+    for (key, arity) in specs {
+        let Some(value) = flags.str(key) else {
+            continue;
+        };
+        if found.is_some() {
+            bail!("specify at most one of --scan-bond, --scan-angle, --scan-dihedral");
+        }
+        let atoms = value
+            .split([',', ':'])
+            .map(|p| {
+                p.trim()
+                    .parse::<usize>()
+                    .map_err(|_| anyhow!("--{key} expects atom indices like 1,2, got `{value}`"))
+            })
+            .collect::<Result<Vec<usize>>>()?;
+        if atoms.len() != arity {
+            bail!("--{key} expects {arity} atom indices, got {}", atoms.len());
+        }
+        found = Some(match arity {
+            2 => QmInternalCoordinate::Bond(atoms[0], atoms[1]),
+            3 => QmInternalCoordinate::Angle(atoms[0], atoms[1], atoms[2]),
+            _ => QmInternalCoordinate::Dihedral(atoms[0], atoms[1], atoms[2], atoms[3]),
+        });
+    }
+    Ok(found)
 }
 
 /// Map a `qm <subcommand>` line (subcommand + flags) to a [`QmRequest`] for the
@@ -127,7 +259,10 @@ pub fn build_agent_qm_request(state: &AppState, args: &[String]) -> Result<QmReq
         "energy" | "sp" | "single-point" => QmKind::SinglePoint,
         "optimize" | "opt" => QmKind::Optimize,
         "freq" | "frequencies" => QmKind::Frequencies,
-        other => bail!("unknown qm subcommand `{other}` (expected energy, optimize, or freq)"),
+        "ts" | "saddle" | "transition-state" => QmKind::TransitionState,
+        other => {
+            bail!("unknown qm subcommand `{other}` (expected energy, optimize, freq, or ts)")
+        }
     };
     assemble_qm_request(state, kind, &args[1..])
 }
@@ -137,6 +272,7 @@ fn kind_keyword(kind: QmKind) -> &'static str {
         QmKind::SinglePoint => "energy",
         QmKind::Optimize => "optimize",
         QmKind::Frequencies => "freq",
+        QmKind::TransitionState => "ts",
     }
 }
 
@@ -530,6 +666,53 @@ mod tests {
         assert_eq!(request.basis, "sto-3g");
         // Unknown subcommand is rejected.
         assert!(super::build_agent_qm_request(&state, &["bogus".to_string()]).is_err());
+    }
+
+    #[test]
+    fn qm_ts_subcommand_builds_a_coordinate_scan() {
+        use crate::engines::qm::{QmInternalCoordinate, QmTsGuess};
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let save_path = default_structure_save_path(&water(), None);
+        state.entries.add_entry(water(), None, save_path);
+
+        let request = super::build_agent_qm_request(
+            &state,
+            &[
+                "ts".to_string(),
+                "--scan-bond".to_string(),
+                "1,3".to_string(),
+                "--scan-from".to_string(),
+                "0.9".to_string(),
+                "--scan-to".to_string(),
+                "1.6".to_string(),
+                "--basis".to_string(),
+                "sto-3g".to_string(),
+            ],
+        )
+        .expect("qm ts coordinate scan should build");
+        assert!(matches!(request.kind, super::QmKind::TransitionState));
+        match request.ts.expect("ts config").guess {
+            QmTsGuess::CoordinateScan(scan) => {
+                assert_eq!(scan.coordinate, QmInternalCoordinate::Bond(1, 3));
+                assert_eq!(scan.start, 0.9);
+            }
+            other => panic!("expected a coordinate scan, got {other:?}"),
+        }
+
+        // A bare `qm ts` is a single-guess search from the current geometry.
+        let single = super::build_agent_qm_request(
+            &state,
+            &[
+                "ts".to_string(),
+                "--basis".to_string(),
+                "sto-3g".to_string(),
+            ],
+        )
+        .expect("bare qm ts should build");
+        assert!(matches!(
+            single.ts.expect("ts config").guess,
+            QmTsGuess::Single
+        ));
     }
 
     #[test]

@@ -97,6 +97,7 @@ mod tests {
                 multiplicity: 1,
                 kind: QmKind::SinglePoint,
                 options: Default::default(),
+                ts: None,
             }),
             Some(2),
             Default::default(),
@@ -137,6 +138,7 @@ mod tests {
                     compute_properties: true,
                     ..Default::default()
                 },
+                ts: None,
             }),
             None,
             Default::default(),

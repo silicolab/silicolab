@@ -310,6 +310,9 @@ pub enum QmKind {
     /// Harmonic vibrational frequencies and thermochemistry at the current
     /// geometry.
     Frequencies,
+    /// Climb to a first-order saddle point (transition state). The TS-specific
+    /// inputs (search algorithm, guess route, IRC) live in [`QmRequest::ts`].
+    TransitionState,
 }
 
 impl QmKind {
@@ -318,8 +321,172 @@ impl QmKind {
             QmKind::SinglePoint => "single point",
             QmKind::Optimize => "geometry optimization",
             QmKind::Frequencies => "frequencies",
+            QmKind::TransitionState => "transition-state search",
         }
     }
+}
+
+/// Saddle-point search algorithm. Mirrors `hartree::opt::ts::TsAlgorithm`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum QmTsAlgorithm {
+    /// Partitioned rational-function optimization (eigenvector following). The
+    /// Newton-type local method; needs a guess inside the saddle's basin.
+    #[default]
+    Prfo,
+    /// Hessian-free dimer method; cheaper per step and more forgiving of the
+    /// initial guess.
+    Dimer,
+}
+
+impl QmTsAlgorithm {
+    pub fn label(self) -> &'static str {
+        match self {
+            QmTsAlgorithm::Prfo => "P-RFO (eigenvector following)",
+            QmTsAlgorithm::Dimer => "dimer (Hessian-free)",
+        }
+    }
+}
+
+/// Coordinate frame the P-RFO climb steps in. Mirrors `hartree::opt::ts::Coordinates`;
+/// the dimer method discovers its own direction and ignores this.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum QmTsCoordinates {
+    /// Mass-weighted Cartesian coordinates (the well-conditioned default).
+    #[default]
+    MassWeighted,
+    /// Redundant internal coordinates — better for soft reaction coordinates
+    /// (long symmetric stretches, floppy angles); falls back to Cartesian when
+    /// the internal set is incomplete.
+    Internal,
+}
+
+impl QmTsCoordinates {
+    pub fn label(self) -> &'static str {
+        match self {
+            QmTsCoordinates::MassWeighted => "mass-weighted Cartesian",
+            QmTsCoordinates::Internal => "redundant internal",
+        }
+    }
+}
+
+/// One internal coordinate to drive in a distinguished-coordinate scan. Atom
+/// indices are **1-based** (as shown in the structure editor and reports); they
+/// are converted to hartree's 0-based [`hartree::opt::internals::Internal`] when
+/// the job is built.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum QmInternalCoordinate {
+    /// Bond `i–j`. The scan range is given in Ångström.
+    Bond(usize, usize),
+    /// Valence angle `i–j–k` about the central atom `j`. The range is in degrees.
+    Angle(usize, usize, usize),
+    /// Dihedral `i–j–k–l` about the central `j–k` bond. The range is in degrees.
+    Dihedral(usize, usize, usize, usize),
+}
+
+impl QmInternalCoordinate {
+    /// The 1-based atom indices this coordinate references, in definition order.
+    pub fn atoms(&self) -> Vec<usize> {
+        match *self {
+            QmInternalCoordinate::Bond(i, j) => vec![i, j],
+            QmInternalCoordinate::Angle(i, j, k) => vec![i, j, k],
+            QmInternalCoordinate::Dihedral(i, j, k, l) => vec![i, j, k, l],
+        }
+    }
+
+    /// `true` for a bond (range in Ångström); `false` for an angle/dihedral
+    /// (range in degrees). Drives the unit conversion and the displayed unit.
+    pub fn is_distance(&self) -> bool {
+        matches!(self, QmInternalCoordinate::Bond(_, _))
+    }
+}
+
+/// Reactant→product endpoints for a two-ended transition-state search. The
+/// reactant is [`QmRequest::structure`]; this carries the product and the
+/// guess-builder controls. Mirrors `hartree::TsGuessInput` + the bits of
+/// `NebOptions` worth exposing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QmTsEndpoints {
+    /// The product minimum. Must hold the same element multiset as the reactant.
+    #[serde(with = "crate::payload::structure_serde")]
+    pub product: Structure,
+    /// Relax a climbing-image NEB band between the endpoints instead of building a
+    /// single IDPP guess. More robust for floppy or bimolecular reactions; more
+    /// expensive (one gradient per interior image per band iteration).
+    pub use_neb: bool,
+    /// IDPP route only (`use_neb = false`): scan this many path points for the
+    /// energy peak (must be ≥ 3) instead of the single geometric image. `None`
+    /// uses the single IDPP image (cheapest).
+    pub scan_points: Option<usize>,
+    /// NEB route only: number of interior band images.
+    pub neb_images: usize,
+    /// NEB route only: enable the climbing image (rides the highest image up to
+    /// the saddle).
+    pub neb_climbing: bool,
+    /// NEB route only: reorder the product's atoms onto the reactant's before
+    /// building the band, so the two endpoints need not share atom ordering.
+    /// (Product orientation is always Kabsch-aligned regardless; and the IDPP
+    /// route always maps atoms by connectivity, so this flag is a no-op there.)
+    pub map_atoms: bool,
+}
+
+impl QmTsEndpoints {
+    /// Two-endpoint input for `product`, defaulting to the single-IDPP-guess
+    /// route with atom mapping on.
+    pub fn new(product: Structure) -> Self {
+        Self {
+            product,
+            use_neb: false,
+            scan_points: None,
+            neb_images: 8,
+            neb_climbing: true,
+            map_atoms: true,
+        }
+    }
+}
+
+/// A distinguished-coordinate (relaxed) scan: drive one internal coordinate over
+/// a range, relaxing the rest at each grid point, and refine the saddle from the
+/// energy peak. Single-ended (no product needed). Mirrors `hartree::CoordScanSpec`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QmTsCoordinateScan {
+    /// The coordinate to drive (atom indices 1-based).
+    pub coordinate: QmInternalCoordinate,
+    /// Start of the range. Ångström for a bond, degrees for an angle/dihedral.
+    pub start: f64,
+    /// End of the range (same units as [`Self::start`]).
+    pub end: f64,
+    /// Number of grid points across `[start, end]` inclusive (must be ≥ 3).
+    pub n_points: usize,
+}
+
+/// Which near-saddle guess the transition-state search starts from.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub enum QmTsGuess {
+    /// Climb from the current geometry — it must already sit near the saddle.
+    #[default]
+    Single,
+    /// Build the guess between the reactant and a product (IDPP or NEB). Boxed:
+    /// it carries a full product [`Structure`], which would otherwise bloat every
+    /// [`QmRequest`] (and so [`QmJob`]) with a second geometry's worth of stack.
+    TwoEndpoint(Box<QmTsEndpoints>),
+    /// Drive one internal coordinate and refine from the energy peak.
+    CoordinateScan(QmTsCoordinateScan),
+}
+
+/// Transition-state search configuration, used when
+/// [`QmKind::TransitionState`] is requested. `default()` is a single-guess P-RFO
+/// climb with no IRC confirmation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct QmTsConfig {
+    /// Which guess the search starts from.
+    pub guess: QmTsGuess,
+    /// Saddle-point algorithm.
+    pub algorithm: QmTsAlgorithm,
+    /// Coordinate frame for the P-RFO climb (ignored by the dimer method).
+    pub coordinates: QmTsCoordinates,
+    /// After convergence, trace the intrinsic reaction coordinate from the saddle
+    /// to confirm it connects two distinct minima (extra surface evaluations).
+    pub confirm_irc: bool,
 }
 
 /// A request to run a quantum-chemistry calculation on `structure`.
@@ -338,6 +505,11 @@ pub struct QmRequest {
     pub kind: QmKind,
     /// Advanced hartree options (dispersion, solvation, SCF backend, …).
     pub options: QmOptions,
+    /// Transition-state search configuration. Consulted only when `kind` is
+    /// [`QmKind::TransitionState`]; `None` there means a single-guess P-RFO climb.
+    /// `#[serde(default)]` so requests serialized before this field round-trip.
+    #[serde(default)]
+    pub ts: Option<QmTsConfig>,
 }
 
 /// A quantum-chemistry job: a molecular calculation or a periodic (crystalline)
@@ -362,7 +534,10 @@ pub enum QmJob {
 pub struct QmOutcome {
     pub energy_hartree: f64,
     pub converged: bool,
-    /// Present only for [`QmKind::Optimize`]: the relaxed structure (Å).
+    /// The geometry a moving calculation produced (Å): the relaxed structure for
+    /// [`QmKind::Optimize`], or the saddle point for [`QmKind::TransitionState`]
+    /// (the best point reached even when the search did not converge). `None` for
+    /// energy/frequency runs, which leave the atoms in place.
     #[serde(with = "crate::payload::structure_serde_opt")]
     pub optimized_structure: Option<Structure>,
     /// Pre-formatted, human-readable report of every result.
