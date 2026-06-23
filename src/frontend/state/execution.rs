@@ -17,8 +17,8 @@ pub struct ExecutionPrefs {
     /// Independent parallel subtasks (e.g. docking replicas, one process each);
     /// `1` is a single task.
     pub subtasks: u32,
-    /// CPU cores per subtask. `0` means "let the engine decide" (its default,
-    /// which for QM is the global core cap).
+    /// CPU cores per subtask. Panels seed this from the global default cores
+    /// (`AppConfig::compute_core_count`); `0` means "let the engine decide".
     pub cores_per_subtask: u32,
     /// GPUs to use; `0` means none / CPU only.
     pub gpu_count: u32,
@@ -40,12 +40,14 @@ impl Default for ExecutionPrefs {
 
 impl ExecutionPrefs {
     /// Seed a fresh panel's prefs from the global defaults: the compute target
-    /// comes from `config.default_compute_target`. The resource knobs have no
-    /// global default yet, so they start at "engine decides" and are overridden
-    /// per run.
+    /// from `config.default_compute_target`, and the per-subtask core count from
+    /// `config.compute_core_count` (the global "Default CPU cores"). Both are
+    /// overridable per run. The remaining knobs have no global default yet, so
+    /// they start at "engine decides".
     pub fn seeded(config: &AppConfig) -> Self {
         Self {
             target: config.default_compute_target.clone(),
+            cores_per_subtask: config.compute_core_count as u32,
             ..Self::default()
         }
     }
@@ -77,10 +79,11 @@ mod tests {
 
         // The compute target is seeded from the global default…
         assert_eq!(prefs.target, ComputeTarget::Remote("hpc".to_string()));
-        // …while the resource knobs start at "engine decides" (single subtask,
-        // auto cores, no GPU, no memory cap), to be overridden per run.
+        // …the per-subtask core count seeds from the global default…
+        assert_eq!(prefs.cores_per_subtask, config.compute_core_count as u32);
+        // …while the remaining knobs start at "engine decides" (single subtask,
+        // no GPU, no memory cap), to be overridden per run.
         assert_eq!(prefs.subtasks, 1);
-        assert_eq!(prefs.cores_per_subtask, 0);
         assert_eq!(prefs.gpu_count, 0);
         assert_eq!(prefs.memory_mib, 0);
     }

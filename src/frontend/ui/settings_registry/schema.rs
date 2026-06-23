@@ -10,17 +10,16 @@ pub(crate) fn caption_text(text: impl Into<String>, color: egui::Color32) -> Ric
     RichText::new(text).size(CAPTION_SIZE).color(color)
 }
 
-/// Top-level grouping for the Settings panel. `General`, `Representation`,
-/// `Engines`, and `Tasks` are populated; `Advanced` carries the meta-settings.
+/// Top-level grouping for the Settings panel. `General`, `Compute`,
+/// `Representation`, and `Assistant` are populated; `Advanced` carries the
+/// meta-settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SettingCategory {
     #[default]
     General,
+    Compute,
     Representation,
-    Engines,
     Assistant,
-    Tasks,
-    Hardware,
     Advanced,
 }
 
@@ -30,24 +29,20 @@ impl SettingCategory {
     pub fn label(self) -> &'static str {
         match self {
             SettingCategory::General => "General",
+            SettingCategory::Compute => "Compute",
             SettingCategory::Representation => "Representation",
-            SettingCategory::Engines => "Engines",
             SettingCategory::Assistant => "Assistant",
-            SettingCategory::Tasks => "Tasks",
-            SettingCategory::Hardware => "Hardware",
             SettingCategory::Advanced => "Advanced",
         }
     }
 }
 
 /// Stable iteration order for categories in the rendered panel and the rail.
-pub const CATEGORY_ORDER: [SettingCategory; 7] = [
+pub const CATEGORY_ORDER: [SettingCategory; 5] = [
     SettingCategory::General,
+    SettingCategory::Compute,
     SettingCategory::Representation,
-    SettingCategory::Engines,
     SettingCategory::Assistant,
-    SettingCategory::Tasks,
-    SettingCategory::Hardware,
     SettingCategory::Advanced,
 ];
 
@@ -97,6 +92,15 @@ pub enum Control {
     Custom(fn(&mut AppState, &mut egui::Ui, &mut Vec<AppAction>)),
 }
 
+/// A collapsible subsection nested inside a group. Descriptors sharing the same
+/// `title` within a group render under one sub-header, in registry order;
+/// `default_open` sets whether it starts expanded.
+#[derive(Debug, Clone, Copy)]
+pub struct Subgroup {
+    pub title: &'static str,
+    pub default_open: bool,
+}
+
 /// A declarative description of one setting.
 pub struct SettingDescriptor {
     /// Stable dotted key, e.g. `"appearance.theme"`. Used as a widget id salt
@@ -130,6 +134,9 @@ pub struct SettingDescriptor {
     /// reset affordance is clicked. Paired with [`is_default`](Self::is_default);
     /// both are present or both `None`.
     pub reset: Option<fn() -> AppAction>,
+    /// Optional collapsible subsection within the group. `None` = the setting
+    /// renders directly under the group header. See [`Subgroup`].
+    pub subgroup: Option<Subgroup>,
 }
 
 impl SettingDescriptor {

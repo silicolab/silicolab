@@ -1,14 +1,13 @@
-//! `Control::Custom` body for the Compute Hardware settings panel: the detected
-//! CPU / GPU / RAM inventory, and the default core cap for QM jobs. The cap is the
-//! seed a QM panel starts from; each run can override it per job in its execution
-//! controls.
+//! `Control::Custom` bodies for the Compute settings: the read-only detected
+//! CPU / GPU / RAM inventory ("This machine"), and the default CPU-core count
+//! that new job panels seed from ("Defaults for new jobs").
 
 use eframe::egui::{self, RichText};
 
 use crate::frontend::{actions::AppAction, state::AppState};
 
-/// Render the Compute Hardware panel body.
-pub(crate) fn render(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec<AppAction>) {
+/// Render the read-only hardware inventory: CPU, GPU(s), and memory.
+pub(crate) fn render(state: &mut AppState, ui: &mut egui::Ui, _actions: &mut Vec<AppAction>) {
     let hw = crate::backend::hardware::info();
     let pal = crate::frontend::theme::palette(ui);
 
@@ -22,25 +21,6 @@ pub(crate) fn render(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec<
         _ => format!("{} cores, {} threads", hw.physical_cores, hw.logical_cores),
     };
     ui.label(RichText::new(cores_line).color(pal.text_tertiary));
-
-    // Default core cap for QM jobs; a QM panel seeds its per-run core count from
-    // this and can override it. (MD/docking core controls are wired separately.)
-    let logical = hw.logical_cores.max(1);
-    let mut cores = state.config.compute_core_count.clamp(1, logical);
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        ui.label("QM core cap:");
-        if ui
-            .add(egui::DragValue::new(&mut cores).range(1..=logical))
-            .on_hover_text(format!(
-                "Default cores a QM job may use ({logical} available)"
-            ))
-            .changed()
-        {
-            actions.push(AppAction::SetComputeCoreCount(cores));
-        }
-        ui.label(RichText::new(format!("/ {logical}")).color(pal.text_tertiary));
-    });
 
     let gpus = crate::backend::hardware::gpus();
     if gpus.is_empty() {
@@ -74,4 +54,27 @@ pub(crate) fn render(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec<
 
     let ram_gib = hw.total_ram_bytes as f64 / 1024.0_f64.powi(3);
     ui.label(RichText::new(format!("Memory: {ram_gib:.1} GiB")).color(pal.text_tertiary));
+}
+
+/// The global default CPU-core count new job panels seed from, clamped to the
+/// machine's logical cores. The descriptor supplies the help caption.
+pub(crate) fn render_default_cores(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+) {
+    let pal = crate::frontend::theme::palette(ui);
+    let logical = crate::backend::hardware::info().logical_cores.max(1);
+    let mut cores = state.config.compute_core_count.clamp(1, logical);
+    ui.horizontal(|ui| {
+        ui.label("Default CPU cores");
+        if ui
+            .add(egui::DragValue::new(&mut cores).range(1..=logical))
+            .on_hover_text(format!("Cores a new job starts with ({logical} available)"))
+            .changed()
+        {
+            actions.push(AppAction::SetComputeCoreCount(cores));
+        }
+        ui.label(RichText::new(format!("/ {logical}")).color(pal.text_tertiary));
+    });
 }

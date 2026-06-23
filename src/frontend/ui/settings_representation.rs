@@ -15,7 +15,9 @@
 
 use eframe::egui::{self, RichText};
 
-use super::settings_registry::{Control, SettingCategory, SettingDescriptor, caption_text};
+use super::settings_registry::{
+    Control, SettingCategory, SettingDescriptor, Subgroup, caption_text,
+};
 use crate::{
     backend::representation::{
         BaseStyle, RepresentationEdit, RepresentationGroup, SurfaceStylePref,
@@ -275,7 +277,7 @@ fn render_schemes_note(_state: &mut AppState, ui: &mut egui::Ui, _actions: &mut 
 /// A group-scoped "Restore Defaults" button. The group can't be captured by a
 /// `fn` pointer, so each group gets a tiny wrapper feeding this shared helper.
 fn group_reset_button(ui: &mut egui::Ui, actions: &mut Vec<AppAction>, group: RepresentationGroup) {
-    if ui.button("Restore Defaults").clicked() {
+    if ui.button("Restore defaults").clicked() {
         actions.push(AppAction::ResetRepresentationGroup(group));
     }
 }
@@ -333,6 +335,7 @@ fn value(
         indent: false,
         is_default: None,
         reset: None,
+        subgroup: None,
     }
 }
 
@@ -357,6 +360,24 @@ fn custom(
         indent: false,
         is_default: None,
         reset: None,
+        subgroup: None,
+    }
+}
+
+/// Like [`custom`], but placed in a collapsed "Not yet available" subgroup.
+fn pending(
+    id: &'static str,
+    group: &'static str,
+    title: &'static str,
+    keywords: &'static [&'static str],
+    render: fn(&mut AppState, &mut egui::Ui, &mut Vec<AppAction>),
+) -> SettingDescriptor {
+    SettingDescriptor {
+        subgroup: Some(Subgroup {
+            title: "Not yet available",
+            default_open: false,
+        }),
+        ..custom(id, group, title, keywords, render)
     }
 }
 
@@ -410,8 +431,9 @@ pub(super) fn descriptors() -> Vec<SettingDescriptor> {
             indent: false,
             is_default: None,
             reset: None,
+            subgroup: None,
         },
-        custom(
+        pending(
             "representation.base.pending",
             BASE_GROUP,
             "Base — pending options",
@@ -514,7 +536,7 @@ pub(super) fn descriptors() -> Vec<SettingDescriptor> {
             1.0,
             profile_change,
         ),
-        custom(
+        pending(
             "representation.cartoon.pending",
             CARTOON_GROUP,
             "Cartoon — pending options",
@@ -545,6 +567,7 @@ pub(super) fn descriptors() -> Vec<SettingDescriptor> {
             indent: false,
             is_default: None,
             reset: None,
+            subgroup: None,
         },
         value(
             "representation.surface.transparency",
@@ -557,7 +580,7 @@ pub(super) fn descriptors() -> Vec<SettingDescriptor> {
             1.0,
             transparency_change,
         ),
-        custom(
+        pending(
             "representation.surface.pending",
             SURFACE_GROUP,
             "Surface — pending options",
