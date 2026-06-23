@@ -250,11 +250,12 @@ pub struct AppConfig {
     /// [`crate::frontend::state::DockModel`].
     #[serde(default)]
     pub dock_layout: DockLayoutConfig,
-    /// Number of CPU cores QM jobs may use. Sizes a rayon thread pool that wraps
-    /// each hartree run (hartree parallelises over the global rayon pool, so
-    /// `pool.install(...)` throttles it live). Defaults to the physical core
-    /// count; clamped to the logical count at use. `#[serde(default)]` so older
-    /// settings.json still parses.
+    /// Default number of CPU cores a new job starts with — the seed every task
+    /// panel's per-run core control inherits (overridable per run). For QM it also
+    /// sizes a rayon thread pool that wraps each hartree run (hartree parallelises
+    /// over the global rayon pool, so `pool.install(...)` throttles it live).
+    /// Defaults to the physical core count; clamped to the logical count at use.
+    /// `#[serde(default)]` so older settings.json still parses.
     #[serde(default = "default_compute_core_count")]
     pub compute_core_count: usize,
     /// Show live CPU/GPU utilization gauges in the status bar. Off by default:

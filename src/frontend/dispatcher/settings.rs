@@ -317,14 +317,14 @@ pub(crate) fn import_settings(state: &mut AppState, ctx: &egui::Context) {
     }
 }
 
-/// Open the Settings dialog at the Engines category, which contains the Remote
-/// Hosts editor. Invoked from the per-task target picker's "Add host…" button so
+/// Open the Settings dialog at the Compute category, which contains the Remote
+/// hosts editor. Invoked from the per-task target picker's "Add host…" button so
 /// users can configure a host without hunting for the section.
 pub(crate) fn open_remote_hosts_settings(state: &mut AppState) {
     state.ui.layout.settings_open = true;
     state.ui.settings.search_query.clear();
     state.ui.settings.selected_category =
-        crate::frontend::ui::settings_registry::SettingCategory::Engines;
+        crate::frontend::ui::settings_registry::SettingCategory::Compute;
 }
 
 /// Resize the primary (left) sidebar. The right sidebar and bottom panel are
@@ -357,7 +357,8 @@ pub(crate) fn set_glass(state: &mut AppState, on: bool) {
     }
 }
 
-/// Persist how many cores QM jobs may use, clamped to the logical core count.
+/// Persist the default CPU-core count new jobs start with, clamped to the
+/// logical core count.
 pub(crate) fn set_compute_core_count(state: &mut AppState, cores: usize) {
     state.config.compute_core_count = crate::backend::hardware::clamp_core_count(
         cores,

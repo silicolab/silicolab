@@ -53,23 +53,6 @@ pub(crate) fn render_default_compute_target(
     ));
 }
 
-/// Informational placeholder: there are no user-tunable global task preferences
-/// wired to anything yet (the job manager spawns a thread per job with no
-/// concurrency cap, and timeouts are fixed per operation), so we surface a note
-/// rather than invent a setting that controls nothing.
-pub(crate) fn render_tasks_placeholder(
-    _state: &mut AppState,
-    ui: &mut egui::Ui,
-    _actions: &mut Vec<AppAction>,
-) {
-    let pal = crate::frontend::theme::palette(ui);
-    ui.label(caption_text(
-        "No configurable task preferences yet — background jobs run concurrently \
-         and each engine step uses a fixed timeout.",
-        pal.text_muted,
-    ));
-}
-
 /// The in-app LLM assistant settings: enable, provider, model (with live
 /// refresh), effort, per-provider key entry, and a "Stored keys" overview. The
 /// provider list is data-driven from `frontend::agent::registry`, so adding a
