@@ -26,6 +26,7 @@ fn fake_qm_job(
         id,
         conversation,
         label: "qm optimize".to_string(),
+        started_at_ms: 0,
         job: AgentHeavyJob::Qm(RunningQmJob {
             cancel: Arc::new(AtomicBool::new(false)),
             receiver: sender,
@@ -654,4 +655,61 @@ fn changing_base_url_clears_stale_model_fetch_error() {
         Some("https://api.example.com/v1")
     );
     assert_eq!(state.ui.agent.model_fetch, ModelFetchStatus::Idle);
+}
+
+#[test]
+fn pump_marks_dequeued_follow_up_as_running_backlog() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let ctx = egui::Context::default();
+    state
+        .ui
+        .agent
+        .queued
+        .push_back(PendingTurn::UserMessage("do this next".into()));
+
+    pump_queue(&mut state, &ctx);
+
+    assert!(state.ui.agent.queued.is_empty());
+    assert_eq!(
+        state.ui.agent.current_backlog.as_deref(),
+        Some("do this next")
+    );
+}
+
+#[test]
+fn flush_on_next_pump_records_completed() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let ctx = egui::Context::default();
+    state
+        .ui
+        .agent
+        .note_backlog_start("earlier follow-up".into(), 0);
+    state
+        .ui
+        .agent
+        .transcript
+        .push(TranscriptEntry::Assistant("Here is the answer.".into()));
+
+    pump_queue(&mut state, &ctx);
+
+    assert!(state.ui.agent.current_backlog.is_none());
+    assert_eq!(state.ui.agent.completed.len(), 1);
+    assert_eq!(state.ui.agent.completed[0].detail, "Here is the answer.");
+}
+
+#[test]
+fn errored_backlog_turn_is_recorded_as_failed() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let ctx = egui::Context::default();
+    state
+        .ui
+        .agent
+        .note_backlog_start("risky follow-up".into(), 0);
+
+    handle_turn_result(&mut state, Err(LlmError::BadRequest("nope".into())), &ctx);
+
+    assert!(state.ui.agent.current_backlog.is_none());
+    assert_eq!(state.ui.agent.completed.len(), 1);
+    assert_eq!(state.ui.agent.completed[0].label, "risky follow-up");
+    assert!(!state.ui.agent.completed[0].ok);
 }

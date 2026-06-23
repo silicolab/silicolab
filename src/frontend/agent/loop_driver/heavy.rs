@@ -126,6 +126,7 @@ pub fn spawn_heavy(state: &mut AppState, call: &ToolCall, kind: HeavyKind, ctx: 
                 id,
                 conversation,
                 label: label.clone(),
+                started_at_ms: crate::backend::storage::jobs::now_ms(),
                 job,
             });
             record_result(
@@ -239,8 +240,10 @@ fn finish_agent_job(
 ) {
     let verb = if is_error { "failed" } else { "finished" };
     let note = format!("Background job #{} ({}) {verb}.", tracked.id, tracked.label);
+    let detail = crate::frontend::agent::session::first_nonempty_line(&summary);
     if let Some(conversation) = state.ui.agent.conversation_mut(tracked.conversation) {
         conversation.transcript.push(TranscriptEntry::Notice(note));
+        conversation.push_completed(tracked.label.clone(), detail, !is_error);
         conversation.queued.push_back(PendingTurn::JobDone {
             label: tracked.label.clone(),
             summary,
