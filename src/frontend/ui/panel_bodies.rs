@@ -3,12 +3,14 @@ use eframe::egui::{self, FontFamily, FontId, RichText, Stroke};
 use crate::frontend::app::{ASSISTANT_CJK_FONT, CONSOLE_CJK_MONO_FONT};
 
 mod assistant;
+mod assistant_composer;
 mod assistant_transcript;
 mod console;
 mod monitor;
 mod task_monitor;
 
 pub(crate) use assistant::*;
+pub(crate) use assistant_composer::*;
 use assistant_transcript::*;
 pub(crate) use console::*;
 pub(crate) use monitor::*;

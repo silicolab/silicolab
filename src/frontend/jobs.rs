@@ -345,6 +345,17 @@ impl AgentHeavyJob {
     }
 }
 
+/// A detached background heavy job the agent launched, tagged so its completion
+/// routes back to the conversation that started it. The agent keeps running
+/// while this computes; `poll_agent_jobs` drains it and wakes the model.
+pub struct TrackedAgentJob {
+    pub id: u64,
+    pub conversation: crate::frontend::agent::AssistantConversationId,
+    /// Short human label, e.g. "qm optimize".
+    pub label: String,
+    pub job: AgentHeavyJob,
+}
+
 /// Spawn one model turn on a worker thread and return the polling handle. The
 /// blocking transport + bounded retry live entirely in `io/llm`; the worker
 /// forwards streamed text deltas and then the terminal
@@ -807,9 +818,12 @@ pub struct JobManager {
     /// In-flight assistant model turn (one `provider.complete()` POST). One
     /// `RunningAgentTurn` == one model turn; the agent loop drives the next.
     pub agent: Option<RunningAgentTurn>,
-    /// In-flight heavy compute job (md/qm) the agent is awaiting before it
-    /// continues its turn.
-    pub agent_heavy: Option<AgentHeavyJob>,
+    /// Detached background heavy jobs (qm/md/dock) the agent launched. The agent
+    /// does not block on them; `poll_agent_jobs` drains completions and wakes the
+    /// model through the queue.
+    pub agent_jobs: Vec<TrackedAgentJob>,
+    /// Monotonic id source for `agent_jobs`.
+    pub next_agent_job_id: u64,
     /// In-flight live model-list fetch for the active provider's `/models`
     /// endpoint, started by the "Refresh models" button in settings.
     pub model_fetch: Option<RunningModelFetch>,

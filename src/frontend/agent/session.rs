@@ -25,9 +25,6 @@ pub enum AgentPhase {
     AwaitingModel,
     /// Running the tool calls the last turn requested (on the UI thread).
     ExecutingTools,
-    /// A heavy tool (md/qm) is running off the UI thread; the gated call sits at
-    /// the front of `pending_calls` until it completes.
-    AwaitingHeavyJob,
     /// Paused on a destructive/expensive tool call awaiting user confirmation.
     AwaitingApproval,
     /// The exchange finished (end_turn / max_tokens / surfaced error).
@@ -46,6 +43,33 @@ pub enum TranscriptEntry {
         is_error: bool,
     },
     Notice(String),
+}
+
+/// A follow-up turn waiting to run the moment the agent returns to rest, FIFO.
+/// A message the user submits while the agent is busy queues here (type-ahead)
+/// instead of being dropped; [`pump_queue`](super::loop_driver::pump_queue) then
+/// dispatches the front item — one at a time — once `phase` is `Idle`/`Done`.
+#[derive(Debug, Clone)]
+pub enum PendingTurn {
+    /// A user message submitted while the agent was busy or awaiting approval.
+    UserMessage(String),
+    /// A background job finished; wake the model with its result so it can
+    /// continue the workflow (e.g. optimize → frequencies).
+    JobDone {
+        label: String,
+        summary: String,
+        is_error: bool,
+    },
+}
+
+impl PendingTurn {
+    /// Short label for the composer's queued-message strip.
+    pub fn preview(&self) -> &str {
+        match self {
+            PendingTurn::UserMessage(text) => text,
+            PendingTurn::JobDone { label, .. } => label,
+        }
+    }
 }
 
 /// Where a live `/models` fetch stands. Drives the spinner / error note next to
@@ -101,6 +125,10 @@ pub struct AssistantConversation {
     /// the transcript while `AwaitingModel`, then cleared and replaced by the
     /// authoritative final text when the turn completes.
     pub streaming_text: String,
+    /// Follow-up turns to dispatch the moment the agent returns to rest, FIFO. A
+    /// message submitted while busy lands here instead of being dropped; the loop
+    /// pumps it once `phase` is `Idle`/`Done` (see [`PendingTurn`]).
+    pub queued: VecDeque<PendingTurn>,
 }
 
 impl AssistantConversation {
@@ -118,14 +146,17 @@ impl AssistantConversation {
             pending_calls: VecDeque::new(),
             collected_results: Vec::new(),
             streaming_text: String::new(),
+            queued: VecDeque::new(),
         }
     }
 
     /// Whether a turn or tool batch is actively running (input should be locked).
+    /// Background jobs deliberately do *not* count — the agent stays free while a
+    /// heavy computation runs off-thread.
     pub fn is_busy(&self) -> bool {
         matches!(
             self.phase,
-            AgentPhase::AwaitingModel | AgentPhase::ExecutingTools | AgentPhase::AwaitingHeavyJob
+            AgentPhase::AwaitingModel | AgentPhase::ExecutingTools
         )
     }
 
@@ -135,6 +166,14 @@ impl AssistantConversation {
             self.pending_calls.front()
         } else {
             None
+        }
+    }
+
+    /// Drop the queued follow-up at `index` (a no-op when out of range). Backs
+    /// the composer's per-message ✕ buttons.
+    pub fn remove_queued(&mut self, index: usize) {
+        if index < self.queued.len() {
+            self.queued.remove(index);
         }
     }
 
@@ -233,6 +272,17 @@ impl AgentSession {
             .unwrap_or(0);
         self.active_conversation = self.conversations[index].id;
         &mut self.conversations[index]
+    }
+
+    /// A specific conversation by id, for routing a background job's result to
+    /// the conversation that launched it even if another is now active.
+    pub fn conversation_mut(
+        &mut self,
+        id: AssistantConversationId,
+    ) -> Option<&mut AssistantConversation> {
+        self.conversations
+            .iter_mut()
+            .find(|conversation| conversation.id == id)
     }
 
     /// Whether a turn or tool batch is actively running (input should be locked).

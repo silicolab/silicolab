@@ -12,8 +12,15 @@ pub fn new_assistant_conversation(state: &mut AppState) {
     state.ui.agent.start_new_conversation();
 }
 
-pub fn switch_assistant_conversation(state: &mut AppState, id: AssistantConversationId) {
+pub fn switch_assistant_conversation(
+    state: &mut AppState,
+    id: AssistantConversationId,
+    ctx: &egui::Context,
+) {
     state.ui.agent.switch_conversation(id);
+    // A background job may have finished while this conversation was inactive; its
+    // queued follow-up now dispatches against the freshly-active conversation.
+    pump_queue(state, ctx);
 }
 
 pub fn rename_assistant_conversation(
@@ -25,6 +32,12 @@ pub fn rename_assistant_conversation(
 }
 
 pub fn delete_assistant_conversation(state: &mut AppState, id: AssistantConversationId) {
+    // Stop any background jobs the chat launched before it disappears, else their
+    // workers leak and their results are orphaned on completion. Gated on the same
+    // condition `delete_conversation` uses, so we only cancel when it will delete.
+    if state.ui.agent.can_manage_conversations() {
+        cancel_conversation_jobs(state, id);
+    }
     state.ui.agent.delete_conversation(id);
 }
 
