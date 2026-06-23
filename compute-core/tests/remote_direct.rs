@@ -47,6 +47,7 @@ fn h2_single_point() -> EngineRequest {
         multiplicity: 1,
         kind: QmKind::SinglePoint,
         options: QmOptions::default(),
+        ts: None,
     })))
 }
 

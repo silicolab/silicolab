@@ -5,8 +5,10 @@ use hartree::composite::Composite;
 use hartree::composite::composite;
 use hartree::dft::FunctionalSpec;
 use hartree::disp::Dispersion;
+use hartree::opt::internals::Internal;
+use hartree::opt::ts::{Coordinates, NebOptions, TsAlgorithm, TsOptions};
 use hartree::scf::Smearing;
-use hartree::{Element, Job, JobOptions, Method, Molecule};
+use hartree::{CoordScanSpec, Element, Job, JobOptions, Method, Molecule, TsGuessInput};
 
 use crate::domain::Structure;
 use crate::io::structure_text::to_xyz;
@@ -103,6 +105,7 @@ pub(crate) struct ResolvedJob {
 /// `JobOptions`/`Method` exactly as hartree-cli does. CLI-level incompatibilities
 /// that hartree's `Job::run` does not itself catch are rejected here with a
 /// pointed message; the deeper physics guards are left to hartree.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_job(
     structure: &Structure,
     method: &QmMethod,
@@ -111,8 +114,16 @@ pub(crate) fn build_job(
     multiplicity: u32,
     kind: QmKind,
     options: &QmOptions,
+    ts: Option<&QmTsConfig>,
 ) -> Result<ResolvedJob> {
     let molecule = molecule_from_structure(structure, charge, multiplicity)?;
+
+    // Transition-state search is gated to the same gradient-capable, in-core,
+    // gas-phase combinations hartree allows; reject the incompatible options here
+    // with a pointed message rather than letting the deeper engine error surface.
+    if kind == QmKind::TransitionState {
+        ensure_ts_compatible(method, options)?;
+    }
 
     // Composite resolution: a composite fixes the functional, basis, grid,
     // dispersion, and gCP/SRB corrections, and forbids a conflicting basis or
@@ -187,6 +198,12 @@ pub(crate) fn build_job(
         }
     }
 
+    let (ts_options, ts_guess, ts_coord_scan) = if kind == QmKind::TransitionState {
+        build_ts_inputs(structure, ts, charge, multiplicity)?
+    } else {
+        (TsOptions::default(), None, None)
+    };
+
     let job_options = JobOptions {
         all_electron: options.all_electron,
         direct,
@@ -195,6 +212,10 @@ pub(crate) fn build_job(
         compute_frequencies: kind == QmKind::Frequencies,
         single_point_hessian: options.single_point_hessian,
         optimize_geometry: kind == QmKind::Optimize,
+        transition_state: kind == QmKind::TransitionState,
+        ts_options,
+        ts_guess,
+        ts_coord_scan,
         symmetry_number: options.symmetry_number,
         qrrho_w0_cm1: options.qrrho_w0_cm1,
         grid_level,
@@ -214,7 +235,8 @@ pub(crate) fn build_job(
         ri_mp2: options.ri_mp2,
         cosx,
         x2c: options.x2c,
-        // hartree 0.1.1's TS / n_threads / mem_budget knobs default off — unused here.
+        // hartree's n_threads / mem_budget knobs default off — thread capping is
+        // done by the workflow's rayon pool, not here.
         ..Default::default()
     };
 
@@ -230,6 +252,142 @@ pub(crate) fn build_job(
         x2c: options.x2c,
         cpcm_solvent,
     })
+}
+
+/// Reject the options a transition-state search cannot run with, before the job
+/// is assembled. hartree gates the saddle search to the gradient-capable, in-core,
+/// gas-phase combinations; mirror that here with caller-facing messages. The
+/// functional-specific rejections (double hybrids, VV10) are left to hartree,
+/// which knows the functional internals.
+fn ensure_ts_compatible(method: &QmMethod, options: &QmOptions) -> Result<()> {
+    if method.is_post_hf() {
+        bail!(
+            "transition-state search needs an analytic gradient: it supports HF and DFT, \
+             not MP2/CCSD/CCSD(T)"
+        );
+    }
+    if options.scf_backend != QmScfBackend::InCore {
+        bail!(
+            "transition-state search requires the in-core SCF backend; \
+             remove the integral-direct / RI-JK / COSX option"
+        );
+    }
+    if options.x2c {
+        bail!("transition-state search does not support the X2C Hamiltonian (energy-only)");
+    }
+    if options.smearing_temperature_k.is_some() {
+        bail!("transition-state search does not support Fermi smearing (energy-only)");
+    }
+    if options.solvation.is_some() {
+        bail!(
+            "transition-state search does not support implicit solvation \
+             (no analytic gradient on the solvated surface)"
+        );
+    }
+    Ok(())
+}
+
+/// Resolve a [`QmTsConfig`] into hartree's `(TsOptions, ts_guess, ts_coord_scan)`.
+/// `None` (no config on a TS request) is a single-guess P-RFO climb from the
+/// current geometry. `charge`/`multiplicity` are applied to the product endpoint
+/// of a two-ended search so it matches the reactant's electronic state.
+fn build_ts_inputs(
+    reactant: &Structure,
+    config: Option<&QmTsConfig>,
+    charge: i32,
+    multiplicity: u32,
+) -> Result<(TsOptions, Option<TsGuessInput>, Option<CoordScanSpec>)> {
+    let config = match config {
+        Some(c) => c,
+        None => return Ok((TsOptions::default(), None, None)),
+    };
+
+    let mut ts_options = TsOptions::default();
+    ts_options.algorithm = match config.algorithm {
+        QmTsAlgorithm::Prfo => TsAlgorithm::Prfo,
+        QmTsAlgorithm::Dimer => TsAlgorithm::Dimer,
+    };
+    ts_options.coordinates = match config.coordinates {
+        QmTsCoordinates::MassWeighted => Coordinates::MassWeighted,
+        QmTsCoordinates::Internal => Coordinates::Internal,
+    };
+    ts_options.confirm_irc = config.confirm_irc;
+
+    let (ts_guess, ts_coord_scan) = match &config.guess {
+        QmTsGuess::Single => (None, None),
+        QmTsGuess::TwoEndpoint(endpoints) => {
+            let product = molecule_from_structure(&endpoints.product, charge, multiplicity)
+                .context("invalid product geometry for the transition-state search")?;
+            let mut guess = TsGuessInput::new(product);
+            guess.use_neb = endpoints.use_neb;
+            guess.scan_points = endpoints.scan_points;
+            let mut neb = NebOptions::default();
+            neb.n_images = endpoints.neb_images.max(1);
+            neb.climbing = endpoints.neb_climbing;
+            neb.map_atoms = endpoints.map_atoms;
+            // Two separately optimized minima rarely share a frame; aligning the
+            // product onto the reactant removes an arbitrary relative orientation.
+            neb.align = true;
+            guess.neb_options = neb;
+            (Some(guess), None)
+        }
+        QmTsGuess::CoordinateScan(scan) => {
+            let spec = build_coord_scan(reactant, scan)?;
+            (None, Some(spec))
+        }
+    };
+
+    Ok((ts_options, ts_guess, ts_coord_scan))
+}
+
+/// Build a hartree [`CoordScanSpec`] from a UI-level [`QmTsCoordinateScan`],
+/// converting 1-based atom indices to hartree's 0-based [`Internal`] and the
+/// range from display units (Ångström / degrees) to hartree's (Bohr / radians).
+fn build_coord_scan(reactant: &Structure, scan: &QmTsCoordinateScan) -> Result<CoordScanSpec> {
+    if scan.n_points < 3 {
+        bail!(
+            "a coordinate scan needs at least 3 grid points, got {}",
+            scan.n_points
+        );
+    }
+    let natoms = reactant.atoms.len();
+    let atoms = scan.coordinate.atoms();
+    for &atom in &atoms {
+        if atom < 1 || atom > natoms {
+            bail!(
+                "coordinate-scan atom index {atom} is out of range (the structure has {natoms} atoms, \
+                 numbered 1..={natoms})"
+            );
+        }
+    }
+    // A coordinate over a repeated atom (e.g. a bond from an atom to itself) is
+    // degenerate — its direction is undefined, so reject it rather than let the
+    // B-matrix produce a NaN.
+    for i in 0..atoms.len() {
+        for j in (i + 1)..atoms.len() {
+            if atoms[i] == atoms[j] {
+                bail!(
+                    "coordinate-scan atoms must be distinct (atom {} is repeated)",
+                    atoms[i]
+                );
+            }
+        }
+    }
+    // 1-based (UI) → 0-based (hartree).
+    let internal = match scan.coordinate {
+        QmInternalCoordinate::Bond(i, j) => Internal::Bond(i - 1, j - 1),
+        QmInternalCoordinate::Angle(i, j, k) => Internal::Angle(i - 1, j - 1, k - 1),
+        QmInternalCoordinate::Dihedral(i, j, k, l) => {
+            Internal::Dihedral(i - 1, j - 1, k - 1, l - 1)
+        }
+    };
+    let (start, end) = if scan.coordinate.is_distance() {
+        let to_bohr = 1.0 / BOHR_TO_ANGSTROM;
+        (scan.start * to_bohr, scan.end * to_bohr)
+    } else {
+        (scan.start.to_radians(), scan.end.to_radians())
+    };
+    Ok(CoordScanSpec::new(internal, start, end, scan.n_points))
 }
 
 /// Map a [`QmMethod`] to a hartree [`Method`]. A composite runs its plain

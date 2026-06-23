@@ -378,13 +378,11 @@ fn validate_gromacs_job(job: &GromacsJob) -> Result<()> {
     Ok(())
 }
 
-fn validate_qm_job(job: &QmJob) -> Result<()> {
-    let structure = match job {
-        QmJob::Molecular(req) => &req.structure,
-        QmJob::Periodic(req) => &req.structure,
-    };
+/// Reject a structure with no atoms or a non-finite coordinate, naming its role
+/// (`"engine request"`, `"transition-state product"`) in the diagnostic.
+fn validate_structure_atoms(structure: &crate::domain::Structure, role: &str) -> Result<()> {
     if structure.atoms.is_empty() {
-        bail!("engine request carries no atoms");
+        bail!("{role} carries no atoms");
     }
     if let Some((index, _)) = structure
         .atoms
@@ -392,7 +390,24 @@ fn validate_qm_job(job: &QmJob) -> Result<()> {
         .enumerate()
         .find(|(_, atom)| !atom.position.coords.iter().all(|c| c.is_finite()))
     {
-        bail!("atom {index} has a non-finite coordinate");
+        bail!("{role} atom {index} has a non-finite coordinate");
+    }
+    Ok(())
+}
+
+fn validate_qm_job(job: &QmJob) -> Result<()> {
+    let structure = match job {
+        QmJob::Molecular(req) => &req.structure,
+        QmJob::Periodic(req) => &req.structure,
+    };
+    validate_structure_atoms(structure, "engine request")?;
+    // A two-endpoint transition-state search carries a second (product) structure
+    // over the same untrusted boundary; validate it the way the reactant is.
+    if let QmJob::Molecular(req) = job
+        && let Some(ts) = &req.ts
+        && let crate::engines::qm::QmTsGuess::TwoEndpoint(endpoints) = &ts.guess
+    {
+        validate_structure_atoms(&endpoints.product, "transition-state product")?;
     }
     // A periodic job carries a lattice; a non-finite component would corrupt the
     // reciprocal-space setup, so reject it up front the way atom coordinates are.
@@ -540,6 +555,7 @@ mod tests {
             multiplicity: 1,
             kind: QmKind::SinglePoint,
             options: QmOptions::default(),
+            ts: None,
         })))
     }
 
@@ -554,6 +570,7 @@ mod tests {
             multiplicity: 1,
             kind: QmKind::SinglePoint,
             options: QmOptions::default(),
+            ts: None,
         })));
         assert!(validate_request(&empty).is_err());
 
@@ -584,6 +601,7 @@ mod tests {
             multiplicity: 1,
             kind: QmKind::SinglePoint,
             options: QmOptions::default(),
+            ts: None,
         })));
         let error = validate_request(&nan).unwrap_err().to_string();
         assert!(
@@ -632,6 +650,51 @@ mod tests {
                 assert_eq!(req.structure.atoms.len(), 2);
             }
             _ => panic!("expected a molecular QM request"),
+        }
+    }
+
+    #[test]
+    fn ts_request_round_trips_with_two_endpoint_product() {
+        use crate::engines::qm::{QmTsConfig, QmTsEndpoints, QmTsGuess};
+        // The two-endpoint product is a second Structure carried over the wire via
+        // the structure_serde adapter — exercise that it survives the round trip.
+        let product = Structure::new(
+            "product",
+            vec![
+                Atom {
+                    element: "H".to_string(),
+                    position: Point3::new(0.0, 0.0, 0.0),
+                    charge: 0.0,
+                },
+                Atom {
+                    element: "H".to_string(),
+                    position: Point3::new(0.0, 0.0, 1.40),
+                    charge: 0.0,
+                },
+            ],
+        );
+        let mut request = match h2_single_point().engine {
+            Engine::Qm(QmJob::Molecular(req)) => req,
+            _ => unreachable!(),
+        };
+        request.kind = QmKind::TransitionState;
+        request.ts = Some(QmTsConfig {
+            guess: QmTsGuess::TwoEndpoint(Box::new(QmTsEndpoints::new(product))),
+            ..QmTsConfig::default()
+        });
+        let wrapped = EngineRequest::new(Engine::Qm(QmJob::Molecular(request)));
+        let json = serde_json::to_vec(&wrapped).unwrap();
+        let back: EngineRequest = serde_json::from_slice(&json).unwrap();
+        let Engine::Qm(QmJob::Molecular(req)) = back.engine else {
+            panic!("expected a molecular QM request");
+        };
+        assert!(matches!(req.kind, QmKind::TransitionState));
+        match req.ts.expect("ts config survives the wire").guess {
+            QmTsGuess::TwoEndpoint(endpoints) => {
+                assert_eq!(endpoints.product.atoms.len(), 2);
+                assert!((endpoints.product.atoms[1].position.z - 1.40).abs() < 1e-6);
+            }
+            _ => panic!("expected the two-endpoint guess route"),
         }
     }
 

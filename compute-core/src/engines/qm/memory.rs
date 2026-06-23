@@ -26,6 +26,7 @@ pub fn estimate_incore_memory_bytes(request: &QmRequest) -> Option<u64> {
         request.multiplicity,
         request.kind,
         &request.options,
+        request.ts.as_ref(),
     )
     .ok()?;
     hartree::estimate_memory(&resolved.job)
@@ -74,6 +75,7 @@ pub fn estimate_request_memory(
         request.multiplicity,
         request.kind,
         &request.options,
+        request.ts.as_ref(),
     )
     .map_err(|error| error.to_string())?;
     let estimate = hartree::estimate_memory(&resolved.job)?;
@@ -189,6 +191,7 @@ mod tests {
                 scf_backend: backend,
                 ..Default::default()
             },
+            ts: None,
         }
     }
 

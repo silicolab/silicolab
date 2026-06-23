@@ -75,6 +75,10 @@ const TASK_EXECUTORS: &[TaskExecutor] = &[
         run: run_qm_panel,
     },
     TaskExecutor {
+        kind: TaskKind::RunQmTransitionState,
+        run: run_qm_panel,
+    },
+    TaskExecutor {
         kind: TaskKind::TranslateIntoFirstUnitCell,
         run: run_translate_into_first_cell,
     },

@@ -51,6 +51,144 @@ impl OptimizationPrompt {
     }
 }
 
+/// Which near-saddle guess the transition-state panel builds. The UI-side mirror
+/// of [`crate::engines::qm::QmTsGuess`]'s variant choice (kept separate because
+/// the panel holds the product as an *entry id*, resolved to a structure only at
+/// launch).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TsRouteKind {
+    /// Climb from the current geometry.
+    #[default]
+    Single,
+    /// Reactant → product guess (IDPP or NEB).
+    TwoEndpoint,
+    /// Distinguished-coordinate scan.
+    CoordinateScan,
+}
+
+/// Internal-coordinate type for the panel's distinguished-coordinate scan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ScanCoordKind {
+    #[default]
+    Bond,
+    Angle,
+    Dihedral,
+}
+
+impl ScanCoordKind {
+    /// How many atom indices this coordinate uses (2 / 3 / 4).
+    pub fn arity(self) -> usize {
+        match self {
+            ScanCoordKind::Bond => 2,
+            ScanCoordKind::Angle => 3,
+            ScanCoordKind::Dihedral => 4,
+        }
+    }
+}
+
+/// Panel-side editing state for a transition-state search. Resolved into a
+/// [`crate::engines::qm::QmTsConfig`] by [`QmPrompt::to_request`].
+#[derive(Debug, Clone)]
+pub struct TsPromptForm {
+    pub algorithm: crate::engines::qm::QmTsAlgorithm,
+    pub coordinates: crate::engines::qm::QmTsCoordinates,
+    pub confirm_irc: bool,
+    pub route: TsRouteKind,
+    /// Two-endpoint route: the product structure, chosen from the open entries.
+    pub product_entry: Option<u64>,
+    pub use_neb: bool,
+    pub neb_images: u32,
+    pub neb_climbing: bool,
+    pub map_atoms: bool,
+    /// IDPP route: scan this many path points for the energy peak; `0` = single
+    /// geometric image.
+    pub idpp_scan_points: u32,
+    /// Coordinate-scan route.
+    pub scan_kind: ScanCoordKind,
+    /// 1-based atom indices; the first [`ScanCoordKind::arity`] are used.
+    pub scan_atoms: [u32; 4],
+    /// Scan range start/end (Ångström for a bond, degrees for an angle/dihedral).
+    pub scan_start: f64,
+    pub scan_end: f64,
+    pub scan_points: u32,
+}
+
+impl Default for TsPromptForm {
+    fn default() -> Self {
+        Self {
+            algorithm: crate::engines::qm::QmTsAlgorithm::default(),
+            coordinates: crate::engines::qm::QmTsCoordinates::default(),
+            confirm_irc: false,
+            route: TsRouteKind::default(),
+            product_entry: None,
+            use_neb: false,
+            neb_images: 8,
+            neb_climbing: true,
+            map_atoms: true,
+            idpp_scan_points: 0,
+            scan_kind: ScanCoordKind::default(),
+            scan_atoms: [1, 2, 3, 4],
+            scan_start: 1.0,
+            scan_end: 3.0,
+            scan_points: 7,
+        }
+    }
+}
+
+impl TsPromptForm {
+    /// Resolve into the engine's [`QmTsConfig`]. `product` is the structure the
+    /// chosen [`Self::product_entry`] resolves to (the caller fetches it from the
+    /// open entries); when the two-endpoint route is selected but no product is
+    /// available the route degrades to a single guess, so a memory estimate or a
+    /// half-filled form never fails to build.
+    pub fn to_config(
+        &self,
+        product: Option<crate::domain::Structure>,
+    ) -> crate::engines::qm::QmTsConfig {
+        use crate::engines::qm::{
+            QmInternalCoordinate, QmTsConfig, QmTsCoordinateScan, QmTsEndpoints, QmTsGuess,
+        };
+        let guess = match self.route {
+            TsRouteKind::Single => QmTsGuess::Single,
+            TsRouteKind::TwoEndpoint => match product {
+                Some(product) => {
+                    let mut endpoints = QmTsEndpoints::new(product);
+                    endpoints.use_neb = self.use_neb;
+                    endpoints.scan_points =
+                        (self.idpp_scan_points >= 3).then_some(self.idpp_scan_points as usize);
+                    endpoints.neb_images = self.neb_images.max(1) as usize;
+                    endpoints.neb_climbing = self.neb_climbing;
+                    endpoints.map_atoms = self.map_atoms;
+                    QmTsGuess::TwoEndpoint(Box::new(endpoints))
+                }
+                None => QmTsGuess::Single,
+            },
+            TsRouteKind::CoordinateScan => {
+                let a = self.scan_atoms.map(|i| i as usize);
+                let coordinate = match self.scan_kind {
+                    ScanCoordKind::Bond => QmInternalCoordinate::Bond(a[0], a[1]),
+                    ScanCoordKind::Angle => QmInternalCoordinate::Angle(a[0], a[1], a[2]),
+                    ScanCoordKind::Dihedral => {
+                        QmInternalCoordinate::Dihedral(a[0], a[1], a[2], a[3])
+                    }
+                };
+                QmTsGuess::CoordinateScan(QmTsCoordinateScan {
+                    coordinate,
+                    start: self.scan_start,
+                    end: self.scan_end,
+                    n_points: self.scan_points.max(3) as usize,
+                })
+            }
+        };
+        QmTsConfig {
+            guess,
+            algorithm: self.algorithm,
+            coordinates: self.coordinates,
+            confirm_irc: self.confirm_irc,
+        }
+    }
+}
+
 /// User-editable configuration for a quantum-chemistry (hartree) calculation.
 #[derive(Debug, Clone)]
 pub struct QmPrompt {
@@ -70,6 +208,9 @@ pub struct QmPrompt {
     pub default_kind: crate::engines::qm::QmKind,
     /// All advanced hartree options (dispersion, solvation, SCF backend, …).
     pub options: crate::engines::qm::QmOptions,
+    /// Transition-state search form; consulted when `kind` is
+    /// [`crate::engines::qm::QmKind::TransitionState`].
+    pub ts: TsPromptForm,
     /// Whether the panel is in periodic (crystalline) mode. Only selectable when
     /// the active structure carries a real unit cell; the molecular fields above
     /// are ignored while this is set.
@@ -134,7 +275,7 @@ impl QmPrompt {
         // energies (where the higher cost buys a noticeably better number).
         let basis = match kind {
             QmKind::SinglePoint => "def2-tzvp",
-            QmKind::Optimize | QmKind::Frequencies => "def2-svp",
+            QmKind::Optimize | QmKind::Frequencies | QmKind::TransitionState => "def2-svp",
         };
         Self {
             method: QmMethod::Dft("b3lyp".to_string()),
@@ -148,6 +289,7 @@ impl QmPrompt {
                 dispersion: Some(QmDispersion::D3Bj),
                 ..QmOptions::default()
             },
+            ts: TsPromptForm::default(),
             periodic: false,
             periodic_form: PeriodicQmForm::default(),
             memory_report: None,
@@ -156,7 +298,16 @@ impl QmPrompt {
     }
 
     /// Build the molecular engine request from this form against `structure`.
-    pub fn to_request(&self, structure: crate::domain::Structure) -> crate::engines::qm::QmRequest {
+    /// `product` is the resolved product structure for a two-endpoint
+    /// transition-state search (the caller fetches it from the open entries);
+    /// pass `None` for every other calculation.
+    pub fn to_request(
+        &self,
+        structure: crate::domain::Structure,
+        product: Option<crate::domain::Structure>,
+    ) -> crate::engines::qm::QmRequest {
+        use crate::engines::qm::QmKind;
+        let ts = (self.kind == QmKind::TransitionState).then(|| self.ts.to_config(product));
         crate::engines::qm::QmRequest {
             structure,
             method: self.method.clone(),
@@ -165,12 +316,18 @@ impl QmPrompt {
             multiplicity: self.multiplicity,
             kind: self.kind,
             options: self.options.clone(),
+            ts,
         }
     }
 
     /// Build the engine job from this form against `structure`: a periodic job in
-    /// periodic mode, otherwise the molecular request.
-    pub fn to_job(&self, structure: crate::domain::Structure) -> crate::engines::qm::QmJob {
+    /// periodic mode, otherwise the molecular request. `product` carries the
+    /// two-endpoint TS product (see [`Self::to_request`]).
+    pub fn to_job(
+        &self,
+        structure: crate::domain::Structure,
+        product: Option<crate::domain::Structure>,
+    ) -> crate::engines::qm::QmJob {
         use crate::engines::qm::{KMesh, PeriodicQmRequest, QmJob};
         if self.periodic {
             let form = &self.periodic_form;
@@ -187,7 +344,7 @@ impl QmPrompt {
                 stress: form.stress,
             })
         } else {
-            QmJob::Molecular(self.to_request(structure))
+            QmJob::Molecular(self.to_request(structure, product))
         }
     }
 
@@ -301,6 +458,7 @@ mod tests {
             (QmKind::SinglePoint, "def2-tzvp"),
             (QmKind::Optimize, "def2-svp"),
             (QmKind::Frequencies, "def2-svp"),
+            (QmKind::TransitionState, "def2-svp"),
         ] {
             let prompt = QmPrompt::new(kind);
             assert_eq!(prompt.method, QmMethod::Dft("b3lyp".to_string()));

@@ -7,6 +7,7 @@ pub(crate) mod console;
 mod disorder_commands;
 mod dispatcher;
 mod docking_commands;
+mod entry_ref;
 mod glass;
 mod gpu_inventory;
 pub(crate) mod gpu_monitor;

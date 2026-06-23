@@ -506,7 +506,10 @@ fn save_qm_output(state: &mut AppState, summary: &str) -> Option<PathBuf> {
     let kind = state.tasks.task_run(task_run_id)?.kind;
     if !matches!(
         kind,
-        TaskKind::RunQmEnergy | TaskKind::RunQmOptimize | TaskKind::RunQmFrequencies
+        TaskKind::RunQmEnergy
+            | TaskKind::RunQmOptimize
+            | TaskKind::RunQmFrequencies
+            | TaskKind::RunQmTransitionState
     ) {
         return None;
     }

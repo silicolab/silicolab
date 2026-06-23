@@ -27,7 +27,7 @@ pub enum HeavyKind {
 }
 
 /// Classify a tool call as a heavy off-thread command (`md run|simulate`, `qm
-/// energy|optimize|freq`, `dock`), else `None` (runs inline). `score` is a cheap
+/// energy|optimize|freq|ts`, `dock`), else `None` (runs inline). `score` is a cheap
 /// single-point evaluation, so it stays inline.
 pub fn heavy_kind_of(call: &ToolCall) -> Option<HeavyKind> {
     if call.name != "run_command" {
@@ -38,7 +38,18 @@ pub fn heavy_kind_of(call: &ToolCall) -> Option<HeavyKind> {
     match words.next()? {
         "qm" => matches!(
             words.next(),
-            Some("energy" | "sp" | "single-point" | "optimize" | "opt" | "freq" | "frequencies")
+            Some(
+                "energy"
+                    | "sp"
+                    | "single-point"
+                    | "optimize"
+                    | "opt"
+                    | "freq"
+                    | "frequencies"
+                    | "ts"
+                    | "saddle"
+                    | "transition-state"
+            )
         )
         .then_some(HeavyKind::Qm),
         "md" => matches!(words.next(), Some("run" | "simulate")).then_some(HeavyKind::Md),

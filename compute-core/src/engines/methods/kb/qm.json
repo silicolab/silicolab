@@ -44,14 +44,14 @@
   {
     "name": "qm-barriers-kinetics",
     "engine": "qm",
-    "description": "Reaction barriers / transition states: a range-separated hybrid is essential. Take a wb97m-v/def2-tzvpp single point on a r2scan-3c geometry (`qm recommend barriers`).",
+    "description": "Reaction barriers / transition states: locate the saddle with `qm ts`, then take a range-separated-hybrid single point on it (`qm recommend barriers`).",
     "triggers": ["barrier", "transition state", "ts", "kinetics", "activation energy", "rate", "saddle"],
-    "command": ["qm optimize --method r2scan-3c", "qm energy --method wb97m-v --basis def2-tzvpp"],
+    "command": ["qm ts --method r2scan-3c", "qm energy --method wb97m-v --basis def2-tzvpp"],
     "caveats": [
       "GGAs and composites systematically underestimate barriers - use a (range-separated) hybrid for the energy.",
-      "Locate the transition-state geometry yourself; SilicoLab has no automated saddle-point search."
+      "`qm ts` runs the saddle search at a composite/hybrid with an analytic gradient (e.g. r2scan-3c, b3lyp); the RS-hybrid (wb97m-v) energy then refines the barrier on that geometry. Confirm the saddle with `--irc` or a `qm freq` showing exactly one imaginary mode."
     ],
-    "body": "wb97m-v (with VV10 nonlocal correlation) is among the most accurate functionals for kinetics. Analytic gradients are unavailable for RS hybrids, so optimize at r2scan-3c and take the wb97m-v energy on that geometry (the two-step recipe above).",
+    "body": "Use `qm ts` to climb to the first-order saddle: from a near-saddle geometry, between a reactant and a product (`--product`), or along a driven coordinate (`--scan-bond`/`--scan-angle`/`--scan-dihedral`). wb97m-v (with VV10 nonlocal correlation) is among the most accurate functionals for kinetics but has no analytic gradient, so run the search at r2scan-3c/b3lyp and take the wb97m-v energy on the located saddle.",
     "in_table": true
   },
   {
