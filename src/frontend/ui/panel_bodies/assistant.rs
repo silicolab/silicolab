@@ -10,7 +10,7 @@ use crate::frontend::{actions::AppAction, agent::AssistantConversationId, state:
 /// area's bottom margin (where the panel content rect clips) and the status bar.
 const COMPOSER_BOTTOM_PAD: f32 = 8.0;
 const ASSISTANT_SIDE_PAD: f32 = 8.0;
-const ASSISTANT_COMPOSER_HEIGHT: f32 = 58.0;
+pub(crate) const ASSISTANT_COMPOSER_HEIGHT: f32 = 58.0;
 // Must stay >= an icon button's natural width (glyph advance + 2 * button_padding.x,
 // ~29px at the current 8px padding). This is both the buttons' `min_size` width and
 // the per-button term in `reserved_width`; keeping it >= natural makes min_size win,
@@ -34,13 +34,29 @@ pub(crate) fn render_assistant_panel(
     let pal = crate::frontend::theme::palette(ui);
     ui.set_width(ui.available_width());
 
-    let busy = state.ui.agent.is_busy();
-    let assistant_enabled = state.config.assistant.enabled;
     let provider = registry::active_provider(&state.config.assistant);
     // Cached (the live check reads env + the key store); refreshed off the hot path.
     let key_present = state.ui.agent.key_available.unwrap_or(false);
     let pending_call = state.ui.agent.pending_approval().cloned();
     let active_id = state.ui.agent.active_conversation;
+    // Snapshot the queued (type-ahead) follow-ups so the strip can render without
+    // holding a borrow on `state` while the composer mutably borrows the input.
+    let queued: Vec<String> = state
+        .ui
+        .agent
+        .queued
+        .iter()
+        .map(|item| item.preview().to_string())
+        .collect();
+    // Background jobs running for the active conversation (id + label), shown as a
+    // strip with per-job cancel. Tagged jobs from other conversations stay hidden.
+    let running_jobs: Vec<(u64, String)> = state
+        .jobs
+        .agent_jobs
+        .iter()
+        .filter(|job| job.conversation == active_id)
+        .map(|job| (job.id, job.label.clone()))
+        .collect();
 
     let panel_rect = ui.available_rect_before_wrap();
     let content_rect = panel_rect.shrink2(egui::vec2(ASSISTANT_SIDE_PAD, 0.0));
@@ -70,8 +86,12 @@ pub(crate) fn render_assistant_panel(
                     approval_row_height(command, panel_width)
                 })
                 .unwrap_or(0.0);
+            let running_height = running_strip_height(&running_jobs);
+            let queued_height = queued_strip_height(&queued);
             let footer_height = status_height
                 + approval_height
+                + running_height
+                + queued_height
                 + ASSISTANT_COMPOSER_HEIGHT
                 + toolbar_height
                 + 24.0
@@ -256,105 +276,7 @@ pub(crate) fn render_assistant_panel(
                 ui.add_space(4.0);
             }
 
-            let send_enabled = assistant_enabled && key_present && !busy && pending_call.is_none();
-            let hint = if !assistant_enabled {
-                "Assistant disabled"
-            } else if !key_present {
-                "Set the API key env var"
-            } else if busy {
-                "Working..."
-            } else {
-                "Ask the assistant anything"
-            };
-
-            let composer_radius = radius::CARD;
-            let inner_radius = radius::concentric(composer_radius, 4);
-            let mut composer_focused = false;
-            let mut send = false;
-            let mut composer_rect = egui::Rect::NOTHING;
-            assistant_inset_row(ui, ASSISTANT_COMPOSER_HEIGHT, |ui| {
-                let content_width = ui.available_width().max(96.0);
-                let frame_inner_width = (content_width - 16.0).max(80.0);
-                let response = Frame::default()
-                    .fill(pal.input_fill)
-                    .stroke(Stroke::new(1.0, pal.hairline))
-                    .corner_radius(CornerRadius::same(composer_radius))
-                    .inner_margin(Margin::symmetric(8, 8))
-                    .show(ui, |ui| {
-                        ui.set_width(frame_inner_width);
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 6.0;
-                            const BUTTON_SIZE: f32 = 26.0;
-                            let text_width = (ui.available_width() - BUTTON_SIZE - 6.0).max(48.0);
-
-                            let response = ui.add_sized(
-                                [text_width, 38.0],
-                                egui::TextEdit::multiline(&mut state.ui.agent.input)
-                                    .desired_width(text_width)
-                                    .desired_rows(2)
-                                    .font(assistant_body_font_id())
-                                    .frame(Frame::NONE)
-                                    .hint_text(hint),
-                            );
-                            composer_focused = response.has_focus();
-                            if response.has_focus()
-                                && ui.input(|input| {
-                                    input.key_pressed(egui::Key::Enter) && !input.modifiers.shift
-                                })
-                            {
-                                send = true;
-                            }
-
-                            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                                if busy {
-                                    let stop = Button::new(
-                                        RichText::new(egui_phosphor::regular::X)
-                                            .color(pal.text_primary),
-                                    )
-                                    .fill(pal.neutral_overlay(20))
-                                    .corner_radius(CornerRadius::same(inner_radius))
-                                    .min_size(egui::vec2(BUTTON_SIZE, BUTTON_SIZE));
-                                    if ui.add(stop).clicked() {
-                                        actions.push(AppAction::CancelAgent);
-                                    }
-                                } else {
-                                    let (fill, ink) = if send_enabled {
-                                        (pal.accent, Color32::WHITE)
-                                    } else {
-                                        (pal.neutral_overlay(16), pal.text_tertiary)
-                                    };
-                                    let button = Button::new(
-                                        RichText::new(egui_phosphor::regular::ARROW_UP).color(ink),
-                                    )
-                                    .fill(fill)
-                                    .corner_radius(CornerRadius::same(inner_radius))
-                                    .min_size(egui::vec2(BUTTON_SIZE, BUTTON_SIZE));
-                                    if ui.add_enabled(send_enabled, button).clicked() {
-                                        send = true;
-                                    }
-                                }
-                            });
-                        });
-                    });
-                composer_rect = response.response.rect;
-            });
-            if composer_focused {
-                ui.painter().rect_stroke(
-                    composer_rect,
-                    CornerRadius::same(composer_radius),
-                    Stroke::new(1.0, pal.accent),
-                    egui::StrokeKind::Inside,
-                );
-                ui.ctx()
-                    .request_repaint_after(std::time::Duration::from_millis(500));
-            }
-            if send_enabled && send {
-                let message = state.ui.agent.input.trim().to_string();
-                if !message.is_empty() {
-                    actions.push(AppAction::SendAgentMessage(message));
-                    state.ui.agent.input.clear();
-                }
-            }
+            render_assistant_composer(state, ui, actions, &pal, &running_jobs, &queued);
 
             ui.add_space(COMPOSER_BOTTOM_PAD);
         },
@@ -511,7 +433,7 @@ fn approval_row_height(command: &str, panel_width: f32) -> f32 {
     74.0 + command_lines.max(1.0) * 22.0
 }
 
-fn assistant_inset_row<R>(
+pub(crate) fn assistant_inset_row<R>(
     ui: &mut egui::Ui,
     height: f32,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,

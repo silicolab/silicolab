@@ -3,14 +3,20 @@ use super::*;
 use eframe::egui;
 
 use crate::backend::entries::EntryOrigin;
-use crate::frontend::agent::session::AgentPhase;
+use crate::frontend::agent::session::{AssistantConversationId, PendingTurn, TranscriptEntry};
 use crate::frontend::jobs::{
     AgentHeavyJob, DockingWorkerMessage, EngineWorkerMessage, QmWorkerMessage, RunningDockingJob,
-    RunningEngineJob, RunningQmJob, spawn_docking_job, spawn_gromacs_pipeline_job, spawn_qm_job,
+    RunningEngineJob, RunningQmJob, TrackedAgentJob, spawn_docking_job, spawn_gromacs_pipeline_job,
+    spawn_qm_job,
 };
 use crate::frontend::state::AppState;
 use crate::io::llm::types::ToolCall;
 use crate::io::structure_io::default_structure_save_path;
+
+/// Most heavy jobs the agent may have running at once. Serialized to one by
+/// default to bound memory — a ~21-atom QM run can already cost ~19 GB — so a
+/// second launch is refused with a "wait" result rather than risking an OOM.
+const MAX_AGENT_HEAVY: usize = 1;
 
 /// Heavy compute commands the agent runs off the UI thread.
 #[derive(Clone, Copy)]
@@ -41,23 +47,47 @@ pub fn heavy_kind_of(call: &ToolCall) -> Option<HeavyKind> {
     }
 }
 
-/// Build the request and spawn a heavy job into the agent-owned slot. On a build
-/// error, records an `is_error` result and returns `false` so the batch
-/// continues; on success returns `true` to pause in `AwaitingHeavyJob`.
-pub fn spawn_heavy(
-    state: &mut AppState,
-    call: &ToolCall,
-    kind: HeavyKind,
-    ctx: &egui::Context,
-) -> bool {
+/// A short human label for a heavy command, e.g. `qm optimize`, `md run`, `dock`.
+fn heavy_label(kind: HeavyKind, command: &str) -> String {
+    let sub = command.split_whitespace().nth(1).unwrap_or("");
+    match kind {
+        HeavyKind::Qm => format!("qm {sub}").trim_end().to_string(),
+        HeavyKind::Md => format!("md {sub}").trim_end().to_string(),
+        HeavyKind::Dock => "dock".to_string(),
+    }
+}
+
+/// Launch a heavy command as a detached background job and record an immediate
+/// "started" tool result, so the model hands control back at once instead of
+/// blocking. Heavy jobs are serialized ([`MAX_AGENT_HEAVY`]): while one runs, a
+/// second launch is refused with a "wait" result. A build error records an
+/// `is_error` result. This never pauses the turn.
+pub fn spawn_heavy(state: &mut AppState, call: &ToolCall, kind: HeavyKind, ctx: &egui::Context) {
     let command = call
         .input
         .get("command")
         .and_then(|value| value.as_str())
         .unwrap_or_default()
         .to_string();
+    let label = heavy_label(kind, &command);
+
+    if state.jobs.agent_jobs.len() >= MAX_AGENT_HEAVY {
+        // Global cap across the whole app (memory safety), so don't promise a
+        // per-turn follow-up here — another conversation's job may hold the slot.
+        record_result(
+            state,
+            call,
+            format!(
+                "Only one heavy computation can run at a time, and one is already \
+                 running. Try `{command}` again once it finishes."
+            ),
+            false,
+        );
+        return;
+    }
+
     let words: Vec<String> = command.split_whitespace().map(str::to_string).collect();
-    let args = &words[1..]; // drop the `md` / `qm` verb
+    let args = &words[1..]; // drop the `md` / `qm` / `dock` verb
 
     let spawned: Result<AgentHeavyJob, String> = match kind {
         HeavyKind::Qm => crate::frontend::qm_commands::build_agent_qm_request(state, args)
@@ -78,14 +108,30 @@ pub fn spawn_heavy(
 
     match spawned {
         Ok(job) => {
-            state.jobs.agent_heavy = Some(job);
-            state.ui.agent.phase = AgentPhase::AwaitingHeavyJob;
+            let id = state.jobs.next_agent_job_id;
+            state.jobs.next_agent_job_id += 1;
+            let conversation = state.ui.agent.active_conversation;
+            state.jobs.agent_jobs.push(TrackedAgentJob {
+                id,
+                conversation,
+                label: label.clone(),
+                job,
+            });
+            record_result(
+                state,
+                call,
+                format!(
+                    "Started background job #{id} ({label}). It runs off-thread; you will \
+                     get a follow-up message when it finishes. You may keep talking to the \
+                     user in the meantime."
+                ),
+                false,
+            );
             notice(
                 state,
-                &format!("Running `{command}` off-thread; press Esc to cancel."),
+                &format!("Started `{command}` as background job #{id}."),
             );
             ctx.request_repaint_after(AGENT_POLL);
-            true
         }
         Err(reason) => {
             record_result(
@@ -94,40 +140,110 @@ pub fn spawn_heavy(
                 format!("could not start `{command}`: {reason}"),
                 true,
             );
-            false
         }
     }
 }
 
-/// Drain the in-flight heavy job (called from `poll_jobs`). Esc cancels it and
-/// the agent turn.
-pub fn poll_agent_heavy(state: &mut AppState, ctx: &egui::Context) {
-    let Some(job) = state.jobs.agent_heavy.take() else {
-        return;
-    };
-    if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-        job.cancel();
-        fill_pending_tool_entry(state, "Cancelled.", true);
-        state.ui.agent.pending_calls.clear();
-        state.ui.agent.collected_results.clear();
-        notice(state, "Cancelled.");
-        state.ui.agent.phase = AgentPhase::Idle;
-        ctx.request_repaint();
+/// Drain every background job (called from `poll_jobs`). A completion adds its
+/// result to the workspace, posts a notice to the originating conversation, and
+/// enqueues a `JobDone` to wake the model; survivors keep polling. After a
+/// completion the queue is pumped, so an idle agent auto-continues the workflow.
+pub fn poll_agent_jobs(state: &mut AppState, ctx: &egui::Context) {
+    if state.jobs.agent_jobs.is_empty() {
         return;
     }
-    match job {
-        AgentHeavyJob::Qm(running) => poll_heavy_qm(state, running, ctx),
-        AgentHeavyJob::Engine(running) => poll_heavy_engine(state, running, ctx),
-        AgentHeavyJob::Docking(running) => poll_heavy_docking(state, running, ctx),
+    let jobs = std::mem::take(&mut state.jobs.agent_jobs);
+    let mut survivors = Vec::with_capacity(jobs.len());
+    let mut any_completed = false;
+    for mut tracked in jobs {
+        let completion = match &mut tracked.job {
+            AgentHeavyJob::Qm(running) => drain_qm(state, running),
+            AgentHeavyJob::Engine(running) => drain_engine(state, running),
+            AgentHeavyJob::Docking(running) => drain_docking(state, running),
+        };
+        match completion {
+            Some((summary, is_error)) => {
+                finish_agent_job(state, &tracked, summary, is_error);
+                any_completed = true;
+            }
+            None => survivors.push(tracked),
+        }
+    }
+    state.jobs.agent_jobs = survivors;
+    if !state.jobs.agent_jobs.is_empty() {
+        ctx.request_repaint_after(AGENT_POLL);
+    }
+    if any_completed {
+        // A finished job enqueued a `JobDone`; wake the model if it is idle.
+        pump_queue(state, ctx);
     }
 }
 
-fn poll_heavy_docking(state: &mut AppState, running: RunningDockingJob, ctx: &egui::Context) {
-    let mut completion: Option<(String, bool)> = None;
+/// Cancel one background job by id (composer running-jobs ✕). Leaves a notice in
+/// the originating conversation; a no-op if the id is unknown.
+pub fn cancel_agent_job(state: &mut AppState, id: u64) {
+    let Some(pos) = state.jobs.agent_jobs.iter().position(|job| job.id == id) else {
+        return;
+    };
+    let tracked = state.jobs.agent_jobs.remove(pos);
+    tracked.job.cancel();
+    if let Some(conversation) = state.ui.agent.conversation_mut(tracked.conversation) {
+        conversation
+            .transcript
+            .push(TranscriptEntry::Notice(format!(
+                "Cancelled background job #{id} ({}).",
+                tracked.label
+            )));
+    }
+}
+
+/// Cancel and remove every background job belonging to `conversation`, returning
+/// how many were stopped. Used when the user Stops the agent or deletes a chat, so
+/// detached workers and their orphaned results don't linger.
+pub fn cancel_conversation_jobs(
+    state: &mut AppState,
+    conversation: AssistantConversationId,
+) -> usize {
+    let mut cancelled = 0;
+    state.jobs.agent_jobs.retain(|job| {
+        if job.conversation == conversation {
+            job.job.cancel();
+            cancelled += 1;
+            false
+        } else {
+            true
+        }
+    });
+    cancelled
+}
+
+/// Route a finished job to the conversation that launched it: a transcript
+/// notice the user can read, plus a `JobDone` in that conversation's queue so the
+/// model is woken to continue (e.g. optimize → frequencies).
+fn finish_agent_job(
+    state: &mut AppState,
+    tracked: &TrackedAgentJob,
+    summary: String,
+    is_error: bool,
+) {
+    let verb = if is_error { "failed" } else { "finished" };
+    let note = format!("Background job #{} ({}) {verb}.", tracked.id, tracked.label);
+    if let Some(conversation) = state.ui.agent.conversation_mut(tracked.conversation) {
+        conversation.transcript.push(TranscriptEntry::Notice(note));
+        conversation.queued.push_back(PendingTurn::JobDone {
+            label: tracked.label.clone(),
+            summary,
+            is_error,
+        });
+    }
+}
+
+fn drain_docking(state: &mut AppState, running: &RunningDockingJob) -> Option<(String, bool)> {
+    let mut completion = None;
     while let Ok(message) = running.receiver.try_recv() {
         match message {
             DockingWorkerMessage::Progress { stage } => {
-                state.set_message(format!("Docking: {stage}; press Esc to stop"));
+                state.set_message(format!("Docking: {stage}; running in background"));
             }
             DockingWorkerMessage::Finished(outcome) => {
                 let outcome = *outcome;
@@ -140,21 +256,15 @@ fn poll_heavy_docking(state: &mut AppState, running: RunningDockingJob, ctx: &eg
             }
         }
     }
-    match completion {
-        Some((summary, is_error)) => heavy_complete(state, summary, is_error, ctx),
-        None => {
-            state.jobs.agent_heavy = Some(AgentHeavyJob::Docking(running));
-            ctx.request_repaint_after(AGENT_POLL);
-        }
-    }
+    completion
 }
 
-fn poll_heavy_qm(state: &mut AppState, running: RunningQmJob, ctx: &egui::Context) {
-    let mut completion: Option<(String, bool)> = None;
+fn drain_qm(state: &mut AppState, running: &RunningQmJob) -> Option<(String, bool)> {
+    let mut completion = None;
     while let Ok(message) = running.receiver.try_recv() {
         match message {
             QmWorkerMessage::Progress { stage } => {
-                state.set_message(format!("QM: {stage}; press Esc to stop"));
+                state.set_message(format!("QM: {stage}; running in background"));
             }
             QmWorkerMessage::Finished(outcome) => {
                 let outcome = *outcome;
@@ -174,17 +284,11 @@ fn poll_heavy_qm(state: &mut AppState, running: RunningQmJob, ctx: &egui::Contex
             }
         }
     }
-    match completion {
-        Some((summary, is_error)) => heavy_complete(state, summary, is_error, ctx),
-        None => {
-            state.jobs.agent_heavy = Some(AgentHeavyJob::Qm(running));
-            ctx.request_repaint_after(AGENT_POLL);
-        }
-    }
+    completion
 }
 
-fn poll_heavy_engine(state: &mut AppState, mut running: RunningEngineJob, ctx: &egui::Context) {
-    let mut completion: Option<(String, bool)> = None;
+fn drain_engine(state: &mut AppState, running: &mut RunningEngineJob) -> Option<(String, bool)> {
+    let mut completion = None;
     while let Ok(message) = running.receiver.try_recv() {
         match message {
             EngineWorkerMessage::Stage(stage) => {
@@ -214,22 +318,5 @@ fn poll_heavy_engine(state: &mut AppState, mut running: RunningEngineJob, ctx: &
             }
         }
     }
-    match completion {
-        Some((summary, is_error)) => heavy_complete(state, summary, is_error, ctx),
-        None => {
-            state.jobs.agent_heavy = Some(AgentHeavyJob::Engine(running));
-            ctx.request_repaint_after(AGENT_POLL);
-        }
-    }
-}
-
-/// Record the heavy job's result against the front (awaiting) call, then resume
-/// the tool batch.
-fn heavy_complete(state: &mut AppState, summary: String, is_error: bool, ctx: &egui::Context) {
-    if let Some(call) = state.ui.agent.pending_calls.front().cloned() {
-        record_result(state, &call, summary, is_error);
-        state.ui.agent.pending_calls.pop_front();
-    }
-    state.ui.agent.phase = AgentPhase::ExecutingTools;
-    run_tool_batch(state, ctx);
+    completion
 }

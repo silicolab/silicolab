@@ -270,6 +270,10 @@ pub enum AppAction {
     ApproveToolCall(String),
     /// Reject the gated tool call with this id (the model gets an error result).
     RejectToolCall(String),
+    /// Drop the queued (type-ahead) assistant follow-up message at this index.
+    RemoveQueuedAgentInput(usize),
+    /// Cancel the running background (qm/md/dock) agent job with this id.
+    CancelAgentJob(u64),
     /// Switch the active assistant provider + model and persist.
     SwitchProviderModel {
         provider: String,

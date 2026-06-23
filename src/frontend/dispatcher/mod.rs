@@ -304,7 +304,7 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
             crate::frontend::agent::new_assistant_conversation(state)
         }
         AppAction::SwitchAssistantConversation(id) => {
-            crate::frontend::agent::switch_assistant_conversation(state, id)
+            crate::frontend::agent::switch_assistant_conversation(state, id, ctx)
         }
         AppAction::RenameAssistantConversation { id, title } => {
             crate::frontend::agent::rename_assistant_conversation(state, id, &title)
@@ -317,6 +317,10 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
             crate::frontend::agent::approve_tool_call(state, &id, ctx)
         }
         AppAction::RejectToolCall(id) => crate::frontend::agent::reject_tool_call(state, &id, ctx),
+        AppAction::RemoveQueuedAgentInput(index) => {
+            crate::frontend::agent::remove_queued_agent_input(state, index)
+        }
+        AppAction::CancelAgentJob(id) => crate::frontend::agent::cancel_agent_job(state, id),
         AppAction::SwitchProviderModel { provider, model } => {
             crate::frontend::agent::switch_provider_model(state, &provider, &model)
         }

@@ -22,24 +22,22 @@ pub fn run_tool_batch(state: &mut AppState, ctx: &egui::Context) {
             ctx.request_repaint();
             return;
         }
-        if dispatch_call(state, &call, ctx) {
-            // A heavy job was spawned; the batch pauses until it completes.
-            return;
-        }
+        dispatch_call(state, &call, ctx);
         state.ui.agent.pending_calls.pop_front();
     }
 }
 
-/// Execute a call inline, or spawn it as a heavy off-thread job. Returns `true`
-/// when a heavy job was spawned (the batch pauses in `AwaitingHeavyJob`).
-pub fn dispatch_call(state: &mut AppState, call: &ToolCall, ctx: &egui::Context) -> bool {
+/// Execute a call inline, or launch it as a detached background job. Heavy jobs
+/// no longer pause the batch — `spawn_heavy` records a "started" result and the
+/// computation runs off-thread, reporting back later through the queue.
+pub fn dispatch_call(state: &mut AppState, call: &ToolCall, ctx: &egui::Context) {
     push_tool_call_entry(state, call);
     if let Some(kind) = heavy_kind_of(call) {
-        return spawn_heavy(state, call, kind, ctx);
+        spawn_heavy(state, call, kind, ctx);
+        return;
     }
     let outcome = tools::execute_tool(state, call);
     record_result(state, call, outcome.content, outcome.is_error);
-    false
 }
 
 fn push_tool_call_entry(state: &mut AppState, call: &ToolCall) {
@@ -102,9 +100,7 @@ pub fn approve_tool_call(state: &mut AppState, id: &str, ctx: &egui::Context) {
         return;
     }
     state.ui.agent.phase = AgentPhase::ExecutingTools;
-    if dispatch_call(state, &front, ctx) {
-        return; // spawned a heavy job; resumes when it completes
-    }
+    dispatch_call(state, &front, ctx);
     state.ui.agent.pending_calls.pop_front();
     run_tool_batch(state, ctx);
 }

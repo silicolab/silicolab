@@ -212,7 +212,7 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     poll_remote_submit(state, ctx);
     poll_remote_jobs_refresh(state, ctx);
     crate::frontend::agent::poll_agent_turn(state, ctx);
-    crate::frontend::agent::poll_agent_heavy(state, ctx);
+    crate::frontend::agent::poll_agent_jobs(state, ctx);
     crate::frontend::agent::poll_model_fetch(state, ctx);
 }
 

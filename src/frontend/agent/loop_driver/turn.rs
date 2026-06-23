@@ -5,14 +5,15 @@ use std::sync::atomic::Ordering;
 use eframe::egui;
 
 use crate::frontend::agent::registry;
-use crate::frontend::agent::session::{AgentPhase, TranscriptEntry};
+use crate::frontend::agent::session::{AgentPhase, PendingTurn, TranscriptEntry};
 use crate::frontend::agent::tools;
 use crate::frontend::jobs::{AgentTurnEvent, spawn_agent_turn};
 use crate::frontend::state::AppState;
 use crate::io::llm::types::{AssistantTurn, ChatMessage, LlmConfig, LlmError, StopReason};
 
-/// Start an agent exchange from a user message. Validates the provider/key,
-/// appends the user turn, and spawns the first model turn.
+/// Handle a user message. Idle → start a turn immediately; busy or paused on
+/// approval → queue it (type-ahead) so `pump_queue` sends it once the agent is
+/// free, instead of dropping it.
 pub fn send_agent_message(state: &mut AppState, text: &str, ctx: &egui::Context) {
     let text = text.trim();
     if text.is_empty() {
@@ -25,9 +26,27 @@ pub fn send_agent_message(state: &mut AppState, text: &str, ctx: &egui::Context)
         );
         return;
     }
-    if state.ui.agent.is_busy() || state.ui.agent.pending_approval().is_some() {
+    // Busy, paused on approval, or a follow-up is already queued (e.g. a finished
+    // job's wake): enqueue so FIFO order holds, then pump in case we are idle.
+    if state.ui.agent.is_busy()
+        || state.ui.agent.pending_approval().is_some()
+        || !state.ui.agent.queued.is_empty()
+    {
+        state
+            .ui
+            .agent
+            .queued
+            .push_back(PendingTurn::UserMessage(text.to_string()));
+        pump_queue(state, ctx);
         return;
     }
+    begin_user_turn(state, text, ctx);
+}
+
+/// Record a user message into history + transcript and spawn its first model
+/// turn. Shared by the immediate send and the queue pump; surfaces a missing
+/// key / bad provider without mutating history.
+fn begin_user_turn(state: &mut AppState, text: &str, ctx: &egui::Context) {
     // Surface a missing key / bad provider up front, before recording the turn.
     if let Err(reason) = registry::build_provider(&state.config.assistant) {
         notice(state, &reason);
@@ -102,6 +121,7 @@ pub fn poll_agent_turn(state: &mut AppState, ctx: &egui::Context) {
         job.cancel.store(true, Ordering::Relaxed);
         // Drop the handle; a late worker result lands on a closed channel.
         state.ui.agent.streaming_text.clear();
+        discard_queued(state, "the turn was cancelled");
         notice(state, "Cancelled.");
         state.ui.agent.phase = AgentPhase::Idle;
         ctx.request_repaint();
@@ -127,6 +147,7 @@ pub fn poll_agent_turn(state: &mut AppState, ctx: &egui::Context) {
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 state.ui.agent.streaming_text.clear();
+                discard_queued(state, "the turn ended early");
                 notice(state, "Assistant worker stopped unexpectedly.");
                 state.ui.agent.phase = AgentPhase::Idle;
                 ctx.request_repaint();
@@ -149,11 +170,20 @@ pub fn handle_turn_result(
             let message = error.user_message();
             notice(state, &format!("Assistant error: {message}"));
             state.output_log.push(format!("assistant error: {message}"));
-            state.ui.agent.phase = if matches!(error, LlmError::Cancelled) {
+            let cancelled = matches!(error, LlmError::Cancelled);
+            state.ui.agent.phase = if cancelled {
                 AgentPhase::Idle
             } else {
                 AgentPhase::Done
             };
+            discard_queued(
+                state,
+                if cancelled {
+                    "the turn was cancelled"
+                } else {
+                    "the turn failed"
+                },
+            );
             ctx.request_repaint();
             return;
         }
@@ -194,21 +224,107 @@ pub fn handle_turn_result(
         }
         state.ui.agent.phase = AgentPhase::Done;
         ctx.request_repaint();
+        // Send a follow-up the user queued while this turn was running.
+        pump_queue(state, ctx);
     }
 }
 
-/// Cancel the assistant: stop the in-flight turn and any pending batch.
+/// Dispatch the next queued follow-up when the agent is at rest. One at a time:
+/// beginning a turn flips `phase` to `AwaitingModel`, so a single call starts at
+/// most one. Called after a turn completes, a background job finishes, or the
+/// user switches back to a conversation with a pending follow-up.
+pub fn pump_queue(state: &mut AppState, ctx: &egui::Context) {
+    if state.ui.agent.is_busy()
+        || state.ui.agent.pending_approval().is_some()
+        || state.jobs.agent.is_some()
+    {
+        return;
+    }
+    let Some(item) = state.ui.agent.queued.pop_front() else {
+        return;
+    };
+    match item {
+        PendingTurn::UserMessage(text) => begin_user_turn(state, &text, ctx),
+        PendingTurn::JobDone {
+            label,
+            summary,
+            is_error,
+        } => begin_job_followup(state, &label, &summary, is_error, ctx),
+    }
+}
+
+/// Wake the model after a background job finished: record a synthetic user turn
+/// describing the result, then spawn the model turn so it continues the workflow
+/// (e.g. optimize → frequencies). Surfaces a provider error without mutating
+/// history, mirroring [`begin_user_turn`].
+fn begin_job_followup(
+    state: &mut AppState,
+    label: &str,
+    summary: &str,
+    is_error: bool,
+    ctx: &egui::Context,
+) {
+    if let Err(reason) = registry::build_provider(&state.config.assistant) {
+        notice(state, &reason);
+        return;
+    }
+    state.ui.agent.truncate_to_resumable();
+    let text = job_followup_text(label, summary, is_error);
+    state.ui.agent.history.push(ChatMessage::user_text(&text));
+    state.ui.agent.iterations = 0;
+    spawn_next_turn(state, ctx);
+}
+
+/// The synthetic user message handed to the model when a background job finishes.
+fn job_followup_text(label: &str, summary: &str, is_error: bool) -> String {
+    let verb = if is_error { "failed" } else { "finished" };
+    format!(
+        "[Background job] The `{label}` computation {verb}. Result:\n{summary}\n\n\
+         Continue the task: report this to the user concisely, then take the next step \
+         if there is one — otherwise stop."
+    )
+}
+
+/// Drop queued type-ahead *messages* when a turn is cancelled or fails — they
+/// were predicated on the current work completing. A `JobDone` is kept: a
+/// background computation that already finished (and applied its result to the
+/// workspace) still deserves to be reported, so it survives to fire later.
+fn discard_queued(state: &mut AppState, why: &str) {
+    let before = state.ui.agent.queued.len();
+    state
+        .ui
+        .agent
+        .queued
+        .retain(|item| matches!(item, PendingTurn::JobDone { .. }));
+    let dropped = before - state.ui.agent.queued.len();
+    if dropped > 0 {
+        notice(
+            state,
+            &format!("Discarded {dropped} queued message(s) — {why}."),
+        );
+    }
+}
+
+/// Drop the queued follow-up at `index` (composer ✕ button); no-op out of range.
+pub fn remove_queued_agent_input(state: &mut AppState, index: usize) {
+    state.ui.agent.remove_queued(index);
+}
+
+/// Cancel the assistant: stop the in-flight model turn and pending tool batch,
+/// cancel the active conversation's background jobs (so a late completion can't
+/// re-wake the model after the user stopped), and drop queued type-ahead
+/// messages. Individual jobs can still be cancelled from the running-jobs strip.
 pub fn cancel_agent(state: &mut AppState, ctx: &egui::Context) {
     if let Some(job) = state.jobs.agent.take() {
         job.cancel.store(true, Ordering::Relaxed);
     }
-    if let Some(job) = state.jobs.agent_heavy.take() {
-        job.cancel();
-    }
+    let active = state.ui.agent.active_conversation;
+    let cancelled_jobs = cancel_conversation_jobs(state, active);
     fill_pending_tool_entry(state, "Cancelled.", true);
     state.ui.agent.pending_calls.clear();
     state.ui.agent.collected_results.clear();
-    if state.ui.agent.phase != AgentPhase::Idle {
+    discard_queued(state, "the turn was cancelled");
+    if state.ui.agent.phase != AgentPhase::Idle || cancelled_jobs > 0 {
         notice(state, "Cancelled.");
     }
     state.ui.agent.phase = AgentPhase::Idle;
