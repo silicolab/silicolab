@@ -375,12 +375,16 @@ pub(crate) fn render_md_run_task_panel(
         }
 
         ui.separator();
-        // The execution target sits right above the Run button — the two are
-        // closely related, so the choice is prompted right where the run starts.
+        // The execution controls sit right above the Run button — target plus the
+        // CPU/GPU envelope, which the GROMACS mdrun stages honour (local and relay).
         execution_section(
             ui,
             &mut prompt.prefs,
-            crate::frontend::state::ExecutionCaps::default(),
+            crate::frontend::state::ExecutionCaps {
+                cores: true,
+                gpu: true,
+                ..Default::default()
+            },
             &hosts,
             actions,
         );

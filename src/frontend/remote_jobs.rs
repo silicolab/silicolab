@@ -739,6 +739,7 @@ AR  8
             }],
             max_duration_per_stage: Duration::from_secs(120),
             freeze: None,
+            resources: Default::default(),
         });
 
         let run_uuid = uuid::Uuid::new_v4().to_string();

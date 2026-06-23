@@ -33,7 +33,7 @@ use crate::{
             topology::TopologySource,
         },
         process::{self, ProcessConfig, ProcessEventKind},
-        remote::Compute,
+        remote::{Compute, ComputeResources},
     },
 };
 
@@ -392,15 +392,7 @@ where
     let mdrun = run_subprocess(
         request.compute.launch.to_process_config(
             working_dir.clone(),
-            [
-                "mdrun".to_string(),
-                "-deffnm".to_string(),
-                stage.clone(),
-                "-c".to_string(),
-                out_name.clone(),
-                "-nt".to_string(),
-                "1".to_string(),
-            ],
+            mdrun_args(&stage, &out_name, request.compute.resources),
             Some(remaining),
         ),
         Arc::clone(&cancel),
@@ -491,6 +483,45 @@ where
     }
 
     Ok(results)
+}
+
+/// Assemble the `gmx mdrun` argument vector from the requested resources. With no
+/// explicit request (`cores`/`gpu` both 0) it emits only the I/O flags and lets gmx
+/// pick its own thread/GPU defaults (its all-cores, auto-GPU behaviour). A GPU
+/// request offloads the nonbonded, PME, bonded, and update work and runs one
+/// thread-MPI rank per GPU — adding a dedicated PME rank once there is more than
+/// one (GPU PME requires `-npme 1`) and letting gmx map ranks to the available
+/// GPUs. A CPU-only core request maps to `-nt`; under a GPU rank cores map to
+/// `-ntomp`.
+fn mdrun_args(stage: &str, out_name: &str, resources: ComputeResources) -> Vec<String> {
+    let mut args = vec![
+        "mdrun".to_string(),
+        "-deffnm".to_string(),
+        stage.to_string(),
+        "-c".to_string(),
+        out_name.to_string(),
+    ];
+    if resources.gpu >= 1 {
+        args.extend(["-ntmpi".to_string(), resources.gpu.to_string()]);
+        args.extend(
+            [
+                "-nb", "gpu", "-pme", "gpu", "-bonded", "gpu", "-update", "gpu",
+            ]
+            .map(String::from),
+        );
+        if resources.gpu > 1 {
+            // GPU PME across multiple ranks needs one dedicated PME rank; gmx maps
+            // the ranks onto the available GPUs itself. We deliberately do not emit
+            // `-gpu_id` — its single-digit-per-device form can't express ids >= 10.
+            args.extend(["-npme".to_string(), "1".to_string()]);
+        }
+        if resources.cores > 0 {
+            args.extend(["-ntomp".to_string(), resources.cores.to_string()]);
+        }
+    } else if resources.cores > 0 {
+        args.extend(["-nt".to_string(), resources.cores.to_string()]);
+    }
+    args
 }
 
 /// Assemble the `gmx grompp` argument vector. The optional `-t` (continuation
@@ -744,6 +775,48 @@ mod tests {
 
     use super::*;
     use crate::domain::{Atom, UnitCell};
+
+    #[test]
+    fn mdrun_args_map_resources_to_gmx_flags() {
+        let args = |cores, gpu| mdrun_args("nvt", "out.gro", ComputeResources { cores, gpu });
+        let has =
+            |a: &[String], flag: &str, val: &str| a.windows(2).any(|w| w[0] == flag && w[1] == val);
+
+        // No request -> just the I/O flags; gmx picks its own threads/GPU.
+        let auto = args(0, 0);
+        assert!(auto.contains(&"-deffnm".to_string()));
+        assert!(
+            !auto
+                .iter()
+                .any(|a| a == "-nt" || a == "-ntmpi" || a == "-nb")
+        );
+
+        // CPU-only core request -> -nt N, no GPU offload.
+        let cpu = args(6, 0);
+        assert!(has(&cpu, "-nt", "6"));
+        assert!(!cpu.iter().any(|a| a == "-nb"));
+
+        // Single GPU -> one rank, full offload, cores as OpenMP threads, no PME rank.
+        let gpu1 = args(8, 1);
+        assert!(has(&gpu1, "-ntmpi", "1"));
+        assert!(has(&gpu1, "-nb", "gpu"));
+        assert!(has(&gpu1, "-update", "gpu"));
+        assert!(has(&gpu1, "-ntomp", "8"));
+        assert!(!gpu1.iter().any(|a| a == "-npme"));
+        assert!(!gpu1.iter().any(|a| a == "-nt"));
+
+        // Multiple GPUs -> rank per GPU plus a dedicated PME rank; gmx maps ranks
+        // to GPUs (no -gpu_id pin, which can't express device ids >= 10).
+        let gpu2 = args(0, 2);
+        assert!(has(&gpu2, "-ntmpi", "2"));
+        assert!(has(&gpu2, "-npme", "1"));
+        assert!(!gpu2.iter().any(|a| a == "-gpu_id"));
+
+        // A many-GPU request stays well-formed (no malformed concatenated ids).
+        let gpu12 = args(0, 12);
+        assert!(has(&gpu12, "-ntmpi", "12"));
+        assert!(!gpu12.iter().any(|a| a == "-gpu_id"));
+    }
 
     #[test]
     fn extract_fatal_error_pulls_block_even_when_progress_trails_it() {
