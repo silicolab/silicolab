@@ -35,19 +35,43 @@ use crate::engines::process::{self, ProcessConfig};
 use crate::engines::registry::EngineLaunch;
 use crate::hosts::RemoteHost;
 
-/// How to invoke `gmx`: the launch descriptor threaded through the GROMACS
-/// pipeline so a run and its launch travel together. `gmx` always runs as a local
-/// subprocess of whichever host executes the pipeline — the laptop for a local
-/// run, the compute node for a relayed remote run — so there is no transport here.
+/// CPU/GPU resources a `gmx mdrun` subprocess may use, mapped to mdrun flags by
+/// the runner. `0` means "let gmx decide" (its own default — all cores / detected
+/// GPUs), preserving the prior behaviour for an untouched run. Serializable so a
+/// relayed remote job carries the request to the worker.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
+pub struct ComputeResources {
+    /// CPU threads for the mdrun (`-nt`, or `-ntomp` under a GPU rank); `0` = gmx
+    /// default (all available cores).
+    pub cores: u32,
+    /// GPUs to offload to (`-ntmpi`/`-nb gpu`…); `0` = none / gmx auto-detect.
+    pub gpu: u32,
+}
+
+/// How to invoke `gmx`: the launch descriptor (and the resource envelope) threaded
+/// through the GROMACS pipeline so a run and its launch travel together. `gmx`
+/// always runs as a local subprocess of whichever host executes the pipeline — the
+/// laptop for a local run, the compute node for a relayed remote run — so there is
+/// no transport here.
 #[derive(Debug, Clone)]
 pub struct Compute {
     pub launch: EngineLaunch,
+    pub resources: ComputeResources,
 }
 
 impl Compute {
-    /// Run `gmx` as a local subprocess with this launch.
+    /// Run `gmx` as a local subprocess with this launch, letting gmx pick its own
+    /// CPU/GPU defaults.
     pub fn local(launch: EngineLaunch) -> Self {
-        Self { launch }
+        Self {
+            launch,
+            resources: ComputeResources::default(),
+        }
+    }
+
+    /// Run `gmx` locally with an explicit CPU/GPU resource request.
+    pub fn local_with_resources(launch: EngineLaunch, resources: ComputeResources) -> Self {
+        Self { launch, resources }
     }
 }
 

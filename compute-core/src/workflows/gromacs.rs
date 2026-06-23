@@ -29,7 +29,7 @@ use crate::engines::gromacs::{
     build_material_system, build_system, prepare_system, run_pipeline,
 };
 use crate::engines::registry::detect_local_gromacs;
-use crate::engines::remote::{Compute, GMX_REMOTE_CANDIDATES};
+use crate::engines::remote::{Compute, ComputeResources, GMX_REMOTE_CANDIDATES};
 use crate::workflows::molecular_dynamics::{
     FrameworkMode, MdSystemConfig, MdSystemContext, SolvationOptions, WaterModel,
 };
@@ -58,6 +58,9 @@ pub struct GromacsRunRequest {
     pub stages: Vec<StageSpec>,
     pub max_duration_per_stage: Duration,
     pub freeze: Option<FreezeSelection>,
+    /// CPU/GPU envelope for this run's mdrun stages (default = gmx's own picks).
+    #[serde(default)]
+    pub resources: ComputeResources,
 }
 
 /// A biomolecular system build (`pdb2gmx` → `editconf` → `solvate`/`genion`).
@@ -194,14 +197,28 @@ pub fn run_gromacs_calculation(
     let launch = detect_local_gromacs().ok_or_else(|| {
         anyhow!("no working `gmx` found on this host (tried {GMX_REMOTE_CANDIDATES:?}); check the host prelude")
     })?;
-    let compute = Compute::local(launch);
     let working_dir = std::env::current_dir().context("resolving the run working directory")?;
     match job {
-        GromacsJob::Run(request) => run_relay(request, compute, working_dir, cancel, progress),
-        GromacsJob::Build(request) => build_relay(request, compute, working_dir, cancel, progress),
-        GromacsJob::BuildMaterial(request) => {
-            material_relay(request, compute, working_dir, cancel, progress)
+        // Only the run pipeline carries an explicit resource request (the build's
+        // light minimization keeps gmx's defaults).
+        GromacsJob::Run(request) => {
+            let compute = Compute::local_with_resources(launch, request.resources);
+            run_relay(request, compute, working_dir, cancel, progress)
         }
+        GromacsJob::Build(request) => build_relay(
+            request,
+            Compute::local(launch),
+            working_dir,
+            cancel,
+            progress,
+        ),
+        GromacsJob::BuildMaterial(request) => material_relay(
+            request,
+            Compute::local(launch),
+            working_dir,
+            cancel,
+            progress,
+        ),
     }
 }
 

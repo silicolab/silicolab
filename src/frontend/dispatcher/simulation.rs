@@ -78,6 +78,10 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
                 stages,
                 max_duration_per_stage: Duration::from_secs(60 * 60),
                 freeze: framework_freeze,
+                resources: crate::engines::remote::ComputeResources {
+                    cores: prompt.prefs.cores_per_subtask,
+                    gpu: prompt.prefs.gpu_count,
+                },
             },
         );
         state.optimization_origin = None;
@@ -85,12 +89,17 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
         relay_gromacs_job(state, host, prompt.engine.label(), job);
         return;
     }
-    let compute = match resolve_md_compute(state, prompt.engine) {
+    let mut compute = match resolve_md_compute(state, prompt.engine) {
         Ok(compute) => compute,
         Err(error) => {
             state.set_message(error.to_string());
             return;
         }
+    };
+    // Local run: apply the panel's CPU/GPU request to the mdrun stages.
+    compute.resources = crate::engines::remote::ComputeResources {
+        cores: prompt.prefs.cores_per_subtask,
+        gpu: prompt.prefs.gpu_count,
     };
 
     let working_dir =

@@ -910,6 +910,7 @@ mod tests {
                 group: "Framework".to_string(),
                 atom_indices: vec![0, 1],
             }),
+            resources: crate::engines::remote::ComputeResources { cores: 4, gpu: 1 },
         })));
         let json = serde_json::to_vec(&request).unwrap();
         let back: EngineRequest = serde_json::from_slice(&json).unwrap();
@@ -924,6 +925,9 @@ mod tests {
             req.freeze.expect("freeze survives").atom_indices,
             vec![0, 1]
         );
+        // The CPU/GPU resource request must survive the wire to the worker.
+        assert_eq!(req.resources.cores, 4);
+        assert_eq!(req.resources.gpu, 1);
     }
 
     #[test]
