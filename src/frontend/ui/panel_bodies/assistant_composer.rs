@@ -62,18 +62,7 @@ pub(crate) fn render_assistant_composer(
             ui.spacing_mut().item_spacing.y = 2.0;
             for (id, label) in running_jobs.iter().take(MAX_QUEUED_SHOWN) {
                 ui.horizontal(|ui| {
-                    if ui
-                        .add(
-                            Button::new(
-                                RichText::new(egui_phosphor::regular::X)
-                                    .small()
-                                    .color(pal.text_tertiary),
-                            )
-                            .frame(false),
-                        )
-                        .on_hover_text("Cancel job")
-                        .clicked()
-                    {
+                    if assistant_remove_button(ui, "Cancel job") {
                         actions.push(AppAction::CancelAgentJob(*id));
                     }
                     ui.add(egui::Spinner::new().size(12.0));
@@ -97,18 +86,7 @@ pub(crate) fn render_assistant_composer(
             ui.spacing_mut().item_spacing.y = 2.0;
             for (idx, text) in queued.iter().enumerate().take(MAX_QUEUED_SHOWN) {
                 ui.horizontal(|ui| {
-                    if ui
-                        .add(
-                            Button::new(
-                                RichText::new(egui_phosphor::regular::X)
-                                    .small()
-                                    .color(pal.text_tertiary),
-                            )
-                            .frame(false),
-                        )
-                        .on_hover_text("Remove from queue")
-                        .clicked()
-                    {
+                    if assistant_remove_button(ui, "Remove from queue") {
                         actions.push(AppAction::RemoveQueuedAgentInput(idx));
                     }
                     ui.add(

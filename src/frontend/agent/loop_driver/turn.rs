@@ -40,6 +40,17 @@ pub fn send_agent_message(state: &mut AppState, text: &str, ctx: &egui::Context)
         pump_queue(state, ctx);
         return;
     }
+    // Reset on this turn-start path, never in render — the Elm flow forbids
+    // mutating state during a render pass.
+    let active = state.ui.agent.active_conversation;
+    let has_jobs = state
+        .jobs
+        .agent_jobs
+        .iter()
+        .any(|job| job.conversation == active);
+    if !has_jobs && state.ui.agent.current_backlog.is_none() {
+        state.ui.agent.clear_completed();
+    }
     begin_user_turn(state, text, ctx);
 }
 
@@ -122,6 +133,7 @@ pub fn poll_agent_turn(state: &mut AppState, ctx: &egui::Context) {
         // Drop the handle; a late worker result lands on a closed channel.
         state.ui.agent.streaming_text.clear();
         discard_queued(state, "the turn was cancelled");
+        state.ui.agent.current_backlog = None;
         notice(state, "Cancelled.");
         state.ui.agent.phase = AgentPhase::Idle;
         ctx.request_repaint();
@@ -148,6 +160,7 @@ pub fn poll_agent_turn(state: &mut AppState, ctx: &egui::Context) {
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                 state.ui.agent.streaming_text.clear();
                 discard_queued(state, "the turn ended early");
+                state.ui.agent.current_backlog = None;
                 notice(state, "Assistant worker stopped unexpectedly.");
                 state.ui.agent.phase = AgentPhase::Idle;
                 ctx.request_repaint();
@@ -184,6 +197,10 @@ pub fn handle_turn_result(
                     "the turn failed"
                 },
             );
+            if let Some(label) = state.ui.agent.current_backlog.take() {
+                let detail = crate::frontend::agent::session::first_nonempty_line(&message);
+                state.ui.agent.push_completed(label, detail, false);
+            }
             ctx.request_repaint();
             return;
         }
@@ -229,6 +246,18 @@ pub fn handle_turn_result(
     }
 }
 
+/// Background jobs running for the active conversation, used to tell whether a
+/// backlog turn handed its work off to one.
+fn conversation_job_count(state: &AppState) -> usize {
+    let active = state.ui.agent.active_conversation;
+    state
+        .jobs
+        .agent_jobs
+        .iter()
+        .filter(|job| job.conversation == active)
+        .count()
+}
+
 /// Dispatch the next queued follow-up when the agent is at rest. One at a time:
 /// beginning a turn flips `phase` to `AwaitingModel`, so a single call starts at
 /// most one. Called after a turn completes, a background job finishes, or the
@@ -240,11 +269,18 @@ pub fn pump_queue(state: &mut AppState, ctx: &egui::Context) {
     {
         return;
     }
+    // Idle past the guard above ⇒ a running backlog turn (if any) has finished.
+    let running_jobs = conversation_job_count(state);
+    state.ui.agent.resolve_current_backlog(running_jobs);
     let Some(item) = state.ui.agent.queued.pop_front() else {
         return;
     };
     match item {
-        PendingTurn::UserMessage(text) => begin_user_turn(state, &text, ctx),
+        PendingTurn::UserMessage(text) => {
+            let baseline = conversation_job_count(state);
+            state.ui.agent.note_backlog_start(text.clone(), baseline);
+            begin_user_turn(state, &text, ctx);
+        }
         PendingTurn::JobDone {
             label,
             summary,
@@ -324,6 +360,7 @@ pub fn cancel_agent(state: &mut AppState, ctx: &egui::Context) {
     state.ui.agent.pending_calls.clear();
     state.ui.agent.collected_results.clear();
     discard_queued(state, "the turn was cancelled");
+    state.ui.agent.current_backlog = None;
     if state.ui.agent.phase != AgentPhase::Idle || cancelled_jobs > 0 {
         notice(state, "Cancelled.");
     }
