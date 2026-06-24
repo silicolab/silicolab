@@ -1,13 +1,14 @@
 use crate::{domain::Structure, frontend::AtomSelection};
 
 use super::{
-    SurfaceCache, SurfaceCacheKey, ViewportVisualState,
+    SecondaryStructureCache, SecondaryStructureCacheKey, SurfaceCache, SurfaceCacheKey,
+    ViewportVisualState,
     camera::Projector,
     render::{
         PickTarget, RenderScene, ScreenDepthBuffer, ViewportGeometry, any_atoms_drawn_as_cartoon,
         any_atoms_drawn_as_surface, build_ball_and_stick_scene, build_biopolymer_cartoon_scene,
-        build_cached_surface_scene, build_cell_scene, build_opaque_depth_buffer,
-        build_surface_scene,
+        build_cached_biopolymer_cartoon_scene, build_cached_surface_scene, build_cell_scene,
+        build_opaque_depth_buffer, build_surface_scene,
     },
 };
 
@@ -23,11 +24,30 @@ pub(super) struct RepresentationComposer<'a> {
     selection: &'a AtomSelection,
     visual_state: &'a ViewportVisualState,
     surface_cache: SurfaceCacheMode<'a>,
+    secondary_cache: SecondaryStructureCacheMode<'a>,
 }
 
+enum SecondaryStructureCacheMode<'a> {
+    Cached(SecondaryStructureCacheContext<'a>),
+    Uncached,
+}
 enum SurfaceCacheMode<'a> {
     Cached(SurfaceCacheContext<'a>),
     Uncached,
+}
+
+pub(super) struct SecondaryStructureCacheContext<'a> {
+    cache: &'a mut SecondaryStructureCache,
+    key: SecondaryStructureCacheKey,
+}
+
+impl<'a> SecondaryStructureCacheContext<'a> {
+    pub(super) fn new(
+        cache: &'a mut SecondaryStructureCache,
+        key: SecondaryStructureCacheKey,
+    ) -> Self {
+        Self { cache, key }
+    }
 }
 
 pub(super) struct SurfaceCacheContext<'a> {
@@ -58,6 +78,7 @@ impl<'a> RepresentationComposer<'a> {
         selection: &'a AtomSelection,
         visual_state: &'a ViewportVisualState,
         cache_context: SurfaceCacheContext<'a>,
+        secondary_context: SecondaryStructureCacheContext<'a>,
     ) -> Self {
         Self {
             structure,
@@ -66,6 +87,7 @@ impl<'a> RepresentationComposer<'a> {
             selection,
             visual_state,
             surface_cache: SurfaceCacheMode::Cached(cache_context),
+            secondary_cache: SecondaryStructureCacheMode::Cached(secondary_context),
         }
     }
 
@@ -83,6 +105,7 @@ impl<'a> RepresentationComposer<'a> {
             selection,
             visual_state,
             surface_cache: SurfaceCacheMode::Uncached,
+            secondary_cache: SecondaryStructureCacheMode::Uncached,
         }
     }
 
@@ -94,6 +117,7 @@ impl<'a> RepresentationComposer<'a> {
             selection,
             visual_state,
             mut surface_cache,
+            secondary_cache,
         } = self;
         let mut scene = RenderScene::default();
 
@@ -116,8 +140,18 @@ impl<'a> RepresentationComposer<'a> {
         // other and the translucent surface by the compositor, and — for the
         // wireframe surface — seed the depth buffer its line runs are clipped
         // against. Nothing here depends on append order any more.
-        let cartoon_scene =
-            draw_cartoon.then(|| build_biopolymer_cartoon_scene(structure, viewport, visual_state));
+        let cartoon_scene = draw_cartoon.then(|| match secondary_cache {
+            SecondaryStructureCacheMode::Cached(context) => build_cached_biopolymer_cartoon_scene(
+                structure,
+                viewport,
+                visual_state,
+                context.cache,
+                context.key,
+            ),
+            SecondaryStructureCacheMode::Uncached => {
+                build_biopolymer_cartoon_scene(structure, viewport, visual_state)
+            }
+        });
         let ball_stick_scene =
             build_ball_and_stick_scene(structure, geometry, viewport, selection, visual_state);
 

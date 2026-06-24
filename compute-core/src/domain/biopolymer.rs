@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 
+use super::structure::Atom;
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResidueId {
     pub chain_id: char,
@@ -27,7 +29,80 @@ pub struct ResidueRecord {
     pub residue_name: String,
     pub atom_indices: Vec<usize>,
     pub alpha_carbon: Option<usize>,
+    pub backbone_nitrogen: Option<usize>,
+    pub backbone_carbon: Option<usize>,
+    /// Optional even for a complete peptide unit: chain termini and coarse inputs
+    /// may omit the carbonyl O. Its presence is what lets the DSSP H-bond
+    /// assignment run.
+    pub backbone_oxygen: Option<usize>,
     pub is_standard_amino_acid: bool,
+}
+
+impl ResidueRecord {
+    /// Whether this residue carries a complete peptide backbone — the amide N,
+    /// the α-carbon, and the carbonyl C. This is the topological prerequisite for
+    /// drawing the residue as a cartoon ribbon: it depends only on which backbone
+    /// atoms are present, never on the residue name, so force-field-protonated,
+    /// disulfide, and otherwise renamed protein residues are recognized exactly
+    /// like their canonical forms. The carbonyl O is deliberately not required —
+    /// chain termini and some coarse inputs omit it.
+    pub fn has_peptide_backbone(&self) -> bool {
+        self.backbone_nitrogen.is_some()
+            && self.alpha_carbon.is_some()
+            && self.backbone_carbon.is_some()
+    }
+
+    /// Whether this residue can contribute one C-alpha control point to a protein
+    /// cartoon trace. A full peptide backbone is accepted independent of residue
+    /// name; a C-alpha-only trace has no topology to distinguish it from hetero atoms,
+    /// so it keeps the legacy standard-amino-acid gate.
+    pub fn has_cartoon_trace(&self) -> bool {
+        self.alpha_carbon.is_some() && (self.has_peptide_backbone() || self.is_standard_amino_acid)
+    }
+}
+
+/// Upper bound, in ångström, on the C(i)–N(i+1) peptide bond joining two
+/// consecutive residues. A real peptide bond is ~1.33 Å; the generous ceiling
+/// tolerates strained or coarse coordinates while still rejecting a chain break,
+/// where the next residue's amide nitrogen sits a missing residue's width away.
+const MAX_PEPTIDE_BOND: f32 = 2.0;
+
+/// Upper bound, in ångström, on the Cα(i)–Cα(i+1) separation, used as a fallback
+/// when carbonyl/amide atoms are absent (a terminus or a Cα-only trace). Bonded
+/// α-carbons sit ~3.8 Å apart (trans) or ~2.9 Å (cis); a one-residue gap is
+/// ~7.6 Å, well clear of this threshold.
+const MAX_ALPHA_CARBON_STEP: f32 = 4.5;
+
+/// Whether `current` is the immediate backbone successor of `previous`, judged
+/// from coordinates alone. Prefers the defining peptide bond C(i)–N(i+1); when
+/// either atom is absent it falls back to Cα–Cα proximity. It consults no residue
+/// names or sequence numbers, so it survives renumbering, insertion codes, and
+/// gaps — two residues are contiguous only when their backbones are actually
+/// bonded in space.
+///
+/// Callers may pass either full peptide residues or legacy standard-residue
+/// C-alpha traces; the latter take the C-alpha distance fallback.
+pub fn residues_backbone_bonded(
+    previous: &ResidueRecord,
+    current: &ResidueRecord,
+    atoms: &[Atom],
+) -> bool {
+    if let (Some(carbon), Some(nitrogen)) = (previous.backbone_carbon, current.backbone_nitrogen) {
+        return atoms_within(atoms, carbon, nitrogen, MAX_PEPTIDE_BOND);
+    }
+    match (previous.alpha_carbon, current.alpha_carbon) {
+        (Some(prev_ca), Some(cur_ca)) => {
+            atoms_within(atoms, prev_ca, cur_ca, MAX_ALPHA_CARBON_STEP)
+        }
+        _ => false,
+    }
+}
+
+fn atoms_within(atoms: &[Atom], a: usize, b: usize, max: f32) -> bool {
+    match (atoms.get(a), atoms.get(b)) {
+        (Some(a), Some(b)) => (a.position - b.position).norm_squared() <= max * max,
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -116,6 +191,9 @@ pub fn build_biopolymer(
                 residue_name: annotation.residue_name.clone(),
                 atom_indices: Vec::new(),
                 alpha_carbon: None,
+                backbone_nitrogen: None,
+                backbone_carbon: None,
+                backbone_oxygen: None,
                 is_standard_amino_acid: is_standard_amino_acid(&annotation.residue_name),
             });
             residue_index_by_id.insert(residue_id.clone(), index);
@@ -138,15 +216,23 @@ pub fn build_biopolymer(
 
         let residue = &mut residues[residue_index];
         residue.atom_indices.push(atom_index);
-        if annotation.atom_name == "CA" {
-            residue.alpha_carbon = Some(atom_index);
+        // The atom names "N"/"CA"/"C"/"O" are invariant across force-field
+        // protonation, disulfide, and modified-residue renaming, unlike the
+        // residue name — keying backbone identity on them lets renderability be
+        // decided from topology alone.
+        match annotation.atom_name.as_str() {
+            "CA" => residue.alpha_carbon = Some(atom_index),
+            "N" => residue.backbone_nitrogen = Some(atom_index),
+            "C" => residue.backbone_carbon = Some(atom_index),
+            "O" => residue.backbone_oxygen = Some(atom_index),
+            _ => {}
         }
         residue_for_atom[atom_index] = Some(residue_index);
     }
 
     let has_protein_residues = residues
         .iter()
-        .any(|residue| residue.is_standard_amino_acid);
+        .any(|residue| residue.is_standard_amino_acid || residue.has_peptide_backbone());
     if !has_protein_residues && secondary_structures.is_empty() {
         return None;
     }
@@ -343,6 +429,15 @@ pub fn extend_biopolymer_coverage(
 
     for appended_residue in appended {
         let residue_index = residues.len();
+        // Backbone atoms are derived, not persisted: this must match how
+        // `build_biopolymer` and the payload reload derive them, or renderability
+        // would differ in memory versus after a save/load round trip.
+        let backbone_atom = |target: &str| {
+            appended_residue
+                .atoms
+                .iter()
+                .find_map(|(atom_index, name)| (name.as_str() == target).then_some(*atom_index))
+        };
         residues.push(ResidueRecord {
             id: ResidueId::new(
                 appended_residue.chain_id,
@@ -355,7 +450,10 @@ pub fn extend_biopolymer_coverage(
                 .iter()
                 .map(|(atom_index, _)| *atom_index)
                 .collect(),
-            alpha_carbon: None,
+            alpha_carbon: backbone_atom("CA"),
+            backbone_nitrogen: backbone_atom("N"),
+            backbone_carbon: backbone_atom("C"),
+            backbone_oxygen: backbone_atom("O"),
             is_standard_amino_acid: false,
         });
 
@@ -414,4 +512,146 @@ pub fn is_standard_amino_acid(residue_name: &str) -> bool {
             | "TYR"
             | "VAL"
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nalgebra::Point3;
+
+    fn atom_at(x: f32, y: f32, z: f32) -> Atom {
+        Atom {
+            element: "C".to_string(),
+            position: Point3::new(x, y, z),
+            charge: 0.0,
+        }
+    }
+
+    /// A residue record carrying only the backbone atom indices under test.
+    fn residue(
+        alpha_carbon: Option<usize>,
+        backbone_nitrogen: Option<usize>,
+        backbone_carbon: Option<usize>,
+    ) -> ResidueRecord {
+        ResidueRecord {
+            id: ResidueId::new('A', 1, ' '),
+            residue_name: "ALA".to_string(),
+            atom_indices: Vec::new(),
+            alpha_carbon,
+            backbone_nitrogen,
+            backbone_carbon,
+            backbone_oxygen: None,
+            is_standard_amino_acid: true,
+        }
+    }
+
+    #[test]
+    fn has_peptide_backbone_requires_n_ca_c() {
+        assert!(residue(Some(0), Some(1), Some(2)).has_peptide_backbone());
+        assert!(
+            !residue(Some(0), None, Some(2)).has_peptide_backbone(),
+            "missing N"
+        );
+        assert!(
+            !residue(Some(0), Some(1), None).has_peptide_backbone(),
+            "missing C"
+        );
+        // A calcium ion has a stray "CA" atom but no N/C — correctly not backbone.
+        assert!(
+            !residue(Some(0), None, None).has_peptide_backbone(),
+            "Cα only"
+        );
+    }
+
+    #[test]
+    fn peptide_bond_decides_contiguity_when_carbonyl_and_amide_present() {
+        // prev carbonyl C at 0; cur amide N at 1.33 Å (bonded) vs 5.0 Å (broken).
+        let atoms = vec![
+            atom_at(0.0, 0.0, 0.0),
+            atom_at(1.33, 0.0, 0.0),
+            atom_at(5.0, 0.0, 0.0),
+        ];
+        let prev = residue(None, None, Some(0));
+        let cur_bonded = residue(None, Some(1), None);
+        let cur_broken = residue(None, Some(2), None);
+        assert!(residues_backbone_bonded(&prev, &cur_bonded, &atoms));
+        assert!(!residues_backbone_bonded(&prev, &cur_broken, &atoms));
+    }
+
+    #[test]
+    fn falls_back_to_alpha_carbon_distance_when_carbonyl_or_amide_absent() {
+        // No carbonyl/amide recorded: decide by Cα–Cα. 3.8 Å bonded, 7.6 Å gap.
+        let atoms = vec![
+            atom_at(0.0, 0.0, 0.0),
+            atom_at(3.8, 0.0, 0.0),
+            atom_at(7.6, 0.0, 0.0),
+        ];
+        let prev = residue(Some(0), None, None);
+        let cur_bonded = residue(Some(1), None, None);
+        let cur_gap = residue(Some(2), None, None);
+        assert!(residues_backbone_bonded(&prev, &cur_bonded, &atoms));
+        assert!(!residues_backbone_bonded(&prev, &cur_gap, &atoms));
+    }
+
+    #[test]
+    fn peptide_bond_is_authoritative_over_alpha_carbon_proximity() {
+        // Both C and N present but far apart ⇒ a break, even though the Cα–Cα
+        // distance alone would pass the fallback threshold. The bond wins.
+        let atoms = vec![
+            atom_at(0.0, 0.0, 0.0), // prev Cα
+            atom_at(0.5, 0.0, 0.0), // prev carbonyl C — near
+            atom_at(3.8, 0.0, 0.0), // cur Cα — within 4.5 Å of prev Cα
+            atom_at(9.0, 0.0, 0.0), // cur amide N — far from prev C
+        ];
+        let prev = residue(Some(0), None, Some(1));
+        let cur = residue(Some(2), Some(3), None);
+        assert!(
+            !residues_backbone_bonded(&prev, &cur, &atoms),
+            "a long C–N distance is a break even when Cα–Cα is close"
+        );
+    }
+
+    #[test]
+    fn missing_alpha_carbons_are_not_bonded() {
+        let atoms = vec![atom_at(0.0, 0.0, 0.0)];
+        assert!(!residues_backbone_bonded(
+            &residue(None, None, None),
+            &residue(None, None, None),
+            &atoms,
+        ));
+    }
+    #[test]
+    fn full_backbone_non_standard_residues_build_biopolymer_without_secondary_records() {
+        let annotations = [
+            ("N", "HID", 1),
+            ("CA", "HID", 1),
+            ("C", "HID", 1),
+            ("N", "CYX", 2),
+            ("CA", "CYX", 2),
+            ("C", "CYX", 2),
+        ]
+        .into_iter()
+        .map(|(atom_name, residue_name, residue_seq)| PdbAtomAnnotation {
+            atom_name: atom_name.to_string(),
+            residue_name: residue_name.to_string(),
+            chain_id: 'A',
+            residue_seq,
+            insertion_code: ' ',
+        })
+        .collect::<Vec<_>>();
+
+        let biopolymer = build_biopolymer(&annotations, Vec::new()).expect("biopolymer");
+        assert!(
+            biopolymer
+                .residues
+                .iter()
+                .all(|residue| residue.has_peptide_backbone())
+        );
+        assert!(
+            biopolymer
+                .residues
+                .iter()
+                .all(|residue| !residue.is_standard_amino_acid)
+        );
+    }
 }

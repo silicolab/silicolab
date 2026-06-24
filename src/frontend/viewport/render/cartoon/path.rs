@@ -7,10 +7,12 @@ use nalgebra::{Point3, Rotation3, Unit, Vector3};
 
 use crate::{
     domain::{
-        Biopolymer, ChainRecord, ResidueRecord, SecondaryStructureKind, SecondaryStructureSpan,
-        Structure, assign_secondary_structure,
+        Atom, Biopolymer, ChainRecord, ResidueRecord, SecondaryStructureKind,
+        SecondaryStructureSpan, Structure, assign_secondary_structure, residues_backbone_bonded,
     },
-    frontend::ViewportVisualState,
+    frontend::viewport::{
+        SecondaryStructureCache, SecondaryStructureCacheKey, ViewportVisualState,
+    },
 };
 
 use super::super::{
@@ -66,8 +68,27 @@ pub(crate) fn cartoon_chain_sweeps(
     visual_state: &ViewportVisualState,
 ) -> Vec<Vec<CartoonSweepSample>> {
     let secondary = resolve_secondary_structures(structure, biopolymer);
-    let secondary = secondary.as_ref();
+    cartoon_chain_sweeps_with_secondary(structure, biopolymer, visual_state, secondary.as_ref())
+}
 
+pub(crate) fn cached_cartoon_chain_sweeps(
+    structure: &Structure,
+    biopolymer: &Biopolymer,
+    visual_state: &ViewportVisualState,
+    secondary_cache: &mut SecondaryStructureCache,
+    secondary_key: SecondaryStructureCacheKey,
+) -> Vec<Vec<CartoonSweepSample>> {
+    let secondary =
+        resolve_secondary_structures_cached(structure, biopolymer, secondary_cache, secondary_key);
+    cartoon_chain_sweeps_with_secondary(structure, biopolymer, visual_state, secondary.as_ref())
+}
+
+fn cartoon_chain_sweeps_with_secondary(
+    structure: &Structure,
+    biopolymer: &Biopolymer,
+    visual_state: &ViewportVisualState,
+    secondary: &[SecondaryStructureSpan],
+) -> Vec<Vec<CartoonSweepSample>> {
     let mut sweeps = Vec::new();
     for (chain_index, chain) in biopolymer.chains.iter().enumerate() {
         let chain_color = visual_state
@@ -80,7 +101,8 @@ pub(crate) fn cartoon_chain_sweeps(
             continue;
         }
 
-        for (start, end) in chain_contiguous_fragments(biopolymer, &residue_trace) {
+        for (start, end) in chain_contiguous_fragments(biopolymer, &structure.atoms, &residue_trace)
+        {
             let fragment = &residue_trace[start..end];
             if fragment.len() < 2 {
                 continue;
@@ -154,11 +176,11 @@ fn chain_residue_trace(
         .filter_map(|&residue_index| {
             let residue = biopolymer.residues.get(residue_index)?;
             let atom_index = residue.alpha_carbon?;
-            // Only residues whose alpha carbon has the cartoon overlay enabled
-            // are drawn as ribbon, so the user can toggle cartoon on a protein
-            // selection independently of its base style.
-            let is_cartoon = residue.is_standard_amino_acid
-                && visual_state.cartoon_enabled(structure, atom_index);
+            // Full peptide residues are renderable from N/CA/C topology alone.
+            // Standard C-alpha-only residues keep the legacy trace fallback; the
+            // overlay toggle then gates whether the user wants the ribbon here.
+            let is_cartoon =
+                residue.has_cartoon_trace() && visual_state.cartoon_enabled(structure, atom_index);
             is_cartoon.then_some(ChainResiduePoint {
                 residue_index,
                 position: structure.atoms[atom_index].position,
@@ -169,6 +191,7 @@ fn chain_residue_trace(
 
 fn chain_contiguous_fragments(
     biopolymer: &Biopolymer,
+    atoms: &[Atom],
     residue_trace: &[ChainResiduePoint],
 ) -> Vec<(usize, usize)> {
     let mut fragments = Vec::new();
@@ -178,9 +201,13 @@ fn chain_contiguous_fragments(
 
     let mut fragment_start = 0;
     for index in 1..residue_trace.len() {
-        let is_contiguous = residues_are_contiguous(
+        // A fragment break is a genuine backbone discontinuity in space, not a
+        // jump in residue numbering — so renumbering, insertion codes, and gaps
+        // never split a ribbon that is physically one continuous chain.
+        let is_contiguous = residues_backbone_bonded(
             &biopolymer.residues[residue_trace[index - 1].residue_index],
             &biopolymer.residues[residue_trace[index].residue_index],
+            atoms,
         );
 
         if !is_contiguous {
@@ -236,6 +263,22 @@ pub(crate) fn resolve_secondary_structures<'a>(
     }
 }
 
+pub(crate) fn resolve_secondary_structures_cached<'a>(
+    structure: &Structure,
+    biopolymer: &'a Biopolymer,
+    cache: &'a mut SecondaryStructureCache,
+    key: SecondaryStructureCacheKey,
+) -> Cow<'a, [SecondaryStructureSpan]> {
+    if !biopolymer.secondary_structures.is_empty() {
+        return Cow::Borrowed(&biopolymer.secondary_structures);
+    }
+    if cache.key != Some(key) {
+        cache.spans = assign_secondary_structure(&structure.atoms, biopolymer);
+        cache.key = Some(key);
+    }
+    Cow::Borrowed(&cache.spans)
+}
+
 pub(crate) fn residue_cartoon_kind(
     residue: &ResidueRecord,
     secondary_structures: &[SecondaryStructureSpan],
@@ -270,12 +313,6 @@ fn residue_in_span(residue: &ResidueRecord, span: &SecondaryStructureSpan) -> bo
     residue.id.chain_id == span.start.chain_id
         && residue.id.ordering_key() >= span.start.ordering_key()
         && residue.id.ordering_key() <= span.end.ordering_key()
-}
-
-fn residues_are_contiguous(previous: &ResidueRecord, current: &ResidueRecord) -> bool {
-    previous.id.chain_id == current.id.chain_id
-        && current.id.sequence_number - previous.id.sequence_number <= 1
-        && current.id.sequence_number >= previous.id.sequence_number
 }
 
 fn smooth_cartoon_controls(
@@ -439,4 +476,288 @@ fn transport_frame_vector(
     }
 
     Rotation3::from_axis_angle(&Unit::new_normalize(axis), angle) * vector
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::{PdbAtomAnnotation, ResidueId, build_biopolymer};
+
+    const CA_STEP: f32 = 3.8;
+
+    /// Atoms + annotations for a straight protein backbone laid along +x: one
+    /// residue per `(residue_name, sequence_number, insertion_code)` at `CA_STEP`
+    /// Cα spacing, each carrying N/CA/C atoms placed so the C(i)–N(i+1) peptide
+    /// bond is short — the residues are physically bonded in file order regardless
+    /// of how they are numbered. Returned separately so a test can perturb
+    /// coordinates before the structure is assembled.
+    fn straight_backbone(residues: &[(&str, i32, char)]) -> (Vec<Atom>, Vec<PdbAtomAnnotation>) {
+        let mut atoms = Vec::new();
+        let mut annotations = Vec::new();
+        for (index, &(name, sequence_number, insertion_code)) in residues.iter().enumerate() {
+            let x = index as f32 * CA_STEP;
+            for (atom_name, element, offset) in
+                [("N", "N", -1.2_f32), ("CA", "C", 0.0), ("C", "C", 1.2)]
+            {
+                atoms.push(Atom {
+                    element: element.to_string(),
+                    position: Point3::new(x + offset, 0.0, 0.0),
+                    charge: 0.0,
+                });
+                annotations.push(PdbAtomAnnotation {
+                    atom_name: atom_name.to_string(),
+                    residue_name: name.to_string(),
+                    chain_id: 'A',
+                    residue_seq: sequence_number,
+                    insertion_code,
+                });
+            }
+        }
+        (atoms, annotations)
+    }
+
+    /// `straight_backbone` with default consecutive numbering from 1.
+    fn backbone_atoms(residue_names: &[&str]) -> (Vec<Atom>, Vec<PdbAtomAnnotation>) {
+        let residues: Vec<(&str, i32, char)> = residue_names
+            .iter()
+            .enumerate()
+            .map(|(index, &name)| (name, index as i32 + 1, ' '))
+            .collect();
+        straight_backbone(&residues)
+    }
+
+    /// Wrap atoms + annotations into a `Structure`. A dummy secondary-structure
+    /// span is passed so `build_biopolymer` accepts the input as a biopolymer even
+    /// when no residue name is a standard amino acid — the parse-level "is this a
+    /// protein" gate is out of scope here; these tests exercise the renderer.
+    fn structure_from(atoms: Vec<Atom>, annotations: Vec<PdbAtomAnnotation>) -> Structure {
+        let span = SecondaryStructureSpan {
+            kind: SecondaryStructureKind::Helix,
+            start: ResidueId::new('A', 1, ' '),
+            end: ResidueId::new('A', 1, ' '),
+        };
+        let biopolymer = build_biopolymer(&annotations, vec![span]).expect("biopolymer");
+        Structure {
+            title: "test".to_string(),
+            atoms,
+            bonds: Vec::new(),
+            cell: None,
+            biopolymer: Some(biopolymer),
+        }
+    }
+
+    /// A visual state with the cartoon overlay explicitly on for every atom, i.e.
+    /// "cartoon is active" — the precondition the renderer is fixed under.
+    fn cartoon_on_all(atom_count: usize) -> ViewportVisualState {
+        let mut visual_state = ViewportVisualState::default();
+        for atom_index in 0..atom_count {
+            visual_state.cartoon_overlay.atoms.insert(atom_index, true);
+        }
+        visual_state
+    }
+
+    #[test]
+    fn non_standard_residue_names_form_one_continuous_ribbon() {
+        // Force-field protonation states, disulfide variants, selenomethionine,
+        // phosphoserine — none recognized by is_standard_amino_acid — must ribbon
+        // as one unbroken fragment. This is the regression: the old name gate
+        // dropped every one of these residues, shredding the ribbon.
+        let residue_names = [
+            "HID", "CYX", "HSE", "GLH", "HSD", "LYN", "ASH", "HIP", "HIE", "CYM", "MSE", "SEP",
+        ];
+        let (atoms, annotations) = backbone_atoms(&residue_names);
+        let structure = structure_from(atoms, annotations);
+        let biopolymer = structure.biopolymer.as_ref().expect("biopolymer");
+        assert!(
+            biopolymer
+                .residues
+                .iter()
+                .all(|residue| !residue.is_standard_amino_acid),
+            "every residue must use a non-standard name for this regression to bite"
+        );
+
+        let visual_state = cartoon_on_all(structure.atoms.len());
+        let chain = &biopolymer.chains[0];
+        let trace = chain_residue_trace(&structure, biopolymer, chain, &visual_state);
+        assert_eq!(
+            trace.len(),
+            residue_names.len(),
+            "every backbone residue enters the ribbon trace regardless of name"
+        );
+
+        let fragments = chain_contiguous_fragments(biopolymer, &structure.atoms, &trace);
+        assert_eq!(
+            fragments,
+            vec![(0, residue_names.len())],
+            "the chain renders as a single continuous ribbon fragment"
+        );
+    }
+
+    #[test]
+    fn non_standard_protein_ribbons_by_default_without_explicit_enabling() {
+        // With the *default* visual state (no overlay overrides), a protein whose
+        // residues use non-standard names must still default to a cartoon ribbon:
+        // enablement is driven by backbone topology, not the residue name nor its
+        // name-based atom category (which would classify these as a ligand and,
+        // before the fix, default cartoon off — dropping them from the ribbon).
+        let residue_names = ["HID", "CYX", "HSE", "GLH", "HSD", "LYN"];
+        let (atoms, annotations) = backbone_atoms(&residue_names);
+        let structure = structure_from(atoms, annotations);
+        let biopolymer = structure.biopolymer.as_ref().expect("biopolymer");
+
+        let visual_state = ViewportVisualState::default(); // nothing enabled by hand
+        let chain = &biopolymer.chains[0];
+        let trace = chain_residue_trace(&structure, biopolymer, chain, &visual_state);
+        assert_eq!(
+            trace.len(),
+            residue_names.len(),
+            "non-standard protein defaults to cartoon and enters the trace"
+        );
+        let fragments = chain_contiguous_fragments(biopolymer, &structure.atoms, &trace);
+        assert_eq!(fragments, vec![(0, residue_names.len())]);
+    }
+
+    #[test]
+    fn standard_ca_only_trace_ribbons_by_default() {
+        let atoms = (0..6)
+            .map(|index| Atom {
+                element: "C".to_string(),
+                position: Point3::new(index as f32 * CA_STEP, 0.0, 0.0),
+                charge: 0.0,
+            })
+            .collect::<Vec<_>>();
+        let annotations = (0..6)
+            .map(|index| PdbAtomAnnotation {
+                atom_name: "CA".to_string(),
+                residue_name: "ALA".to_string(),
+                chain_id: 'A',
+                residue_seq: index + 1,
+                insertion_code: ' ',
+            })
+            .collect::<Vec<_>>();
+        let biopolymer = build_biopolymer(&annotations, Vec::new()).expect("biopolymer");
+        assert!(
+            biopolymer
+                .residues
+                .iter()
+                .all(|residue| !residue.has_peptide_backbone())
+        );
+        let structure = Structure {
+            title: "ca-only".to_string(),
+            atoms,
+            bonds: Vec::new(),
+            cell: None,
+            biopolymer: Some(biopolymer),
+        };
+        let biopolymer = structure.biopolymer.as_ref().expect("biopolymer");
+
+        let visual_state = ViewportVisualState::default();
+        let trace =
+            chain_residue_trace(&structure, biopolymer, &biopolymer.chains[0], &visual_state);
+        assert_eq!(trace.len(), 6, "standard C-alpha traces still draw ribbons");
+        let fragments = chain_contiguous_fragments(biopolymer, &structure.atoms, &trace);
+        assert_eq!(fragments, vec![(0, 6)]);
+    }
+    #[test]
+    fn renumbering_and_insertion_codes_keep_one_continuous_ribbon() {
+        // Physically one continuous backbone, but with a sequence-number jump and
+        // insertion codes — exactly what the old `sequence_number diff <= 1`
+        // contiguity test wrongly split. Geometry says one fragment; the numbering
+        // must not override it.
+        let residues = [
+            ("HID", 5, ' '),
+            ("CYX", 6, ' '),
+            ("HSE", 6, 'A'), // insertion code, same sequence number
+            ("GLH", 6, 'B'),
+            ("ALA", 41, ' '), // large jump in numbering, still bonded in space
+            ("LYN", 42, ' '),
+        ];
+        let (atoms, annotations) = straight_backbone(&residues);
+        let structure = structure_from(atoms, annotations);
+        let biopolymer = structure.biopolymer.as_ref().expect("biopolymer");
+
+        let visual_state = cartoon_on_all(structure.atoms.len());
+        let chain = &biopolymer.chains[0];
+        let trace = chain_residue_trace(&structure, biopolymer, chain, &visual_state);
+        assert_eq!(trace.len(), residues.len());
+
+        let fragments = chain_contiguous_fragments(biopolymer, &structure.atoms, &trace);
+        assert_eq!(
+            fragments,
+            vec![(0, residues.len())],
+            "bonded backbone stays one fragment despite renumbering and insertion codes"
+        );
+    }
+
+    #[test]
+    fn a_real_backbone_break_splits_the_ribbon_despite_consecutive_numbering() {
+        // Contiguity is geometric: a true spatial gap must split the ribbon even
+        // though the residue numbers stay 1,2,3,4 with no insertion codes.
+        let (mut atoms, annotations) = backbone_atoms(&["HID", "CYX", "HSE", "GLH"]);
+        // Push residues 3 and 4 (their nine atoms start at index 6) far away, so
+        // the C(2)–N(3) peptide bond is long while everything else stays bonded.
+        for atom in atoms.iter_mut().skip(6) {
+            atom.position.x += 50.0;
+        }
+        let structure = structure_from(atoms, annotations);
+        let biopolymer = structure.biopolymer.as_ref().expect("biopolymer");
+
+        let visual_state = cartoon_on_all(structure.atoms.len());
+        let chain = &biopolymer.chains[0];
+        let trace = chain_residue_trace(&structure, biopolymer, chain, &visual_state);
+        assert_eq!(trace.len(), 4, "all four residues are renderable");
+
+        let fragments = chain_contiguous_fragments(biopolymer, &structure.atoms, &trace);
+        assert_eq!(
+            fragments,
+            vec![(0, 2), (2, 4)],
+            "the spatial break splits the trace into two fragments"
+        );
+    }
+
+    #[test]
+    fn hetero_groups_without_backbone_are_excluded() {
+        // A calcium ion (residue and atom both named "CA", so it carries a stray
+        // alpha_carbon) and a water are not protein backbone — they lack the
+        // N/CA/C triad — so topology keeps them out of the ribbon entirely.
+        let (mut atoms, mut annotations) = backbone_atoms(&["HID", "CYX", "HSE"]);
+        atoms.push(Atom {
+            element: "Ca".to_string(),
+            position: Point3::new(100.0, 0.0, 0.0),
+            charge: 2.0,
+        });
+        annotations.push(PdbAtomAnnotation {
+            atom_name: "CA".to_string(),
+            residue_name: "CA".to_string(),
+            chain_id: 'A',
+            residue_seq: 100,
+            insertion_code: ' ',
+        });
+        atoms.push(Atom {
+            element: "O".to_string(),
+            position: Point3::new(110.0, 0.0, 0.0),
+            charge: 0.0,
+        });
+        annotations.push(PdbAtomAnnotation {
+            atom_name: "OW".to_string(),
+            residue_name: "SOL".to_string(),
+            chain_id: 'A',
+            residue_seq: 101,
+            insertion_code: ' ',
+        });
+        let structure = structure_from(atoms, annotations);
+        let biopolymer = structure.biopolymer.as_ref().expect("biopolymer");
+
+        let visual_state = cartoon_on_all(structure.atoms.len());
+        let chain = &biopolymer.chains[0];
+        let trace = chain_residue_trace(&structure, biopolymer, chain, &visual_state);
+        assert_eq!(
+            trace.len(),
+            3,
+            "only the three backbone residues enter the trace; Ca and water are excluded"
+        );
+
+        let fragments = chain_contiguous_fragments(biopolymer, &structure.atoms, &trace);
+        assert_eq!(fragments, vec![(0, 3)]);
+    }
 }

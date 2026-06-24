@@ -895,46 +895,60 @@ mod tests {
     /// extended β-strand, so the cartoon renders a helix ribbon, a coil turn, and
     /// a sheet arrow.
     fn helix_sheet_protein() -> Structure {
-        let mut atoms = Vec::new();
-        let mut annotations = Vec::new();
-        let mut push_residue = |atoms: &mut Vec<Atom>, position: Point3<f32>, seq: i32| {
-            atoms.push(Atom {
-                element: "C".to_string(),
-                position,
-                charge: 0.0,
-            });
-            annotations.push(PdbAtomAnnotation {
-                atom_name: "CA".to_string(),
-                residue_name: "ALA".to_string(),
-                chain_id: 'A',
-                residue_seq: seq,
-                insertion_code: ' ',
-            });
-        };
-
-        // Helix: 11 residues on an idealized α-helix (100°/residue, 1.5 Å rise).
+        // Cα trace: an idealized α-helix (100°/residue, 1.5 Å rise) followed by an
+        // extended β-strand continuing from the helix end, so the chain is one
+        // continuous backbone.
+        let mut ca = Vec::new();
         for i in 0..11usize {
             let angle = i as f32 * 1.745;
-            push_residue(
-                &mut atoms,
-                Point3::new(2.3 * angle.cos(), 2.3 * angle.sin(), 1.5 * i as f32),
-                i as i32 + 1,
-            );
+            ca.push(Point3::new(
+                2.3 * angle.cos(),
+                2.3 * angle.sin(),
+                1.5 * i as f32,
+            ));
         }
-        // Sheet: 9 residues extended along +x with a slight pleat, starting from
-        // the helix end so the chain is continuous.
-        let base = atoms.last().unwrap().position;
+        let base = *ca.last().unwrap();
         for i in 0..9usize {
             let step = i as f32 + 1.0;
-            push_residue(
-                &mut atoms,
-                Point3::new(
-                    base.x + 3.3 * step,
-                    base.y + if i % 2 == 0 { 0.5 } else { -0.5 },
-                    base.z,
-                ),
-                12 + i as i32,
-            );
+            ca.push(Point3::new(
+                base.x + 3.3 * step,
+                base.y + if i % 2 == 0 { 0.5 } else { -0.5 },
+                base.z,
+            ));
+        }
+
+        // Give each residue a full N/CA/C backbone; N and C sit on the Cα–Cα
+        // midpoints so consecutive C(i)/N(i+1) coincide (a zero-length peptide
+        // bond), keeping the chain a single contiguous ribbon.
+        let mut atoms = Vec::with_capacity(ca.len() * 3);
+        let mut annotations = Vec::with_capacity(ca.len() * 3);
+        for (index, &position) in ca.iter().enumerate() {
+            let previous = if index > 0 { ca[index - 1] } else { position };
+            let next = if index + 1 < ca.len() {
+                ca[index + 1]
+            } else {
+                position
+            };
+            let nitrogen = Point3::from((previous.coords + position.coords) * 0.5);
+            let carbon = Point3::from((position.coords + next.coords) * 0.5);
+            for (atom_name, element, atom_position) in [
+                ("N", "N", nitrogen),
+                ("CA", "C", position),
+                ("C", "C", carbon),
+            ] {
+                atoms.push(Atom {
+                    element: element.to_string(),
+                    position: atom_position,
+                    charge: 0.0,
+                });
+                annotations.push(PdbAtomAnnotation {
+                    atom_name: atom_name.to_string(),
+                    residue_name: "ALA".to_string(),
+                    chain_id: 'A',
+                    residue_seq: index as i32 + 1,
+                    insertion_code: ' ',
+                });
+            }
         }
 
         let spans = vec![

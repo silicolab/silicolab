@@ -8,12 +8,18 @@ use nalgebra::{Point3, Vector3};
 
 use crate::{
     domain::{BondType, Structure},
-    frontend::{AtomSelection, ViewportVisualState, state::AtomStyle},
+    frontend::{
+        AtomSelection,
+        state::AtomStyle,
+        viewport::{SecondaryStructureCache, SecondaryStructureCacheKey, ViewportVisualState},
+    },
 };
 
-use super::super::gpu::{CylinderInstance, MoleculeInstances, SphereInstance};
+use super::super::gpu::{CylinderInstance, MeshVertex, MoleculeInstances, SphereInstance};
 use super::ball_stick::build_atom_draw_table;
+#[cfg(test)]
 use super::cartoon::build_biopolymer_cartoon_world_mesh;
+use super::cartoon::build_cached_biopolymer_cartoon_world_mesh;
 use super::scene::{BondWorldSegment, bond_world_segments};
 use super::{
     AROMATIC_DASH_LENGTH, AROMATIC_DASH_OFFSET, AROMATIC_DASH_RADIUS, AROMATIC_GAP_LENGTH,
@@ -26,10 +32,37 @@ use super::{
 /// become small shaded spheres rather than flat screen-space discs.
 const POINT_SPHERE_SCALE: f32 = 0.5;
 
+#[cfg(test)]
 pub(crate) fn build_molecule_instances(
     structure: &Structure,
     selection: &AtomSelection,
     visual_state: &ViewportVisualState,
+) -> MoleculeInstances {
+    let cartoon = build_biopolymer_cartoon_world_mesh(structure, visual_state);
+    build_molecule_instances_with_cartoon(structure, selection, visual_state, cartoon)
+}
+
+pub(crate) fn build_cached_molecule_instances(
+    structure: &Structure,
+    selection: &AtomSelection,
+    visual_state: &ViewportVisualState,
+    secondary_cache: &mut SecondaryStructureCache,
+    secondary_key: SecondaryStructureCacheKey,
+) -> MoleculeInstances {
+    let cartoon = build_cached_biopolymer_cartoon_world_mesh(
+        structure,
+        visual_state,
+        secondary_cache,
+        secondary_key,
+    );
+    build_molecule_instances_with_cartoon(structure, selection, visual_state, cartoon)
+}
+
+fn build_molecule_instances_with_cartoon(
+    structure: &Structure,
+    selection: &AtomSelection,
+    visual_state: &ViewportVisualState,
+    cartoon: Vec<MeshVertex>,
 ) -> MoleculeInstances {
     let atom_draw = build_atom_draw_table(structure, selection, visual_state);
 
@@ -72,7 +105,7 @@ pub(crate) fn build_molecule_instances(
     MoleculeInstances {
         spheres,
         cylinders,
-        cartoon: build_biopolymer_cartoon_world_mesh(structure, visual_state),
+        cartoon,
         ..Default::default()
     }
 }
