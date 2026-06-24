@@ -353,8 +353,8 @@ pub struct TrackedAgentJob {
     pub conversation: crate::frontend::agent::AssistantConversationId,
     /// Short human label, e.g. "qm optimize".
     pub label: String,
-    /// Wall-clock ms when the job was launched, for the Activity panel's elapsed time.
-    pub started_at_ms: i64,
+    /// The unified `TaskRun` this worker reports into, so the run shows in the Task Monitor.
+    pub task_run_id: u64,
     pub job: AgentHeavyJob,
 }
 

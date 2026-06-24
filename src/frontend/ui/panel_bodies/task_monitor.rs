@@ -283,35 +283,49 @@ fn render_remote_jobs(state: &AppState, ui: &mut egui::Ui, actions: &mut Vec<App
 
 fn render_active_task_summary(state: &AppState, ui: &mut egui::Ui) {
     let pal = crate::frontend::theme::palette(ui);
+
+    // Collect into owned data first so the borrow on state.tasks ends before
+    // we read state.jobs below.
+    let running: Vec<(String, TaskStatus, &'static str, &'static str, &'static str)> = state
+        .tasks
+        .running_task_runs()
+        .iter()
+        .map(|t| {
+            (
+                t.title.clone(),
+                t.status,
+                t.controller_id,
+                t.backend.label(),
+                t.outcome.label(),
+            )
+        })
+        .collect();
+
     let frame = Frame::group(ui.style()).inner_margin(Margin::same(8));
     frame.show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.label(RichText::new("Active").strong());
         ui.add_space(4.0);
 
-        if let Some(task_run_id) = state.active_task_run
-            && let Some(task) = state.tasks.task_run(task_run_id)
-        {
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(&task.title).strong());
-                ui.label(task_status_badge(&pal, task.status));
-            });
-            ui.label(
-                RichText::new(format!(
-                    "{} / {} / {}",
-                    task.controller_id,
-                    task.backend.label(),
-                    task.outcome.label()
-                ))
-                .small()
-                .color(pal.text_tertiary),
-            );
-        } else {
+        if running.is_empty() {
             ui.label(
                 RichText::new("No active task.")
                     .small()
                     .color(pal.text_tertiary),
             );
+        } else {
+            for (title, status, controller_id, backend, outcome) in &running {
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(title.as_str()).strong());
+                    ui.label(task_status_badge(&pal, *status));
+                });
+                ui.label(
+                    RichText::new(format!("{controller_id} / {backend} / {outcome}"))
+                        .small()
+                        .color(pal.text_tertiary),
+                );
+                ui.add_space(4.0);
+            }
         }
 
         if let Some(engine_job) = state.jobs.engine.as_ref() {

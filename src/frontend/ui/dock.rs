@@ -1,6 +1,6 @@
 use super::panel_bodies::{
-    render_activity_panel, render_assistant_panel, render_console_panel, render_output_panel,
-    render_task_monitor_panel, weak_panel_hairline,
+    render_assistant_panel, render_console_panel, render_output_panel, render_task_monitor_panel,
+    weak_panel_hairline,
 };
 use super::secondary_sidebar::*;
 use super::*;
@@ -175,7 +175,6 @@ pub(super) fn render_dock_area(
         Some(DockTab::Static(StaticView::TaskMonitor)) => {
             render_task_monitor_panel(state, ui, actions)
         }
-        Some(DockTab::Static(StaticView::Activity)) => render_activity_panel(state, ui, actions),
         // Task bodies own variable-height content, so they scroll (matching the
         // historical side panel); the fixed-view bodies manage their own height
         // and are rendered directly in either area.

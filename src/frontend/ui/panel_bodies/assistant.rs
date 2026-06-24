@@ -48,14 +48,14 @@ pub(crate) fn render_assistant_panel(
         .iter()
         .map(|item| item.preview().to_string())
         .collect();
-    // Background jobs running for the active conversation (id + label), shown as a
-    // strip with per-job cancel. Tagged jobs from other conversations stay hidden.
-    let running_jobs: Vec<(u64, String)> = state
+    // Background jobs running for the active conversation. Tagged jobs from other
+    // conversations stay hidden.
+    let running_jobs: Vec<(u64, String, u64)> = state
         .jobs
         .agent_jobs
         .iter()
         .filter(|job| job.conversation == active_id)
-        .map(|job| (job.id, job.label.clone()))
+        .map(|job| (job.id, job.label.clone(), job.task_run_id))
         .collect();
 
     let panel_rect = ui.available_rect_before_wrap();

@@ -26,7 +26,7 @@ fn fake_qm_job(
         id,
         conversation,
         label: "qm optimize".to_string(),
-        started_at_ms: 0,
+        task_run_id: 0,
         job: AgentHeavyJob::Qm(RunningQmJob {
             cancel: Arc::new(AtomicBool::new(false)),
             receiver: sender,
@@ -677,7 +677,7 @@ fn pump_marks_dequeued_follow_up_as_running_backlog() {
 }
 
 #[test]
-fn flush_on_next_pump_records_completed() {
+fn flush_on_next_pump_clears_backlog() {
     let mut state = AppState::scratch(Default::default(), Vec::new());
     let ctx = egui::Context::default();
     state
@@ -693,12 +693,10 @@ fn flush_on_next_pump_records_completed() {
     pump_queue(&mut state, &ctx);
 
     assert!(state.ui.agent.current_backlog.is_none());
-    assert_eq!(state.ui.agent.completed.len(), 1);
-    assert_eq!(state.ui.agent.completed[0].detail, "Here is the answer.");
 }
 
 #[test]
-fn errored_backlog_turn_is_recorded_as_failed() {
+fn errored_backlog_turn_clears_backlog() {
     let mut state = AppState::scratch(Default::default(), Vec::new());
     let ctx = egui::Context::default();
     state
@@ -709,7 +707,4 @@ fn errored_backlog_turn_is_recorded_as_failed() {
     handle_turn_result(&mut state, Err(LlmError::BadRequest("nope".into())), &ctx);
 
     assert!(state.ui.agent.current_backlog.is_none());
-    assert_eq!(state.ui.agent.completed.len(), 1);
-    assert_eq!(state.ui.agent.completed[0].label, "risky follow-up");
-    assert!(!state.ui.agent.completed[0].ok);
 }
