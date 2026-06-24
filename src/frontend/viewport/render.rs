@@ -25,9 +25,12 @@ pub(super) use backend::{
 pub(super) use ball_stick::build_ball_and_stick_scene;
 pub(super) use canvas::HeadlessCanvas;
 pub(super) use cartoon::{
-    ScreenDepthBuffer, build_biopolymer_cartoon_scene, build_opaque_depth_buffer,
+    ScreenDepthBuffer, build_biopolymer_cartoon_scene, build_cached_biopolymer_cartoon_scene,
+    build_opaque_depth_buffer,
 };
 pub(super) use cell::{build_cell_scene, draw_cell_labels};
+pub(super) use instances::build_cached_molecule_instances;
+#[cfg(test)]
 pub(super) use instances::build_molecule_instances;
 pub(super) use scene::{
     PickTarget, ViewportGeometry, build_viewport_geometry, cached_geometry, pick_atom,
@@ -250,7 +253,7 @@ pub(super) fn any_atoms_drawn_as_cartoon(
     biopolymer
         .residues
         .iter()
-        .filter(|residue| residue.is_standard_amino_acid)
+        .filter(|residue| residue.has_cartoon_trace())
         .filter_map(|residue| residue.alpha_carbon)
         .any(|atom_index| visual_state.cartoon_enabled(structure, atom_index))
 }

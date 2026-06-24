@@ -4,7 +4,9 @@ use eframe::egui::Color32;
 use nalgebra::Vector3;
 
 use crate::domain::{Biopolymer, Structure};
-use crate::frontend::ViewportVisualState;
+use crate::frontend::viewport::{
+    SecondaryStructureCache, SecondaryStructureCacheKey, ViewportVisualState,
+};
 
 use super::super::super::camera::Projector;
 use super::super::backend::{LineSegmentPrimitive, RenderScene};
@@ -25,10 +27,45 @@ pub(crate) fn build_biopolymer_cartoon_scene(
     let Some(biopolymer) = usable_biopolymer(structure) else {
         return RenderScene::default();
     };
+    build_cartoon_scene_from_fragments(
+        cartoon_fragments(structure, biopolymer, viewport, visual_state),
+        viewport,
+        visual_state,
+    )
+}
 
+pub(crate) fn build_cached_biopolymer_cartoon_scene(
+    structure: &Structure,
+    viewport: &Projector,
+    visual_state: &ViewportVisualState,
+    secondary_cache: &mut SecondaryStructureCache,
+    secondary_key: SecondaryStructureCacheKey,
+) -> RenderScene {
+    let Some(biopolymer) = usable_biopolymer(structure) else {
+        return RenderScene::default();
+    };
+    build_cartoon_scene_from_fragments(
+        cached_cartoon_fragments(
+            structure,
+            biopolymer,
+            viewport,
+            visual_state,
+            secondary_cache,
+            secondary_key,
+        ),
+        viewport,
+        visual_state,
+    )
+}
+
+fn build_cartoon_scene_from_fragments(
+    fragments: Vec<CartoonFragment>,
+    viewport: &Projector,
+    visual_state: &ViewportVisualState,
+) -> RenderScene {
     let mut opaque_meshes = Vec::new();
     let mut lines = Vec::new();
-    for fragment in cartoon_fragments(structure, biopolymer, viewport, visual_state) {
+    for fragment in fragments {
         if visual_state.lighting.silhouettes && visual_state.lighting.silhouette_width > 0.0 {
             append_cartoon_silhouette(
                 &mut lines,
@@ -58,6 +95,29 @@ fn cartoon_fragments(
             samples,
         })
         .collect()
+}
+
+fn cached_cartoon_fragments(
+    structure: &Structure,
+    biopolymer: &Biopolymer,
+    viewport: &Projector,
+    visual_state: &ViewportVisualState,
+    secondary_cache: &mut SecondaryStructureCache,
+    secondary_key: SecondaryStructureCacheKey,
+) -> Vec<CartoonFragment> {
+    cached_cartoon_chain_sweeps(
+        structure,
+        biopolymer,
+        visual_state,
+        secondary_cache,
+        secondary_key,
+    )
+    .into_iter()
+    .map(|samples| CartoonFragment {
+        triangles: build_cartoon_triangles(viewport, &samples, visual_state),
+        samples,
+    })
+    .collect()
 }
 
 pub(crate) fn build_cartoon_triangles(

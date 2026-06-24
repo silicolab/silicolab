@@ -278,13 +278,18 @@ impl ViewportVisualState {
     }
 
     /// Whether the cartoon ribbon overlay applies to an atom. Independent of the
-    /// base style: polymers (whose software default is `Cartoon`) show a ribbon
-    /// unless explicitly turned off, so a protein can be ball-and-stick *and*
-    /// cartoon at once. Only standard amino-acid residues actually draw a ribbon
-    /// (enforced by the cartoon renderer).
+    /// base style: polymers show a ribbon unless explicitly turned off, so a
+    /// protein can be ball-and-stick *and* cartoon at once.
+    ///
+    /// Cartoon defaults on for anything the renderer can actually draw as a
+    /// ribbon — a peptide backbone (decided from atoms via
+    /// [`Structure::atom_has_peptide_backbone`], so force-field-protonated,
+    /// disulfide, and modified residues count too) or a category whose software
+    /// default is cartoon (e.g. nucleic acids). The residue name never gates this.
     pub fn cartoon_enabled(&self, structure: &Structure, atom_index: usize) -> bool {
         let category = structure.atom_category(atom_index);
-        let default_on = software_default_style(category) == AtomStyle::Cartoon;
+        let default_on = structure.atom_has_peptide_backbone(atom_index)
+            || software_default_style(category) == AtomStyle::Cartoon;
         self.cartoon_overlay
             .enabled(category, atom_index, default_on)
     }
