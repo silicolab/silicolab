@@ -288,21 +288,41 @@ pub fn payload_to_structure(payload: StructurePayload) -> anyhow::Result<Structu
     })
 }
 
+/// The atom index within `atoms` whose recorded name equals `target` (e.g. "N"
+/// or "C"). Lets a deserialized residue recover its backbone atoms — which are
+/// derived, not persisted — from the atom names the payload already carries.
+fn backbone_atom_index(atoms: &[usize], names: &[Option<String>], target: &str) -> Option<usize> {
+    atoms
+        .iter()
+        .copied()
+        .find(|&index| names.get(index).and_then(|name| name.as_deref()) == Some(target))
+}
+
 fn payload_to_biopolymer(payload: BiopolymerPayload) -> Biopolymer {
+    let atom_name_for_atom = payload.atom_name_for_atom;
     Biopolymer {
         residues: payload
             .residues
             .into_iter()
-            .map(|residue| ResidueRecord {
-                id: ResidueId::new(
-                    residue.chain_id,
-                    residue.sequence_number,
-                    residue.insertion_code,
-                ),
-                residue_name: residue.name,
-                atom_indices: residue.atoms,
-                alpha_carbon: residue.alpha_carbon,
-                is_standard_amino_acid: residue.is_standard,
+            .map(|residue| {
+                let backbone_nitrogen =
+                    backbone_atom_index(&residue.atoms, &atom_name_for_atom, "N");
+                let backbone_carbon = backbone_atom_index(&residue.atoms, &atom_name_for_atom, "C");
+                let backbone_oxygen = backbone_atom_index(&residue.atoms, &atom_name_for_atom, "O");
+                ResidueRecord {
+                    id: ResidueId::new(
+                        residue.chain_id,
+                        residue.sequence_number,
+                        residue.insertion_code,
+                    ),
+                    residue_name: residue.name,
+                    atom_indices: residue.atoms,
+                    alpha_carbon: residue.alpha_carbon,
+                    backbone_nitrogen,
+                    backbone_carbon,
+                    backbone_oxygen,
+                    is_standard_amino_acid: residue.is_standard,
+                }
             })
             .collect(),
         chains: payload
@@ -331,7 +351,7 @@ fn payload_to_biopolymer(payload: BiopolymerPayload) -> Biopolymer {
             })
             .collect(),
         residue_for_atom: payload.residue_for_atom,
-        atom_name_for_atom: payload.atom_name_for_atom,
+        atom_name_for_atom,
     }
 }
 

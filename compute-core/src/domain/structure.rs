@@ -369,6 +369,24 @@ impl Structure {
         }
     }
 
+    /// Whether the atom's residue carries a complete peptide backbone (N/CA/C) —
+    /// the topological test for ribbon-drawability. Decided from atoms alone, so
+    /// it holds for force-field-protonated, disulfide, and otherwise renamed
+    /// protein residues exactly as for their canonical forms. Lets the cartoon
+    /// overlay default on for protein backbone without consulting residue names
+    /// (kept separate from [`Self::atom_category`], which stays name-based for
+    /// classification, selection, and MD).
+    pub fn atom_has_peptide_backbone(&self, atom_index: usize) -> bool {
+        self.biopolymer
+            .as_ref()
+            .filter(|biopolymer| biopolymer.is_compatible_with_atom_count(self.atoms.len()))
+            .and_then(|biopolymer| {
+                let residue_index = (*biopolymer.residue_for_atom.get(atom_index)?)?;
+                biopolymer.residues.get(residue_index)
+            })
+            .is_some_and(|residue| residue.has_peptide_backbone())
+    }
+
     pub fn center(&self) -> Point3<f32> {
         if let Some(cell) = &self.cell {
             let corners = cell.corners();

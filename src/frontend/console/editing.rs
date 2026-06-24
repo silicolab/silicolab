@@ -144,15 +144,22 @@ fn biopolymer_after_atom_retain(
         if atom_indices.is_empty() {
             continue;
         }
-        let alpha_carbon = residue
-            .alpha_carbon
-            .and_then(|atom_index| atom_remap.get(atom_index).copied().flatten());
+        let remap_atom = |atom_index: Option<usize>| {
+            atom_index.and_then(|i| atom_remap.get(i).copied().flatten())
+        };
+        let alpha_carbon = remap_atom(residue.alpha_carbon);
+        let backbone_nitrogen = remap_atom(residue.backbone_nitrogen);
+        let backbone_carbon = remap_atom(residue.backbone_carbon);
+        let backbone_oxygen = remap_atom(residue.backbone_oxygen);
         residue_remap[old_residue_index] = Some(residues.len());
         residues.push(ResidueRecord {
             id: residue.id.clone(),
             residue_name: residue.residue_name.clone(),
             atom_indices,
             alpha_carbon,
+            backbone_nitrogen,
+            backbone_carbon,
+            backbone_oxygen,
             is_standard_amino_acid: residue.is_standard_amino_acid,
         });
     }

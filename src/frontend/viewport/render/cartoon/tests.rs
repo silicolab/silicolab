@@ -14,25 +14,43 @@ use crate::frontend::ViewportVisualState;
 
 use super::super::super::camera::Projector;
 
-/// Single-chain structure with one ALA Cα per residue along an ideal α-helix
-/// trace (1.5 Å rise, 100° turn, 2.3 Å radius) and no HELIX/SHEET records.
+/// Single-chain structure with one ALA residue per residue along an ideal
+/// α-helix Cα trace (1.5 Å rise, 100° turn, 2.3 Å radius) and no HELIX/SHEET
+/// records. Each residue carries a full N/CA/C backbone: the amide N and
+/// carbonyl C sit on the Cα–Cα midpoints, so consecutive C(i)/N(i+1) coincide —
+/// a zero-length peptide "bond" that keeps the ribbon one continuous fragment.
+/// Only the Cα positions carry the helix geometry the ribbon sweep reads.
 fn helix_structure(residues: usize) -> Structure {
-    let mut atoms = Vec::with_capacity(residues);
-    let mut annotations = Vec::with_capacity(residues);
+    let ca: Vec<Point3<f32>> = (0..residues)
+        .map(|i| {
+            let angle = 100.0 * PI / 180.0 * i as f32;
+            Point3::new(2.3 * angle.cos(), 2.3 * angle.sin(), 1.5 * i as f32)
+        })
+        .collect();
+
+    let mut atoms = Vec::with_capacity(residues * 3);
+    let mut annotations = Vec::with_capacity(residues * 3);
     for i in 0..residues {
-        let angle = 100.0 * PI / 180.0 * i as f32;
-        atoms.push(Atom {
-            element: "C".to_string(),
-            position: Point3::new(2.3 * angle.cos(), 2.3 * angle.sin(), 1.5 * i as f32),
-            charge: 0.0,
-        });
-        annotations.push(PdbAtomAnnotation {
-            atom_name: "CA".to_string(),
-            residue_name: "ALA".to_string(),
-            chain_id: 'A',
-            residue_seq: i as i32 + 1,
-            insertion_code: ' ',
-        });
+        let previous = if i > 0 { ca[i - 1] } else { ca[i] };
+        let next = if i + 1 < residues { ca[i + 1] } else { ca[i] };
+        let nitrogen = Point3::from((previous.coords + ca[i].coords) * 0.5);
+        let carbon = Point3::from((ca[i].coords + next.coords) * 0.5);
+        for (atom_name, element, position) in
+            [("N", "N", nitrogen), ("CA", "C", ca[i]), ("C", "C", carbon)]
+        {
+            atoms.push(Atom {
+                element: element.to_string(),
+                position,
+                charge: 0.0,
+            });
+            annotations.push(PdbAtomAnnotation {
+                atom_name: atom_name.to_string(),
+                residue_name: "ALA".to_string(),
+                chain_id: 'A',
+                residue_seq: i as i32 + 1,
+                insertion_code: ' ',
+            });
+        }
     }
     let mut structure = Structure::with_bonds("helix", atoms, Vec::new());
     structure.biopolymer = build_biopolymer(&annotations, Vec::new());

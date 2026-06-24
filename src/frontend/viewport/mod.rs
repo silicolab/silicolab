@@ -2,7 +2,10 @@ use std::time::Duration;
 
 use eframe::egui::{self, Align2, FontId, Pos2, Sense, Vec2};
 
-use crate::{domain::Structure, frontend::AtomSelection};
+use crate::{
+    domain::{SecondaryStructureSpan, Structure},
+    frontend::AtomSelection,
+};
 
 mod camera;
 mod composer;
@@ -22,7 +25,7 @@ pub use visual_state::{
 };
 
 use camera::Projector;
-use composer::{RepresentationComposer, SurfaceCacheContext};
+use composer::{RepresentationComposer, SecondaryStructureCacheContext, SurfaceCacheContext};
 use interaction::{InteractionSystem, ViewportInteraction};
 use render::*;
 
@@ -37,6 +40,7 @@ pub const HOVER_FRAME: Duration = Duration::from_millis(100);
 pub struct ViewportCache {
     geometry: GeometryCache,
     surface: SurfaceCache,
+    secondary: SecondaryStructureCache,
     gpu: GpuViewCache,
 }
 
@@ -50,6 +54,27 @@ pub(super) struct GeometryCache {
 pub(super) struct SurfaceCache {
     key: Option<SurfaceCacheKey>,
     geometry: Option<SurfaceSceneGeometry>,
+}
+
+#[derive(Default)]
+pub(super) struct SecondaryStructureCache {
+    key: Option<SecondaryStructureCacheKey>,
+    spans: Vec<SecondaryStructureSpan>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub(super) struct SecondaryStructureCacheKey {
+    structure_id: u64,
+    structure_revision: u64,
+}
+
+impl SecondaryStructureCacheKey {
+    fn new(structure_id: u64, structure_revision: u64) -> Self {
+        Self {
+            structure_id,
+            structure_revision,
+        }
+    }
 }
 
 /// State for the GPU ball-and-stick path. The instance set is camera-independent
@@ -66,6 +91,7 @@ impl ViewportCache {
     pub fn clear(&mut self) {
         self.geometry = GeometryCache::default();
         self.surface = SurfaceCache::default();
+        self.secondary = SecondaryStructureCache::default();
         self.gpu = GpuViewCache::default();
     }
 }
@@ -411,6 +437,10 @@ fn render_molecules_cpu(
         selection,
         visual_state,
         SurfaceCacheContext::new(&mut cache.surface, structure_id, structure_revision),
+        SecondaryStructureCacheContext::new(
+            &mut cache.secondary,
+            SecondaryStructureCacheKey::new(structure_id, structure_revision),
+        ),
     )
     .build();
     let rendered_in_full =
@@ -464,7 +494,13 @@ fn render_molecules_gpu(
         None
     } else {
         cache.gpu.instance_key = Some(instance_key);
-        let mut scene = build_molecule_instances(structure, selection, visual_state);
+        let mut scene = build_cached_molecule_instances(
+            structure,
+            selection,
+            visual_state,
+            &mut cache.secondary,
+            SecondaryStructureCacheKey::new(structure_id, structure_revision),
+        );
         let surface_key =
             SurfaceCacheKey::new(structure_id, structure_revision, structure, visual_state);
         scene.surface =

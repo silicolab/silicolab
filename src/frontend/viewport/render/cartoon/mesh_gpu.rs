@@ -3,13 +3,16 @@ use super::*;
 use nalgebra::{Point3, Vector3};
 
 use crate::domain::Structure;
-use crate::frontend::ViewportVisualState;
+use crate::frontend::viewport::{
+    SecondaryStructureCache, SecondaryStructureCacheKey, ViewportVisualState,
+};
 
 use super::super::super::gpu::MeshVertex;
 use super::super::usable_biopolymer;
 
 /// Build the world-space cartoon mesh (position, normal, color triangle soup)
 /// for the GPU mesh pipeline. Camera-independent.
+#[cfg(test)]
 pub(crate) fn build_biopolymer_cartoon_world_mesh(
     structure: &Structure,
     visual_state: &ViewportVisualState,
@@ -17,9 +20,40 @@ pub(crate) fn build_biopolymer_cartoon_world_mesh(
     let Some(biopolymer) = usable_biopolymer(structure) else {
         return Vec::new();
     };
+    build_cartoon_world_mesh_from_sweeps(
+        cartoon_chain_sweeps(structure, biopolymer, visual_state),
+        visual_state,
+    )
+}
+
+pub(crate) fn build_cached_biopolymer_cartoon_world_mesh(
+    structure: &Structure,
+    visual_state: &ViewportVisualState,
+    secondary_cache: &mut SecondaryStructureCache,
+    secondary_key: SecondaryStructureCacheKey,
+) -> Vec<MeshVertex> {
+    let Some(biopolymer) = usable_biopolymer(structure) else {
+        return Vec::new();
+    };
+    build_cartoon_world_mesh_from_sweeps(
+        cached_cartoon_chain_sweeps(
+            structure,
+            biopolymer,
+            visual_state,
+            secondary_cache,
+            secondary_key,
+        ),
+        visual_state,
+    )
+}
+
+fn build_cartoon_world_mesh_from_sweeps(
+    sweeps: Vec<Vec<CartoonSweepSample>>,
+    visual_state: &ViewportVisualState,
+) -> Vec<MeshVertex> {
     let segments = visual_state.cartoon.profile_segments.clamp(6, 48);
     let mut mesh = Vec::new();
-    for samples in cartoon_chain_sweeps(structure, biopolymer, visual_state) {
+    for samples in sweeps {
         append_cartoon_world_fragment(&mut mesh, &samples, segments);
     }
     mesh
