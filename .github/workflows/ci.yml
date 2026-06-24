@@ -1,0 +1,157 @@
+name: CI
+
+# PRs are the merge gate: branch protection requires the `CI complete` job
+# (defined last), so the pull_request run tests the exact tree that lands on
+# main. The push-to-main run is NOT a gate — it only refreshes the shared build
+# cache that PRs restore from (rust-cache saves on main, PRs read-only), keeping
+# it under GitHub's 10 GB/repo cap so PRs start warm.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Least privilege: checkout needs read; the changes job overrides this with the
+# pull-requests:read it needs to list a PR's files.
+permissions:
+  contents: read
+
+concurrency:
+  # A new push to a ref supersedes its in-progress run instead of running both:
+  # saves runner minutes and avoids two runs racing on the same cache key.
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  # Full debuginfo dominates compile time and balloons the cache; line tables
+  # keep usable panic backtraces at a fraction of the size.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
+jobs:
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      # Run the Rust jobs unless every changed file is inert: list the PR's files
+      # and grep for a non-inert one. (Don't use a dorny/paths-filter "all except
+      # docs" rule — a leading `**` OR's the whole filter true and it silently
+      # matches everything.)
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Push to main always builds — its job is to refresh the cache, so it
+          # is never gated on changed files.
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            echo "code=true" | tee -a "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate -q '.[].filename') || files=""
+          echo "Changed files:"
+          printf '%s\n' "$files"
+          # Inert = markdown anywhere, plus root .rules/.gitignore/LICENSE; these
+          # can't affect fmt/clippy/test. Everything else (Cargo.*, build.rs, the
+          # workflows) runs the suite. Fail safe to running if the list is empty.
+          inert='(\.md$|^\.rules$|^\.gitignore$|^LICENSE(-[A-Za-z0-9]+)?$)'
+          if [ -z "$files" ] || printf '%s\n' "$files" | grep -qvE "$inert"; then
+            code=true
+          else
+            code=false
+          fi
+          echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+
+  fmt:
+    name: Format
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+        with:
+          components: clippy
+          linux-deps: 'true'
+          cache: 'true'
+      - run: cargo clippy --workspace --all-targets --all-features
+
+  # Guard the worker's "self-contained static musl, pure Rust" invariant with a
+  # cheap dependency-graph query (no compilation). The real musl build runs only
+  # at release time; the common regression — a C dependency sneaking in — is
+  # exactly what this catches.
+  worker-pure-rust:
+    name: Worker is pure Rust
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+      # Scope to the musl target (drops host-only pure-Rust bindings) and to the
+      # worker's own subgraph (its compute-core dep has networking off, so no TLS
+      # stack and no cc/ring). cc is the canonical native-build signal.
+      - name: Assert the worker pulls no C-toolchain / native build dependency
+        run: |
+          TREE=$(cargo tree -p silicolab-compute --target x86_64-unknown-linux-musl -e normal,build --prefix none | sort -u)
+          echo "$TREE"
+          if echo "$TREE" | grep -qiE '^(cc|ring|aws-lc-rs|aws-lc-sys|openssl-sys) '; then
+            echo "::error::silicolab-compute pulls a C-toolchain / native build dependency; keep it pure Rust"
+            exit 1
+          fi
+
+  test:
+    name: Test (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+        with:
+          linux-deps: 'true'
+          cache: 'true'
+      - run: cargo test --workspace --all-features
+
+  # The single required status check; the branch ruleset requires only this
+  # context. It decouples the merge gate from the job matrix: docs-only PRs skip
+  # the Rust jobs entirely yet this still reports green (a skipped job is not a
+  # failure), and adding/removing a matrix OS never needs a ruleset edit.
+  # Requiring the per-OS `Test (<os>)` names directly would not work — a matrix
+  # job skipped by `if:` never expands, so those contexts never report and
+  # silently block the PR.
+  ci-complete:
+    name: CI complete
+    if: always()
+    needs: [changes, fmt, clippy, worker-pure-rust, test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every upstream job to have succeeded or been skipped
+        run: |
+          if ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}; then
+            echo "::error::an upstream CI job failed or was cancelled"
+            exit 1
+          fi
+          echo "All upstream jobs succeeded or were skipped."
