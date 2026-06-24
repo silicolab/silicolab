@@ -8,9 +8,6 @@ use std::ops::{Deref, DerefMut};
 
 use crate::io::llm::types::{ChatMessage, ContentBlock, ToolCall, Usage};
 
-/// Most finished backlog items the Activity panel retains per conversation.
-const MAX_COMPLETED: usize = 50;
-
 /// Where the session is in the turn cycle.
 ///
 /// ```text
@@ -75,17 +72,6 @@ impl PendingTurn {
     }
 }
 
-/// One finished backlog item kept for the Activity panel's "done" section: a
-/// background job that completed or a queued follow-up whose turn finished.
-#[derive(Debug, Clone)]
-pub struct CompletedActivity {
-    pub label: String,
-    /// A one-line conclusion (job summary first line, or the follow-up turn's
-    /// final assistant reply first line).
-    pub detail: String,
-    pub ok: bool,
-}
-
 /// Where a live `/models` fetch stands. Drives the spinner / error note next to
 /// the model picker in settings; the fetched ids themselves live in
 /// [`AgentSession::fetched_models`].
@@ -143,16 +129,12 @@ pub struct AssistantConversation {
     /// message submitted while busy lands here instead of being dropped; the loop
     /// pumps it once `phase` is `Idle`/`Done` (see [`PendingTurn`]).
     pub queued: VecDeque<PendingTurn>,
-    /// Finished backlog items (jobs + dequeued follow-ups) for the Activity
-    /// panel, capped to the most recent [`MAX_COMPLETED`]. Reset when a new
-    /// activity burst begins from a quiescent state.
-    pub completed: Vec<CompletedActivity>,
     /// Label of the dequeued follow-up currently running, if any.
     pub current_backlog: Option<String>,
     /// Count of this conversation's background jobs when the running follow-up
     /// began. If more are running when it ends, the follow-up handed its work to
-    /// a background job (which carries its own Activity row) rather than finishing
-    /// itself — see [`resolve_current_backlog`](Self::resolve_current_backlog).
+    /// a background job rather than finishing itself — see
+    /// [`resolve_current_backlog`](Self::resolve_current_backlog).
     pub backlog_job_baseline: usize,
 }
 
@@ -172,7 +154,6 @@ impl AssistantConversation {
             collected_results: Vec::new(),
             streaming_text: String::new(),
             queued: VecDeque::new(),
-            completed: Vec::new(),
             current_backlog: None,
             backlog_job_baseline: 0,
         }
@@ -205,14 +186,6 @@ impl AssistantConversation {
         }
     }
 
-    pub fn push_completed(&mut self, label: String, detail: String, ok: bool) {
-        self.completed.push(CompletedActivity { label, detail, ok });
-        if self.completed.len() > MAX_COMPLETED {
-            let overflow = self.completed.len() - MAX_COMPLETED;
-            self.completed.drain(0..overflow);
-        }
-    }
-
     pub fn note_backlog_start(&mut self, label: String, job_baseline: usize) {
         self.current_backlog = Some(label);
         self.backlog_job_baseline = job_baseline;
@@ -220,7 +193,7 @@ impl AssistantConversation {
 
     /// Resolve the just-finished backlog turn given how many background jobs are
     /// now running in this conversation. If it spawned one (more running than the
-    /// baseline captured at start), that job owns the Activity row, so the
+    /// baseline captured at start), that job owns the completion record, so the
     /// follow-up is dropped rather than marked done while its work is still
     /// running. Otherwise it finished on its own and is recorded as done.
     pub fn resolve_current_backlog(&mut self, jobs_running: usize) {
@@ -231,33 +204,9 @@ impl AssistantConversation {
         }
     }
 
-    /// Move the running backlog turn into `completed` with its reply as the
-    /// conclusion. A no-op when no backlog turn is running.
+    /// Clear the running backlog label. A no-op when no backlog turn is running.
     pub fn flush_current_backlog(&mut self) {
-        if let Some(label) = self.current_backlog.take() {
-            let detail = self.last_assistant_line();
-            self.push_completed(label, detail, true);
-        }
-    }
-
-    /// The just-finished turn's reply line, or empty. Scans back over trailing
-    /// `Tool`/`Notice` entries (e.g. a max-tokens cut-off notice the dispatcher
-    /// appends *after* the reply) to the turn's last `Assistant` text, but stops
-    /// at the `User` entry that opened the turn so it never inherits a prior
-    /// turn's reply.
-    fn last_assistant_line(&self) -> String {
-        for entry in self.transcript.iter().rev() {
-            match entry {
-                TranscriptEntry::Assistant(text) => return first_nonempty_line(text),
-                TranscriptEntry::User(_) => break,
-                _ => {}
-            }
-        }
-        String::new()
-    }
-
-    pub fn clear_completed(&mut self) {
-        self.completed.clear();
+        self.current_backlog = None;
     }
 
     pub fn has_activity(&self) -> bool {
@@ -493,110 +442,6 @@ fn title_from_message(text: &str) -> String {
     normalize_title(&title)
 }
 
-/// One finished row in the Activity panel.
-pub struct DoneRow {
-    pub label: String,
-    pub detail: String,
-    pub ok: bool,
-}
-
-/// One running background-job row in the Activity panel.
-pub struct RunningRow {
-    pub job_id: u64,
-    pub label: String,
-    pub started_at_ms: i64,
-}
-
-/// One queued follow-up row; `index` is its position in the full `queued`
-/// deque (what `RemoveQueuedAgentInput` deletes).
-pub struct QueuedRow {
-    pub index: usize,
-    pub preview: String,
-}
-
-/// The Activity panel's full view model for one conversation: the live-turn
-/// status, the three row sections, and the burst progress counts.
-pub struct ActivitySnapshot {
-    pub busy: bool,
-    pub phase: AgentPhase,
-    pub iterations: usize,
-    pub done: Vec<DoneRow>,
-    pub running: Vec<RunningRow>,
-    pub queued: Vec<QueuedRow>,
-    pub done_count: usize,
-    pub total_count: usize,
-}
-
-/// Build the Activity snapshot. `running_jobs` are this conversation's live
-/// background jobs as `(id, label, started_at_ms)`. `JobDone` items in the
-/// queue are plumbing (a finished job awaiting model notification) and are not
-/// listed as queued rows. A running follow-up turn (`current_backlog`) is
-/// counted toward progress but shown via the live-turn line, not a row.
-pub fn build_activity_snapshot(
-    conv: &AssistantConversation,
-    running_jobs: &[(u64, String, i64)],
-) -> ActivitySnapshot {
-    let done: Vec<DoneRow> = conv
-        .completed
-        .iter()
-        .map(|item| DoneRow {
-            label: item.label.clone(),
-            detail: item.detail.clone(),
-            ok: item.ok,
-        })
-        .collect();
-    let running: Vec<RunningRow> = running_jobs
-        .iter()
-        .map(|(id, label, started)| RunningRow {
-            job_id: *id,
-            label: label.clone(),
-            started_at_ms: *started,
-        })
-        .collect();
-    let queued: Vec<QueuedRow> = conv
-        .queued
-        .iter()
-        .enumerate()
-        .filter_map(|(index, item)| match item {
-            PendingTurn::UserMessage(text) => Some(QueuedRow {
-                index,
-                preview: text.clone(),
-            }),
-            PendingTurn::JobDone { .. } => None,
-        })
-        .collect();
-    let backlog_running = usize::from(conv.current_backlog.is_some());
-    let done_count = done.len();
-    let total_count = done.len() + running.len() + queued.len() + backlog_running;
-    ActivitySnapshot {
-        busy: conv.is_busy(),
-        phase: conv.phase,
-        iterations: conv.iterations,
-        done,
-        running,
-        queued,
-        done_count,
-        total_count,
-    }
-}
-
-/// First non-empty line of `text`, truncated to 120 chars; empty if `text` is
-/// blank.
-pub(crate) fn first_nonempty_line(text: &str) -> String {
-    text.lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or("")
-        .chars()
-        .take(120)
-        .collect()
-}
-
-/// Format an elapsed duration in ms as `M:SS` (clamps negatives to zero).
-pub fn format_elapsed(ms: i64) -> String {
-    let secs = ms.max(0) / 1000;
-    format!("{}:{:02}", secs / 60, secs % 60)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -738,123 +583,33 @@ mod tests {
     }
 
     #[test]
-    fn push_completed_caps_oldest() {
-        let mut conv = AssistantConversation::new(AssistantConversationId::new(1), "c".into());
-        for n in 0..(MAX_COMPLETED + 3) {
-            conv.push_completed(format!("job {n}"), String::new(), true);
-        }
-        assert_eq!(conv.completed.len(), MAX_COMPLETED);
-        assert_eq!(conv.completed.first().unwrap().label, "job 3");
-    }
-
-    #[test]
-    fn flush_current_backlog_records_last_assistant_line() {
+    fn flush_current_backlog_clears_backlog() {
         let mut conv = AssistantConversation::new(AssistantConversationId::new(1), "c".into());
         conv.note_backlog_start("compare methods".into(), 0);
-        conv.transcript.push(TranscriptEntry::Assistant(
-            "B3LYP gives 1.09 A.\nMore detail.".into(),
-        ));
         conv.flush_current_backlog();
         assert!(conv.current_backlog.is_none());
-        assert_eq!(conv.completed.len(), 1);
-        assert_eq!(conv.completed[0].label, "compare methods");
-        assert_eq!(conv.completed[0].detail, "B3LYP gives 1.09 A.");
     }
 
     #[test]
     fn flush_without_backlog_is_noop() {
         let mut conv = AssistantConversation::new(AssistantConversationId::new(1), "c".into());
         conv.flush_current_backlog();
-        assert!(conv.completed.is_empty());
+        assert!(conv.current_backlog.is_none());
     }
 
     #[test]
     fn resolve_drops_backlog_that_spawned_a_job() {
         let mut conv = AssistantConversation::new(AssistantConversationId::new(1), "c".into());
         conv.note_backlog_start("optimize this".into(), 0);
-        conv.transcript.push(TranscriptEntry::Assistant(
-            "Starting the optimization.".into(),
-        ));
-        // One job is now running where there were none — the job owns the row.
         conv.resolve_current_backlog(1);
         assert!(conv.current_backlog.is_none());
-        assert!(conv.completed.is_empty());
     }
 
     #[test]
-    fn resolve_records_backlog_when_no_new_job() {
+    fn resolve_clears_backlog_when_no_new_job() {
         let mut conv = AssistantConversation::new(AssistantConversationId::new(1), "c".into());
-        // Two unrelated jobs were already running; the follow-up spawns none.
         conv.note_backlog_start("just answer".into(), 2);
-        conv.transcript
-            .push(TranscriptEntry::Assistant("Here is the answer.".into()));
         conv.resolve_current_backlog(2);
         assert!(conv.current_backlog.is_none());
-        assert_eq!(conv.completed.len(), 1);
-        assert_eq!(conv.completed[0].detail, "Here is the answer.");
-    }
-
-    #[test]
-    fn last_assistant_line_skips_a_trailing_notice() {
-        let mut conv = AssistantConversation::new(AssistantConversationId::new(1), "c".into());
-        conv.note_backlog_start("summarize".into(), 0);
-        conv.transcript
-            .push(TranscriptEntry::User("summarize".into()));
-        conv.transcript
-            .push(TranscriptEntry::Assistant("Partial answer.".into()));
-        conv.transcript.push(TranscriptEntry::Notice(
-            "Response was cut off (max tokens reached).".into(),
-        ));
-        conv.flush_current_backlog();
-        assert_eq!(conv.completed[0].detail, "Partial answer.");
-    }
-
-    #[test]
-    fn last_assistant_line_stops_at_the_user_boundary() {
-        let mut conv = AssistantConversation::new(AssistantConversationId::new(1), "c".into());
-        // A prior turn's reply must not bleed into a text-less follow-up.
-        conv.transcript
-            .push(TranscriptEntry::Assistant("Old reply.".into()));
-        conv.transcript
-            .push(TranscriptEntry::User("declined follow-up".into()));
-        conv.transcript.push(TranscriptEntry::Notice(
-            "The model declined to respond.".into(),
-        ));
-        conv.note_backlog_start("declined follow-up".into(), 0);
-        conv.flush_current_backlog();
-        assert_eq!(conv.completed[0].detail, "");
-    }
-
-    #[test]
-    fn snapshot_skips_jobdone_and_tracks_indices_and_totals() {
-        let mut conv = AssistantConversation::new(AssistantConversationId::new(1), "c".into());
-        conv.push_completed("done a".into(), "ok".into(), true);
-        conv.queued
-            .push_back(PendingTurn::UserMessage("first".into()));
-        conv.queued.push_back(PendingTurn::JobDone {
-            label: "qm".into(),
-            summary: "x".into(),
-            is_error: false,
-        });
-        conv.queued
-            .push_back(PendingTurn::UserMessage("second".into()));
-        conv.note_backlog_start("running follow-up".into(), 0);
-
-        let snap = build_activity_snapshot(&conv, &[(5, "md run".into(), 1000)]);
-
-        assert_eq!(snap.queued.len(), 2);
-        assert_eq!(snap.queued[0].index, 0);
-        assert_eq!(snap.queued[1].index, 2);
-        assert_eq!(snap.running.len(), 1);
-        assert_eq!(snap.done_count, 1);
-        // 1 done + 1 job + 2 queued + 1 running backlog turn.
-        assert_eq!(snap.total_count, 5);
-    }
-
-    #[test]
-    fn format_elapsed_is_minutes_seconds() {
-        assert_eq!(format_elapsed(5_000), "0:05");
-        assert_eq!(format_elapsed(72_000), "1:12");
-        assert_eq!(format_elapsed(-10), "0:00");
     }
 }

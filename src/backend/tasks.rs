@@ -574,6 +574,13 @@ impl TaskManager {
             self.active_panel = Some(task_run_id);
         }
     }
+
+    pub fn running_task_runs(&self) -> Vec<&TaskRun> {
+        self.tasks
+            .iter()
+            .filter(|task| task.status == TaskStatus::Running)
+            .collect()
+    }
 }
 
 fn now_unix_ms() -> u64 {
@@ -602,5 +609,26 @@ mod tests {
         assert_eq!(run.status, TaskStatus::WaitingInput);
         assert_eq!(manager.active_panel, Some(run_id));
         assert!(matches!(run.backend, super::TaskBackend::BackgroundNative));
+    }
+
+    #[test]
+    fn recording_a_result_entry_sets_the_field() {
+        let mut tasks = TaskManager::default();
+        let controller = task_controller_by_id("qm-optimize").copied().unwrap();
+        let id = tasks.create_task_run(controller);
+        assert_eq!(tasks.task_run(id).unwrap().result_entry_id, None);
+        tasks.set_result_entry_id(id, Some(42));
+        assert_eq!(tasks.task_run(id).unwrap().result_entry_id, Some(42));
+    }
+
+    #[test]
+    fn running_task_runs_lists_only_running() {
+        let mut tasks = TaskManager::default();
+        let a = tasks.create_task_run(task_controller_by_id("qm-energy").copied().unwrap());
+        let b = tasks.create_task_run(task_controller_by_id("run-md").copied().unwrap());
+        tasks.mark_status(a, TaskStatus::Running);
+        tasks.mark_status(b, TaskStatus::Completed);
+        let running: Vec<u64> = tasks.running_task_runs().iter().map(|t| t.id).collect();
+        assert_eq!(running, vec![a]);
     }
 }

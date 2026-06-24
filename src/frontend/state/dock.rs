@@ -51,7 +51,6 @@ pub enum StaticView {
     Console,
     Assistant,
     TaskMonitor,
-    Activity,
 }
 
 impl StaticView {
@@ -63,7 +62,6 @@ impl StaticView {
             Self::Console,
             Self::Assistant,
             Self::TaskMonitor,
-            Self::Activity,
             Self::Output,
         ]
     }
@@ -73,7 +71,6 @@ impl StaticView {
             Self::Console => "Console",
             Self::Assistant => "Assistant",
             Self::TaskMonitor => "Task Monitor",
-            Self::Activity => "Activity",
             Self::Output => "Output",
         }
     }
@@ -86,7 +83,6 @@ impl StaticView {
             Self::Console => "console",
             Self::Assistant => "assistant",
             Self::TaskMonitor => "task_monitor",
-            Self::Activity => "activity",
             Self::Output => "output",
         }
     }
@@ -96,7 +92,6 @@ impl StaticView {
             "console" => Self::Console,
             "assistant" => Self::Assistant,
             "task_monitor" => Self::TaskMonitor,
-            "activity" => Self::Activity,
             "output" => Self::Output,
             _ => return None,
         })
@@ -165,7 +160,6 @@ impl Default for DockModel {
                 tabs: vec![
                     DockTab::Static(StaticView::Console),
                     DockTab::Static(StaticView::TaskMonitor),
-                    DockTab::Static(StaticView::Activity),
                     DockTab::Static(StaticView::Output),
                 ],
                 active: Some(DockTab::Static(StaticView::Console)),
@@ -435,29 +429,7 @@ mod tests {
     use crate::backend::config::{DockAreaLayout, DockLayoutConfig};
 
     #[test]
-    fn activity_is_a_known_static_view() {
-        assert!(StaticView::all().contains(&StaticView::Activity));
-        assert_eq!(
-            StaticView::from_token("activity"),
-            Some(StaticView::Activity)
-        );
-        assert_eq!(StaticView::Activity.token(), "activity");
-        assert_eq!(StaticView::Activity.home_area(), DockArea::Bottom);
-    }
-
-    #[test]
-    fn default_layout_includes_activity_in_bottom() {
-        let model = DockModel::default();
-        assert!(
-            model
-                .bottom
-                .tabs
-                .contains(&DockTab::Static(StaticView::Activity))
-        );
-    }
-
-    #[test]
-    fn from_config_restores_missing_activity() {
+    fn from_config_restores_missing_task_monitor() {
         let config = DockLayoutConfig {
             bottom: DockAreaLayout {
                 tabs: vec!["console".into()],
@@ -477,7 +449,7 @@ mod tests {
             model
                 .bottom
                 .tabs
-                .contains(&DockTab::Static(StaticView::Activity))
+                .contains(&DockTab::Static(StaticView::TaskMonitor))
         );
     }
 }

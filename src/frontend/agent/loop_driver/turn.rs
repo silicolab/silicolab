@@ -40,17 +40,6 @@ pub fn send_agent_message(state: &mut AppState, text: &str, ctx: &egui::Context)
         pump_queue(state, ctx);
         return;
     }
-    // Reset on this turn-start path, never in render — the Elm flow forbids
-    // mutating state during a render pass.
-    let active = state.ui.agent.active_conversation;
-    let has_jobs = state
-        .jobs
-        .agent_jobs
-        .iter()
-        .any(|job| job.conversation == active);
-    if !has_jobs && state.ui.agent.current_backlog.is_none() {
-        state.ui.agent.clear_completed();
-    }
     begin_user_turn(state, text, ctx);
 }
 
@@ -197,10 +186,7 @@ pub fn handle_turn_result(
                     "the turn failed"
                 },
             );
-            if let Some(label) = state.ui.agent.current_backlog.take() {
-                let detail = crate::frontend::agent::session::first_nonempty_line(&message);
-                state.ui.agent.push_completed(label, detail, false);
-            }
+            state.ui.agent.current_backlog = None;
             ctx.request_repaint();
             return;
         }

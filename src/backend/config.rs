@@ -298,13 +298,12 @@ pub struct DockLayoutConfig {
 impl Default for DockLayoutConfig {
     fn default() -> Self {
         Self {
-            // Bottom shows console / monitor / activity / output (console active),
-            // matching the frontend's `DockModel::default`.
+            // Bottom shows console / monitor / output (console active), matching
+            // the frontend's `DockModel::default`.
             bottom: DockAreaLayout {
                 tabs: vec![
                     "console".to_string(),
                     "task_monitor".to_string(),
-                    "activity".to_string(),
                     "output".to_string(),
                 ],
                 active: Some("console".to_string()),

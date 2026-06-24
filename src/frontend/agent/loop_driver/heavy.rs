@@ -3,6 +3,7 @@ use super::*;
 use eframe::egui;
 
 use crate::backend::entries::EntryOrigin;
+use crate::backend::tasks::{TaskStatus, task_controller_by_id};
 use crate::frontend::agent::session::{AssistantConversationId, PendingTurn, TranscriptEntry};
 use crate::frontend::jobs::{
     AgentHeavyJob, DockingWorkerMessage, EngineWorkerMessage, QmWorkerMessage, RunningDockingJob,
@@ -68,6 +69,42 @@ fn heavy_label(kind: HeavyKind, command: &str) -> String {
     }
 }
 
+/// The Task controller that represents an assistant-launched heavy command, so
+/// the run is indistinguishable from a hand-launched one in the Task Monitor.
+fn agent_task_controller_id(kind: HeavyKind, command: &str) -> &'static str {
+    let sub = command.split_whitespace().nth(1).unwrap_or("");
+    match kind {
+        HeavyKind::Qm => match sub {
+            "optimize" | "opt" => "qm-optimize",
+            "freq" | "frequencies" => "qm-frequencies",
+            "ts" | "saddle" | "transition-state" => "qm-transition-state",
+            _ => "qm-energy",
+        },
+        HeavyKind::Md => "run-md",
+        HeavyKind::Dock => "dock-ligand",
+    }
+}
+
+fn register_agent_task_run(state: &mut AppState, kind: HeavyKind, command: &str) -> u64 {
+    let controller = task_controller_by_id(agent_task_controller_id(kind, command))
+        .copied()
+        .expect("agent heavy controller ids are defined in TASK_CONTROLLERS");
+    let task_run_id = state.tasks.create_task_run(controller);
+    let source = state.entries.active_entry_id();
+    state.tasks.set_source_entry_id(task_run_id, source);
+    crate::frontend::dispatcher::mark_task_status(state, task_run_id, TaskStatus::Running);
+    task_run_id
+}
+
+fn complete_agent_task_run(state: &mut AppState, task_run_id: u64, is_error: bool) {
+    let status = if is_error {
+        TaskStatus::Failed
+    } else {
+        TaskStatus::Completed
+    };
+    crate::frontend::dispatcher::mark_task_status(state, task_run_id, status);
+}
+
 /// Launch a heavy command as a detached background job and record an immediate
 /// "started" tool result, so the model hands control back at once instead of
 /// blocking. Heavy jobs are serialized ([`MAX_AGENT_HEAVY`]): while one runs, a
@@ -122,11 +159,12 @@ pub fn spawn_heavy(state: &mut AppState, call: &ToolCall, kind: HeavyKind, ctx: 
             let id = state.jobs.next_agent_job_id;
             state.jobs.next_agent_job_id += 1;
             let conversation = state.ui.agent.active_conversation;
+            let task_run_id = register_agent_task_run(state, kind, &command);
             state.jobs.agent_jobs.push(TrackedAgentJob {
                 id,
                 conversation,
                 label: label.clone(),
-                started_at_ms: crate::backend::storage::jobs::now_ms(),
+                task_run_id,
                 job,
             });
             record_result(
@@ -169,8 +207,8 @@ pub fn poll_agent_jobs(state: &mut AppState, ctx: &egui::Context) {
     let mut any_completed = false;
     for mut tracked in jobs {
         let completion = match &mut tracked.job {
-            AgentHeavyJob::Qm(running) => drain_qm(state, running),
-            AgentHeavyJob::Engine(running) => drain_engine(state, running),
+            AgentHeavyJob::Qm(running) => drain_qm(state, running, tracked.task_run_id),
+            AgentHeavyJob::Engine(running) => drain_engine(state, running, tracked.task_run_id),
             AgentHeavyJob::Docking(running) => drain_docking(state, running),
         };
         match completion {
@@ -199,6 +237,7 @@ pub fn cancel_agent_job(state: &mut AppState, id: u64) {
     };
     let tracked = state.jobs.agent_jobs.remove(pos);
     tracked.job.cancel();
+    complete_agent_task_run(state, tracked.task_run_id, true);
     if let Some(conversation) = state.ui.agent.conversation_mut(tracked.conversation) {
         conversation
             .transcript
@@ -216,17 +255,20 @@ pub fn cancel_conversation_jobs(
     state: &mut AppState,
     conversation: AssistantConversationId,
 ) -> usize {
-    let mut cancelled = 0;
+    let mut cancelled_runs = Vec::new();
     state.jobs.agent_jobs.retain(|job| {
         if job.conversation == conversation {
             job.job.cancel();
-            cancelled += 1;
+            cancelled_runs.push(job.task_run_id);
             false
         } else {
             true
         }
     });
-    cancelled
+    for task_run_id in &cancelled_runs {
+        complete_agent_task_run(state, *task_run_id, true);
+    }
+    cancelled_runs.len()
 }
 
 /// Route a finished job to the conversation that launched it: a transcript
@@ -238,12 +280,11 @@ fn finish_agent_job(
     summary: String,
     is_error: bool,
 ) {
+    complete_agent_task_run(state, tracked.task_run_id, is_error);
     let verb = if is_error { "failed" } else { "finished" };
     let note = format!("Background job #{} ({}) {verb}.", tracked.id, tracked.label);
-    let detail = crate::frontend::agent::session::first_nonempty_line(&summary);
     if let Some(conversation) = state.ui.agent.conversation_mut(tracked.conversation) {
         conversation.transcript.push(TranscriptEntry::Notice(note));
-        conversation.push_completed(tracked.label.clone(), detail, !is_error);
         conversation.queued.push_back(PendingTurn::JobDone {
             label: tracked.label.clone(),
             summary,
@@ -273,7 +314,11 @@ fn drain_docking(state: &mut AppState, running: &RunningDockingJob) -> Option<(S
     completion
 }
 
-fn drain_qm(state: &mut AppState, running: &RunningQmJob) -> Option<(String, bool)> {
+fn drain_qm(
+    state: &mut AppState,
+    running: &RunningQmJob,
+    task_run_id: u64,
+) -> Option<(String, bool)> {
     let mut completion = None;
     while let Ok(message) = running.receiver.try_recv() {
         match message {
@@ -289,6 +334,11 @@ fn drain_qm(state: &mut AppState, running: &RunningQmJob) -> Option<(String, boo
                     state
                         .entries
                         .set_entry_origin(entry_id, EntryOrigin::QmRun { output: None });
+                    crate::frontend::dispatcher::record_task_result_entry(
+                        state,
+                        task_run_id,
+                        entry_id,
+                    );
                 }
                 state.set_message(outcome.summary.clone());
                 completion = Some((outcome.summary, false));
@@ -301,7 +351,11 @@ fn drain_qm(state: &mut AppState, running: &RunningQmJob) -> Option<(String, boo
     completion
 }
 
-fn drain_engine(state: &mut AppState, running: &mut RunningEngineJob) -> Option<(String, bool)> {
+fn drain_engine(
+    state: &mut AppState,
+    running: &mut RunningEngineJob,
+    task_run_id: u64,
+) -> Option<(String, bool)> {
     let mut completion = None;
     while let Ok(message) = running.receiver.try_recv() {
         match message {
@@ -324,6 +378,7 @@ fn drain_engine(state: &mut AppState, running: &mut RunningEngineJob) -> Option<
                 let origin =
                     crate::frontend::dispatcher::md_run_origin(trajectory, project_root.as_deref());
                 state.entries.set_entry_origin(entry_id, origin);
+                crate::frontend::dispatcher::record_task_result_entry(state, task_run_id, entry_id);
                 state.set_message(summary.clone());
                 completion = Some((summary, false));
             }
@@ -333,4 +388,63 @@ fn drain_engine(state: &mut AppState, running: &mut RunningEngineJob) -> Option<
         }
     }
     completion
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::tasks::TaskStatus;
+    use crate::frontend::state::AppState;
+
+    #[test]
+    fn agent_qm_subcommands_map_to_controllers() {
+        assert_eq!(
+            agent_task_controller_id(HeavyKind::Qm, "qm energy"),
+            "qm-energy"
+        );
+        assert_eq!(
+            agent_task_controller_id(HeavyKind::Qm, "qm opt"),
+            "qm-optimize"
+        );
+        assert_eq!(
+            agent_task_controller_id(HeavyKind::Qm, "qm freq"),
+            "qm-frequencies"
+        );
+        assert_eq!(
+            agent_task_controller_id(HeavyKind::Qm, "qm ts"),
+            "qm-transition-state"
+        );
+        assert_eq!(agent_task_controller_id(HeavyKind::Md, "md run"), "run-md");
+        assert_eq!(
+            agent_task_controller_id(HeavyKind::Dock, "dock lig"),
+            "dock-ligand"
+        );
+    }
+
+    #[test]
+    fn register_creates_a_running_task_run() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let id = register_agent_task_run(&mut state, HeavyKind::Qm, "qm optimize");
+        let task = state.tasks.task_run(id).expect("task run created");
+        assert_eq!(task.controller_id, "qm-optimize");
+        assert_eq!(task.status, TaskStatus::Running);
+    }
+
+    #[test]
+    fn complete_marks_terminal_status() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let ok = register_agent_task_run(&mut state, HeavyKind::Qm, "qm energy");
+        complete_agent_task_run(&mut state, ok, false);
+        assert_eq!(
+            state.tasks.task_run(ok).unwrap().status,
+            TaskStatus::Completed
+        );
+
+        let bad = register_agent_task_run(&mut state, HeavyKind::Md, "md run");
+        complete_agent_task_run(&mut state, bad, true);
+        assert_eq!(
+            state.tasks.task_run(bad).unwrap().status,
+            TaskStatus::Failed
+        );
+    }
 }
