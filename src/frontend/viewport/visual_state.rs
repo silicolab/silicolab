@@ -14,9 +14,10 @@ pub fn software_default_style(category: AtomCategory) -> AtomStyle {
         // Solvent is shown like any other molecule by default; the user hides it
         // on demand from the View panel (or `view water off`). No automatic
         // program-side hiding.
-        AtomCategory::Solvent | AtomCategory::Ligand | AtomCategory::Other => {
-            AtomStyle::BallAndStick
-        }
+        AtomCategory::Carbohydrate
+        | AtomCategory::Solvent
+        | AtomCategory::Ligand
+        | AtomCategory::Other => AtomStyle::BallAndStick,
     }
 }
 

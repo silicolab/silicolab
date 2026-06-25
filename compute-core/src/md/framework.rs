@@ -20,10 +20,11 @@ use std::collections::BTreeSet;
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::domain::{Bond, Structure, chemistry::normalized_symbol};
+use crate::domain::{Structure, chemistry::normalized_symbol};
 
+use super::bonded_graph;
 use super::materials::{self, CustomTypes, ElementParameterization};
-use super::topology::{BondedTerm, MdTopology, MoleculeAtom, MoleculeRun, MoleculeType, Species};
+use super::topology::{MdTopology, MoleculeAtom, MoleculeRun, MoleculeType, Species};
 
 /// The molecule/residue name a framework topology's single all-atom molecule
 /// uses.
@@ -120,7 +121,7 @@ impl MdTopology {
             }
         }
 
-        let adjacency = bond_adjacency(structure.atoms.len(), &structure.bonds);
+        let adjacency = bonded_graph::bond_adjacency(structure.atoms.len(), &structure.bonds);
 
         let atoms: Vec<MoleculeAtom> = type_names
             .iter()
@@ -168,9 +169,11 @@ impl MdTopology {
                     )
                 })?;
                 molecule.nrexcl = 3;
-                molecule.bonds = framework_bonds(&structure.bonds);
-                molecule.angles = framework_angles(&adjacency);
-                molecule.dihedrals = framework_dihedrals(&adjacency);
+                // Harmonic bonds/angles (func 1) and Ryckaert-Bellemans proper
+                // dihedrals (func 3) for the OPLS-style carbon framework.
+                molecule.bonds = bonded_graph::bonds(&structure.bonds, 1);
+                molecule.angles = bonded_graph::angles(&adjacency, 1);
+                molecule.dihedrals = bonded_graph::proper_dihedrals(&adjacency, 3);
                 defaults = Some(ff.defaults);
                 bonded_params = ff.bonded_params;
             }
@@ -194,94 +197,6 @@ impl MdTopology {
             inline_force_field: None,
         })
     }
-}
-
-/// Build a 0-based neighbor adjacency list from a bond list, with each atom's
-/// neighbors sorted and de-duplicated.
-fn bond_adjacency(atom_count: usize, bonds: &[Bond]) -> Vec<Vec<usize>> {
-    let mut adjacency = vec![Vec::new(); atom_count];
-    for bond in bonds {
-        if bond.a == bond.b || bond.a >= atom_count || bond.b >= atom_count {
-            continue;
-        }
-        adjacency[bond.a].push(bond.b);
-        adjacency[bond.b].push(bond.a);
-    }
-    for neighbors in &mut adjacency {
-        neighbors.sort_unstable();
-        neighbors.dedup();
-    }
-    adjacency
-}
-
-/// Index-only harmonic bonds (func 1) from the bond list, 1-based, de-duplicated
-/// and orientation-normalized (`a < b`).
-fn framework_bonds(bonds: &[Bond]) -> Vec<BondedTerm> {
-    let mut seen = BTreeSet::new();
-    for bond in bonds {
-        if bond.a == bond.b {
-            continue;
-        }
-        seen.insert((bond.a.min(bond.b), bond.a.max(bond.b)));
-    }
-    seen.into_iter()
-        .map(|(a, b)| BondedTerm {
-            atoms: vec![a as u32 + 1, b as u32 + 1],
-            func: 1,
-        })
-        .collect()
-}
-
-/// Index-only harmonic angles (func 1): every pair of bonds sharing a central
-/// atom. 1-based, with the two end atoms ordered so each angle appears once.
-fn framework_angles(adjacency: &[Vec<usize>]) -> Vec<BondedTerm> {
-    let mut angles = Vec::new();
-    for (center, neighbors) in adjacency.iter().enumerate() {
-        for i in 0..neighbors.len() {
-            for j in (i + 1)..neighbors.len() {
-                angles.push(BondedTerm {
-                    atoms: vec![
-                        neighbors[i] as u32 + 1,
-                        center as u32 + 1,
-                        neighbors[j] as u32 + 1,
-                    ],
-                    func: 1,
-                });
-            }
-        }
-    }
-    angles
-}
-
-/// Index-only Ryckaert-Bellemans proper dihedrals (func 3): every i-j-k-l path
-/// over a central bond (j,k). 1-based, de-duplicated. Each central bond is
-/// visited once (`j < k`), so a dihedral and its reverse are not both emitted.
-fn framework_dihedrals(adjacency: &[Vec<usize>]) -> Vec<BondedTerm> {
-    let mut seen = BTreeSet::new();
-    for (j, neighbors_j) in adjacency.iter().enumerate() {
-        for &k in neighbors_j {
-            if j >= k {
-                continue;
-            }
-            for &i in neighbors_j {
-                if i == k {
-                    continue;
-                }
-                for &l in &adjacency[k] {
-                    if l == j || l == i {
-                        continue;
-                    }
-                    seen.insert((i, j, k, l));
-                }
-            }
-        }
-    }
-    seen.into_iter()
-        .map(|(i, j, k, l)| BondedTerm {
-            atoms: vec![i as u32 + 1, j as u32 + 1, k as u32 + 1, l as u32 + 1],
-            func: 3,
-        })
-        .collect()
 }
 
 /// Per-atom 1-2 and 1-3 nonbonded exclusions (1-based) for a rigid framework.
@@ -324,7 +239,7 @@ mod tests {
     use nalgebra::Point3;
 
     use super::*;
-    use crate::domain::{Atom, BondType};
+    use crate::domain::{Atom, Bond, BondType};
 
     /// A closed ring of `elements`, each atom bonded to its two ring neighbors.
     /// Positions are placed on a circle; the framework builder ignores them but

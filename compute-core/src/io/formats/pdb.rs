@@ -12,7 +12,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use nalgebra::Point3;
 
 use crate::domain::{
-    Atom, Bond, BondType, PdbAtomAnnotation, ResidueId, SecondaryStructureKind,
+    Atom, Bond, BondLinkage, BondType, PdbAtomAnnotation, ResidueId, SecondaryStructureKind,
     SecondaryStructureSpan, Structure, UnitCell, build_biopolymer,
     chemistry::{infer_bonds_with_cell, normalized_symbol},
 };
@@ -229,6 +229,11 @@ pub fn to_pdb(structure: &Structure) -> Result<String> {
         output.push('\n');
     }
 
+    for line in pdb_link_lines(structure) {
+        output.push_str(&line);
+        output.push('\n');
+    }
+
     for line in pdb_conect_lines(structure)? {
         output.push_str(&line);
         output.push('\n');
@@ -236,6 +241,57 @@ pub fn to_pdb(structure: &Structure) -> Result<String> {
 
     output.push_str("END\n");
     Ok(output)
+}
+
+fn pdb_link_lines(structure: &Structure) -> Vec<String> {
+    let Some(biopolymer) = structure
+        .biopolymer
+        .as_ref()
+        .filter(|biopolymer| biopolymer.is_compatible_with_atom_count(structure.atoms.len()))
+    else {
+        return Vec::new();
+    };
+
+    let mut lines = Vec::new();
+    for cross in crate::domain::glycan::cross_residue_linkages(structure, biopolymer) {
+        let (first, second) = match cross.linkage {
+            BondLinkage::Glycosidic { carbon, oxygen } => (carbon, oxygen),
+            BondLinkage::GlycanProtein {
+                anomeric_carbon,
+                protein_atom,
+                ..
+            } => (anomeric_carbon, protein_atom),
+            BondLinkage::IntraResidue => continue,
+        };
+        lines.push(pdb_link_line(structure, first, second));
+    }
+    lines
+}
+
+fn pdb_link_line(structure: &Structure, first: usize, second: usize) -> String {
+    let first_atom = link_atom_field(structure, first);
+    let second_atom = link_atom_field(structure, second);
+    format!(
+        "LINK        {first_atom}{gap}{second_atom}",
+        gap = " ".repeat(15)
+    )
+}
+
+fn link_atom_field(structure: &Structure, index: usize) -> String {
+    let residue = pdb_residue_identity(structure, index);
+    let chain_id = if residue.chain_id == ' ' {
+        'A'
+    } else {
+        residue.chain_id
+    };
+    let element = normalized_symbol(structure.atoms[index].element.trim());
+    let atom_name = pdb_atom_name_for(structure, index, &element, index + 1);
+    format!(
+        "{atom_name:>4} {residue_name:<3} {chain_id:1}{residue_seq:>4}{insertion_code:1}",
+        residue_name = residue.name,
+        residue_seq = residue.sequence_number,
+        insertion_code = residue.insertion_code,
+    )
 }
 
 struct ParsedAtom {
@@ -1060,5 +1116,63 @@ END
             .map(|l| l[12..16].trim())
             .collect();
         assert_eq!(names, ["N", "CA", "C", "O"]);
+    }
+
+    fn has_bond_between(structure: &crate::domain::Structure, first: usize, second: usize) -> bool {
+        structure.bonds.iter().any(|bond| {
+            (bond.a == first && bond.b == second) || (bond.a == second && bond.b == first)
+        })
+    }
+
+    fn atom_index(structure: &crate::domain::Structure, residue: &str, atom: &str) -> usize {
+        let bio = structure.biopolymer.as_ref().expect("biopolymer overlay");
+        let residue_index = bio
+            .residues
+            .iter()
+            .position(|r| r.residue_name == residue)
+            .expect("residue present");
+        (0..structure.atoms.len())
+            .find(|&i| {
+                bio.residue_for_atom.get(i).and_then(|r| *r) == Some(residue_index)
+                    && bio.atom_name(i) == Some(atom)
+            })
+            .expect("named atom present")
+    }
+
+    #[test]
+    fn glycan_to_asn_link_round_trips_through_pdb() {
+        let source = "\
+TITLE     n-glycan junction
+ATOM      1  N   ASN A   1       0.000   0.000   0.000  1.00  0.00           N
+ATOM      2  CA  ASN A   1       1.450   0.000   0.000  1.00  0.00           C
+ATOM      3  CG  ASN A   1       2.900   0.000   0.000  1.00  0.00           C
+ATOM      4  ND2 ASN A   1       4.000   0.800   0.000  1.00  0.00           N
+ATOM      5  C1  NAG B   1       5.400   0.800   0.000  1.00  0.00           C
+ATOM      6  C2  NAG B   1       6.100   2.000   0.000  1.00  0.00           C
+ATOM      7  O5  NAG B   1       6.100  -0.300   0.000  1.00  0.00           O
+LINK         ND2 ASN A   1                 C1  NAG B   1
+END
+";
+        let structure = parse_pdb(source).expect("valid glycoprotein pdb");
+        let nd2 = atom_index(&structure, "ASN", "ND2");
+        let c1 = atom_index(&structure, "NAG", "C1");
+        assert!(
+            has_bond_between(&structure, nd2, c1),
+            "inbound LINK should create the ND2-C1 bond"
+        );
+
+        let serialized = to_pdb(&structure).expect("serialize glycoprotein");
+        assert!(
+            serialized.lines().any(|line| line.starts_with("LINK")),
+            "to_pdb should emit a LINK record for the glycan-protein junction"
+        );
+
+        let reparsed = parse_pdb(&serialized).expect("reparse glycoprotein");
+        let nd2_again = atom_index(&reparsed, "ASN", "ND2");
+        let c1_again = atom_index(&reparsed, "NAG", "C1");
+        assert!(
+            has_bond_between(&reparsed, nd2_again, c1_again),
+            "the cross-residue bond must survive a to_pdb / parse round trip"
+        );
     }
 }

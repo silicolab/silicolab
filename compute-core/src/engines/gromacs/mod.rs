@@ -9,8 +9,11 @@
 
 pub mod analysis;
 pub mod build;
+pub mod carb_topology;
 pub mod custom_ff;
 pub mod exec;
+pub mod forcefield_assets;
+pub mod glycoprotein_topology;
 pub mod input;
 pub mod material;
 pub mod nonbonded;

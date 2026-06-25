@@ -24,11 +24,18 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    domain::Structure,
+    domain::{
+        AtomCategory, Structure,
+        glycan::linkage_topology::{self, BondLinkage},
+    },
     engines::{
         gromacs::{
+            carb_topology::build_glycan_topology,
             exec::run_gmx,
+            forcefield_assets::{self, bundle},
+            glycoprotein_topology::{self, merge_glycan_into_protein_topology},
             runner::{GromacsProgress, subprocess_failure},
+            topgen::render_top,
         },
         remote::Compute,
     },
@@ -126,52 +133,64 @@ where
             }
         };
 
-    // 1. Write the solute with its real residue/atom names so the engine can
-    //    match force-field residue templates.
-    report(GromacsProgress::Stage("writing solute.pdb".to_string()));
-    std::fs::write(wd.join("solute.pdb"), to_pdb(&req.structure)?)
-        .with_context(|| "writing solute.pdb".to_string())?;
+    if bundle(&req.force_field).is_some() {
+        report(GromacsProgress::Stage(format!(
+            "staging {} force field",
+            req.force_field
+        )));
+        forcefield_assets::stage_forcefield(&req.force_field, &wd)?;
+    }
 
-    // 2. pdb2gmx: assign per-atom types and charges from the chosen force field.
-    //    `-ignh` discards any hydrogens in the input and lets pdb2gmx add them
-    //    fresh in the protonation the force field expects. Input hydrogens from
-    //    PDBs routinely use naming/protonation the force field's residue
-    //    templates don't recognize, which otherwise aborts pdb2gmx with a fatal
-    //    "hydrogen not found" error (GROMACS itself recommends -ignh there). For
-    //    a system builder, regenerating hydrogens is the right default anyway.
-    report(GromacsProgress::Stage(format!(
-        "gmx pdb2gmx (-ff {}, -water {})",
-        req.force_field,
-        req.water.db_token()
-    )));
-    run(
-        vec![
-            "pdb2gmx".into(),
-            "-f".into(),
-            "solute.pdb".into(),
-            "-o".into(),
-            "processed.gro".into(),
-            "-p".into(),
-            "topol.top".into(),
-            "-i".into(),
-            "posre.itp".into(),
-            "-ff".into(),
-            req.force_field.clone(),
-            "-water".into(),
-            req.water.db_token().into(),
-            "-ignh".into(),
-        ],
-        None,
-        "pdb2gmx",
-        &mut report,
-    )?;
+    let run_pdb2gmx = |solute: &Structure, report: &mut F| -> Result<()> {
+        report(GromacsProgress::Stage("writing solute.pdb".to_string()));
+        std::fs::write(wd.join("solute.pdb"), to_pdb(solute)?)
+            .with_context(|| "writing solute.pdb".to_string())?;
+
+        report(GromacsProgress::Stage(format!(
+            "gmx pdb2gmx (-ff {}, -water {})",
+            req.force_field,
+            req.water.db_token()
+        )));
+        run(
+            vec![
+                "pdb2gmx".into(),
+                "-f".into(),
+                "solute.pdb".into(),
+                "-o".into(),
+                "processed.gro".into(),
+                "-p".into(),
+                "topol.top".into(),
+                "-i".into(),
+                "posre.itp".into(),
+                "-ff".into(),
+                req.force_field.clone(),
+                "-water".into(),
+                req.water.db_token().into(),
+                "-ignh".into(),
+            ],
+            None,
+            "pdb2gmx",
+            report,
+        )
+    };
+
+    let editconf_input = if is_pure_glycan(&req.structure) {
+        build_glycan_inputs(&req, &wd, &mut report)?
+    } else if is_glycoprotein(&req.structure) {
+        let protein_only = glycoprotein_topology::protein_only_structure(&req.structure)?;
+        run_pdb2gmx(&protein_only, &mut report)?;
+        merge_glycoprotein_topology(&req, &wd, &mut report)?
+    } else {
+        run_pdb2gmx(&req.structure, &mut report)?;
+        "processed.gro".to_string()
+    };
 
     // 3. editconf: center the solute in a periodic box of the chosen geometry.
     report(GromacsProgress::Stage("gmx editconf".to_string()));
     let mut editconf = vec![
         "editconf".into(),
         "-f".into(),
-        "processed.gro".into(),
+        editconf_input,
         "-o".into(),
         "boxed.gro".into(),
         "-c".into(),
@@ -273,6 +292,85 @@ where
         working_dir: wd,
         summary,
     })
+}
+
+fn is_pure_glycan(structure: &Structure) -> bool {
+    if structure.atoms.is_empty() || structure.biopolymer.is_none() {
+        return false;
+    }
+    (0..structure.atoms.len()).all(|i| structure.atom_category(i) == AtomCategory::Carbohydrate)
+}
+
+fn is_glycoprotein(structure: &Structure) -> bool {
+    if structure.atoms.is_empty() || structure.biopolymer.is_none() {
+        return false;
+    }
+    let mut has_protein = false;
+    let mut has_carbohydrate = false;
+    for i in 0..structure.atoms.len() {
+        match structure.atom_category(i) {
+            AtomCategory::Protein => has_protein = true,
+            AtomCategory::Carbohydrate => has_carbohydrate = true,
+            _ => {}
+        }
+    }
+    has_protein
+        && has_carbohydrate
+        && structure
+            .biopolymer
+            .as_ref()
+            .map(|biopolymer| {
+                linkage_topology::cross_residue_linkages(structure, biopolymer)
+                    .iter()
+                    .any(|cross| matches!(cross.linkage, BondLinkage::GlycanProtein { .. }))
+            })
+            .unwrap_or(false)
+}
+
+fn merge_glycoprotein_topology<F>(
+    req: &BuildRequest,
+    wd: &std::path::Path,
+    report: &mut F,
+) -> Result<String>
+where
+    F: FnMut(GromacsProgress),
+{
+    report(GromacsProgress::Stage(
+        "merging glycan into protein topology".to_string(),
+    ));
+    let top_path = wd.join("topol.top");
+    let protein_top = std::fs::read_to_string(&top_path)
+        .with_context(|| format!("reading {}", top_path.display()))?;
+    let merged =
+        merge_glycan_into_protein_topology(&protein_top, &req.structure, &req.force_field)?;
+    std::fs::write(&top_path, merged).with_context(|| format!("writing {}", top_path.display()))?;
+
+    let gro_path = wd.join("processed.gro");
+    let processed = std::fs::read_to_string(&gro_path)
+        .with_context(|| format!("reading {}", gro_path.display()))?;
+    let with_glycan = glycoprotein_topology::append_glycan_coordinates(&processed, &req.structure)?;
+    std::fs::write(&gro_path, with_glycan)
+        .with_context(|| format!("writing {}", gro_path.display()))?;
+    Ok("processed.gro".to_string())
+}
+
+fn build_glycan_inputs<F>(
+    req: &BuildRequest,
+    wd: &std::path::Path,
+    report: &mut F,
+) -> Result<String>
+where
+    F: FnMut(GromacsProgress),
+{
+    report(GromacsProgress::Stage(
+        "generating glycan topology".to_string(),
+    ));
+    let topology = build_glycan_topology(&req.structure, &req.force_field)?;
+    std::fs::write(wd.join("solute.pdb"), to_pdb(&req.structure)?)
+        .with_context(|| "writing solute.pdb".to_string())?;
+    std::fs::write(wd.join("topol.top"), render_top(&topology))
+        .with_context(|| "writing topol.top".to_string())?;
+    Ok("solute.pdb".to_string())
 }
 
 /// `editconf` box arguments for the chosen shape and sizing. Padding mode uses a
@@ -393,6 +491,138 @@ mod tests {
         assert!(
             outcome.structure.atoms.len() > solute_atoms,
             "solvation should add atoms ({solute_atoms} -> {})",
+            outcome.structure.atoms.len()
+        );
+    }
+
+    #[test]
+    #[ignore = "requires GROMACS inside WSL (Windows acceptance environment)"]
+    fn wsl_gromacs_build_glycan_topology_runs_end_to_end() {
+        use crate::workflows::glycan::glycan_to_structure;
+
+        let working_dir = std::env::temp_dir().join("silicolab_gmx_build_glycan");
+        let _ = std::fs::remove_dir_all(&working_dir);
+
+        let structure = glycan_to_structure(
+            "Man(a1-3)[Man(a1-6)]Man(b1-4)GlcNAc(b1-4)GlcNAc",
+            Some("n-glycan-core"),
+        )
+        .expect("glycan builds");
+        let solute_atoms = structure.atoms.len();
+
+        let launch = EngineLaunch {
+            command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
+            program: "/usr/local/gromacs/bin/gmx".to_string(),
+        };
+
+        let outcome = build_system(
+            BuildRequest {
+                structure,
+                working_dir: working_dir.clone(),
+                compute: launch.into(),
+                force_field: "charmm36".to_string(),
+                water: WaterModel::Tip3p,
+                box_config: MdSystemConfig::with_uniform_padding(12.0, BoxShape::Cubic),
+                solvate: false,
+                ions: None,
+                max_duration: Duration::from_secs(600),
+            },
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+        .expect("glycan build should complete");
+
+        assert!(
+            outcome.topology_file.exists(),
+            "topol.top should be written"
+        );
+        assert!(
+            outcome.structure.cell.is_some(),
+            "built glycan must have a periodic box"
+        );
+        assert_eq!(
+            outcome.structure.atoms.len(),
+            solute_atoms,
+            "the un-solvated glycan keeps all atoms"
+        );
+    }
+
+    const TRIPEPTIDE_ASN_PDB: &str = "\
+ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00           N
+ATOM      2  CA  ALA A   1       1.458   0.000   0.000  1.00  0.00           C
+ATOM      3  C   ALA A   1       2.009   1.420   0.000  1.00  0.00           C
+ATOM      4  O   ALA A   1       1.251   2.390   0.000  1.00  0.00           O
+ATOM      5  CB  ALA A   1       1.988  -0.773  -1.199  1.00  0.00           C
+ATOM      6  N   ASN A   2       3.332   1.540   0.000  1.00  0.00           N
+ATOM      7  CA  ASN A   2       3.999   2.840   0.000  1.00  0.00           C
+ATOM      8  CB  ASN A   2       5.520   2.680   0.000  1.00  0.00           C
+ATOM      9  CG  ASN A   2       6.230   4.020   0.000  1.00  0.00           C
+ATOM     10  OD1 ASN A   2       5.620   5.090   0.000  1.00  0.00           O
+ATOM     11  ND2 ASN A   2       7.560   4.000   0.000  1.00  0.00           N
+ATOM     12  C   ASN A   2       3.560   3.660   1.210  1.00  0.00           C
+ATOM     13  O   ASN A   2       3.450   3.130   2.320  1.00  0.00           O
+ATOM     14  N   ALA A   3       3.310   4.960   1.030  1.00  0.00           N
+ATOM     15  CA  ALA A   3       2.880   5.860   2.100  1.00  0.00           C
+ATOM     16  C   ALA A   3       1.430   5.560   2.470  1.00  0.00           C
+ATOM     17  O   ALA A   3       0.580   5.420   1.590  1.00  0.00           O
+ATOM     18  CB  ALA A   3       3.010   7.320   1.660  1.00  0.00           C
+END
+";
+
+    #[test]
+    #[ignore = "requires GROMACS inside WSL (Windows acceptance environment)"]
+    fn wsl_gromacs_build_glycoprotein_topology_runs_end_to_end() {
+        use crate::domain::ResidueId;
+        use crate::io::formats::pdb::parse_pdb;
+        use crate::workflows::glycan::glycoprotein::{GlycosylationKind, glycosylate_protein};
+
+        let working_dir = std::env::temp_dir().join("silicolab_gmx_build_glycoprotein");
+        let _ = std::fs::remove_dir_all(&working_dir);
+
+        let protein = parse_pdb(TRIPEPTIDE_ASN_PDB).expect("fixture parses");
+        let anchor = ResidueId::new('A', 2, ' ');
+        let structure = glycosylate_protein(&protein, "GlcNAc", anchor, GlycosylationKind::NLinked)
+            .expect("glycosylation succeeds");
+        let solute_atoms = structure.atoms.len();
+
+        let launch = EngineLaunch {
+            command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
+            program: "/usr/local/gromacs/bin/gmx".to_string(),
+        };
+
+        let outcome = build_system(
+            BuildRequest {
+                structure,
+                working_dir: working_dir.clone(),
+                compute: launch.into(),
+                force_field: "charmm36".to_string(),
+                water: WaterModel::Tip3p,
+                box_config: MdSystemConfig::with_uniform_padding(12.0, BoxShape::Cubic),
+                solvate: true,
+                ions: Some(IonOptions {
+                    neutralize: true,
+                    concentration_molar: Some(0.15),
+                    positive_ion: "NA".to_string(),
+                    negative_ion: "CL".to_string(),
+                }),
+                max_duration: Duration::from_secs(600),
+            },
+            Arc::new(AtomicBool::new(false)),
+            |_| {},
+        )
+        .expect("glycoprotein build should complete");
+
+        assert!(
+            outcome.topology_file.exists(),
+            "topol.top should be written"
+        );
+        assert!(
+            outcome.structure.cell.is_some(),
+            "built glycoprotein must have a periodic box"
+        );
+        assert!(
+            outcome.structure.atoms.len() > solute_atoms,
+            "solvating the glycoprotein adds atoms ({solute_atoms} -> {})",
             outcome.structure.atoms.len()
         );
     }

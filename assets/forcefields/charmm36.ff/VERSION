@@ -1,0 +1,11 @@
+CHARMM36 (GROMACS port), MacKerell lab
+Release: feb2026
+CGenFF: 5.0
+Upstream dir name: charmm36-feb2026_cgenff-5.0.ff (renamed to charmm36.ff here)
+
+Pruned to the subset staged by the builder: protein (aminoacids.*),
+carbohydrate (carb.*), shared parameters (ff*.itp, cmap.itp, nbfix.itp,
+atomtypes.atp), TIP3P water, and ions. Upstream lipid, nucleic-acid, CGenFF
+small-molecule, ether, metal and silicate subsets are not included.
+
+License: MIT (see LICENSE)
