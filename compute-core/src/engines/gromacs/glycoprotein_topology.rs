@@ -51,7 +51,11 @@ pub fn merge_glycan_into_protein_topology_with(
         bail!("no carbohydrate atoms to merge into the protein topology");
     }
 
-    let junction = junction_site(structure, biopolymer)?;
+    // Every glycan-to-protein linkage gets its own junction bond and charge
+    // patch. All carbohydrate atoms (across every glycosylation site) live in one
+    // glycan moleculetype; handling only the first junction would leave the other
+    // sites' sugars topologically free-floating in the MD system.
+    let junctions = junction_sites(structure, biopolymer)?;
     let (glycan_structure, local_for_global) =
         extract_substructure(structure, biopolymer, &glycan_atoms, 'G');
     let glycan_topology = build_glycan_topology_with(&glycan_structure, force_field, database)?;
@@ -65,31 +69,42 @@ pub fn merge_glycan_into_protein_topology_with(
     let protein_atom_count = parsed.atom_count;
     let protein_residue_count = parsed.max_residue_number;
 
-    let anomeric_local = *local_for_global
-        .get(&junction.anomeric_carbon_global)
-        .ok_or_else(|| anyhow!("the anomeric carbon is not a carbohydrate atom"))?;
-    let anomeric_topology_index = protein_atom_count + anomeric_local + 1;
-
-    apply_junction_patch_to_protein(&mut parsed, &junction)?;
+    // Resolve each junction's anomeric carbon to its local glycan index up front,
+    // so a missing one aborts before any topology is mutated.
+    let anomeric_locals = junctions
+        .iter()
+        .map(|junction| {
+            local_for_global
+                .get(&junction.anomeric_carbon_global)
+                .copied()
+                .ok_or_else(|| anyhow!("the anomeric carbon is not a carbohydrate atom"))
+        })
+        .collect::<Result<Vec<usize>>>()?;
 
     let mut glycan_molecule = glycan_molecule.clone();
-    apply_junction_patch_to_anomeric(&mut glycan_molecule, anomeric_local, &junction.patch);
+    for (junction, &anomeric_local) in junctions.iter().zip(&anomeric_locals) {
+        apply_junction_patch_to_protein(&mut parsed, junction)?;
+        apply_junction_patch_to_anomeric(&mut glycan_molecule, anomeric_local, &junction.patch);
+    }
     neutralize_molecule_charges(&mut glycan_molecule.atoms, parsed.total_charge());
 
     let atom_lines =
         render_glycan_atom_lines(&glycan_molecule, protein_atom_count, protein_residue_count);
     let mut bond_lines = render_glycan_bond_lines(&glycan_molecule, protein_atom_count);
 
-    let anchor_topology_index = parsed.anchor_atom_index(
-        junction.anchor_sequence_number,
-        &junction.anchor_residue_name,
-        &junction.anchor_atom_name,
-    )?;
-    let (junction_b0, junction_kb) = junction_bond_params(&junction.anchor_atom_name);
-    bond_lines.push(format!(
-        "  {:>4} {:>4} 1 {:.5} {:.1}\n",
-        anchor_topology_index, anomeric_topology_index, junction_b0, junction_kb
-    ));
+    for (junction, &anomeric_local) in junctions.iter().zip(&anomeric_locals) {
+        let anomeric_topology_index = protein_atom_count + anomeric_local + 1;
+        let anchor_topology_index = parsed.anchor_atom_index(
+            junction.anchor_sequence_number,
+            &junction.anchor_residue_name,
+            &junction.anchor_atom_name,
+        )?;
+        let (junction_b0, junction_kb) = junction_bond_params(&junction.anchor_atom_name);
+        bond_lines.push(format!(
+            "  {:>4} {:>4} 1 {:.5} {:.1}\n",
+            anchor_topology_index, anomeric_topology_index, junction_b0, junction_kb
+        ));
+    }
 
     parsed.append_atoms(&atom_lines);
     parsed.append_bonds(&bond_lines);
@@ -225,7 +240,8 @@ fn residue_name_of(biopolymer: &Biopolymer, atom_index: usize) -> Option<&str> {
     )
 }
 
-fn junction_site(structure: &Structure, biopolymer: &Biopolymer) -> Result<JunctionSite> {
+fn junction_sites(structure: &Structure, biopolymer: &Biopolymer) -> Result<Vec<JunctionSite>> {
+    let mut sites = Vec::new();
     for cross in linkage_topology::cross_residue_linkages(structure, biopolymer) {
         let BondLinkage::GlycanProtein {
             anomeric_carbon,
@@ -254,7 +270,7 @@ fn junction_site(structure: &Structure, biopolymer: &Biopolymer) -> Result<Junct
                 patches::o_linked_junction_patch(&anchor_atom_name)
             }
         };
-        return Ok(JunctionSite {
+        sites.push(JunctionSite {
             anchor_residue_name: residue.residue_name.clone(),
             anchor_atom_name,
             anchor_sequence_number: residue.id.sequence_number,
@@ -262,7 +278,10 @@ fn junction_site(structure: &Structure, biopolymer: &Biopolymer) -> Result<Junct
             patch,
         });
     }
-    bail!("no glycan-to-protein junction bond was found")
+    if sites.is_empty() {
+        bail!("no glycan-to-protein junction bond was found");
+    }
+    Ok(sites)
 }
 
 fn extract_substructure(
@@ -621,6 +640,133 @@ Protein_chain_A  1
         .expect("glycosylation succeeds")
     }
 
+    fn protein_with_two_asn() -> Structure {
+        // Two ASN residues 20 Å apart in z so each glycan de-clashes independently.
+        let names = ["N", "CA", "CB", "CG", "OD1", "ND2", "HD21", "HD22"];
+        let residue_atoms = |dz: f32| {
+            vec![
+                atom("N", 0.0, 0.0, dz),
+                atom("C", 1.5, 0.0, dz),
+                atom("C", 2.5, 1.0, dz),
+                atom("C", 3.0, 2.0, dz),
+                atom("O", 2.5, 3.0, dz),
+                atom("N", 4.3, 2.0, dz),
+                atom("H", 4.8, 1.2, dz),
+                atom("H", 4.8, 2.8, dz),
+            ]
+        };
+        let residue_bonds = |off: usize| {
+            vec![
+                Bond::with_type(off, off + 1, BondType::Single),
+                Bond::with_type(off + 1, off + 2, BondType::Single),
+                Bond::with_type(off + 2, off + 3, BondType::Single),
+                Bond::with_type(off + 3, off + 4, BondType::Double),
+                Bond::with_type(off + 3, off + 5, BondType::Single),
+                Bond::with_type(off + 5, off + 6, BondType::Single),
+                Bond::with_type(off + 5, off + 7, BondType::Single),
+            ]
+        };
+        let mut atoms = residue_atoms(0.0);
+        atoms.extend(residue_atoms(20.0));
+        let mut bonds = residue_bonds(0);
+        bonds.extend(residue_bonds(8));
+        let mut residue_for_atom = vec![Some(0); 8];
+        residue_for_atom.extend(vec![Some(1); 8]);
+        let atom_name_for_atom: Vec<Option<String>> = names
+            .iter()
+            .chain(names.iter())
+            .map(|n| Some(n.to_string()))
+            .collect();
+        let biopolymer = Biopolymer {
+            residues: vec![
+                asn_residue(1, (0..8).collect()),
+                asn_residue(2, (8..16).collect()),
+            ],
+            chains: vec![ChainRecord {
+                id: 'A',
+                residue_indices: vec![0, 1],
+            }],
+            secondary_structures: Vec::new(),
+            residue_for_atom,
+            atom_name_for_atom,
+        };
+        let mut structure = Structure::with_bonds("asn2".to_string(), atoms, bonds);
+        structure.biopolymer = Some(biopolymer);
+        structure
+    }
+
+    fn two_site_glycoprotein() -> Structure {
+        let protein = protein_with_two_asn();
+        let first = glycosylate_protein(
+            &protein,
+            "GlcNAc",
+            ResidueId::new('A', 1, ' '),
+            GlycosylationKind::NLinked,
+        )
+        .expect("first glycosylation succeeds");
+        glycosylate_protein(
+            &first,
+            "GlcNAc",
+            ResidueId::new('A', 2, ' '),
+            GlycosylationKind::NLinked,
+        )
+        .expect("second glycosylation succeeds")
+    }
+
+    const TWO_ASN_PROTEIN_TOP: &str = "\
+; SilicoLab-generated topology
+
+#include \"charmm36.ff/forcefield.itp\"
+
+[ moleculetype ]
+; name  nrexcl
+Protein_chain_A  3
+
+[ atoms ]
+;   nr  type  resnr residue  atom  cgnr  charge   mass
+     1  NH1    1     ASN      N     1    -0.4700  14.0070
+     2  CT1    1     ASN      CA    2     0.0700  12.0110
+     3  CT2    1     ASN      CB    3    -0.1800  12.0110
+     4  CC     1     ASN      CG    4     0.5500  12.0110
+     5  O      1     ASN      OD1   5    -0.5500  15.9994
+     6  NH2    1     ASN      ND2   6    -0.6200  14.0070
+     7  H      1     ASN      HD21  7     0.3200   1.0080
+     8  H      1     ASN      HD22  8     0.3000   1.0080
+     9  NH1    2     ASN      N     9    -0.4700  14.0070
+    10  CT1    2     ASN      CA   10     0.0700  12.0110
+    11  CT2    2     ASN      CB   11    -0.1800  12.0110
+    12  CC     2     ASN      CG   12     0.5500  12.0110
+    13  O      2     ASN      OD1  13    -0.5500  15.9994
+    14  NH2    2     ASN      ND2  14    -0.6200  14.0070
+    15  H      2     ASN      HD21 15     0.3200   1.0080
+    16  H      2     ASN      HD22 16     0.3000   1.0080
+
+[ bonds ]
+;   ai    aj funct
+     1     2 1
+     2     3 1
+     3     4 1
+     4     5 1
+     4     6 1
+     6     7 1
+     6     8 1
+     9    10 1
+    10    11 1
+    11    12 1
+    12    13 1
+    12    14 1
+    14    15 1
+    14    16 1
+
+#include \"posre.itp\"
+
+[ system ]
+ASN
+
+[ molecules ]
+Protein_chain_A  1
+";
+
     #[test]
     fn glycan_atoms_are_appended_with_reindexing() {
         let structure = n_linked_glycoprotein();
@@ -764,6 +910,97 @@ Protein_chain_A  1
         assert!(
             (total - total.round()).abs() < 1.0e-3,
             "merged glycoprotein net charge {total} should be integral"
+        );
+    }
+
+    #[test]
+    fn multi_site_glycoprotein_bonds_every_junction() {
+        let structure = two_site_glycoprotein();
+        let bio = structure.biopolymer.as_ref().unwrap();
+        let junction_count = linkage_topology::cross_residue_linkages(&structure, bio)
+            .iter()
+            .filter(|cross| matches!(cross.linkage, BondLinkage::GlycanProtein { .. }))
+            .count();
+        assert_eq!(junction_count, 2, "the fixture has two glycosylation sites");
+
+        let merged = merge_glycan_into_protein_topology_with(
+            TWO_ASN_PROTEIN_TOP,
+            &structure,
+            forcefield_assets::CHARMM36_TOKEN,
+            &database(),
+        )
+        .expect("merge succeeds");
+
+        // Each ASN ND2 (protein atoms 6 and 14) must be bonded to a glycan
+        // anomeric carbon, numbered past the 16 protein atoms.
+        let bonds_block = section_text(&merged, "[ bonds ]");
+        let junctions_from = |nd2: &str| {
+            bonds_block
+                .lines()
+                .filter(|line| {
+                    let cols: Vec<&str> = line.split_whitespace().collect();
+                    if cols.len() < 2 {
+                        return false;
+                    }
+                    let glycan = |s: &str| s.parse::<usize>().map(|n| n > 16).unwrap_or(false);
+                    (cols[0] == nd2 && glycan(cols[1])) || (cols[1] == nd2 && glycan(cols[0]))
+                })
+                .count()
+        };
+        assert_eq!(
+            junctions_from("6"),
+            1,
+            "ASN 1 ND2 must bond to its glycan:\n{bonds_block}"
+        );
+        assert_eq!(
+            junctions_from("14"),
+            1,
+            "ASN 2 ND2 must bond to its glycan:\n{bonds_block}"
+        );
+
+        // Both anchors received the N-linked charge patch.
+        let atoms_block = section_text(&merged, "[ atoms ]");
+        let patch = patches::n_linked_junction_patch();
+        let nd2_delta = patch
+            .protein_deltas
+            .iter()
+            .find(|d| d.atom_name == "ND2")
+            .unwrap()
+            .delta;
+        for resnr in ["1", "2"] {
+            let charge = atoms_block
+                .lines()
+                .find_map(|line| {
+                    let cols: Vec<&str> = line.split_whitespace().collect();
+                    (cols.len() >= 7 && cols[2] == resnr && cols[3] == "ASN" && cols[4] == "ND2")
+                        .then(|| cols[6].parse::<f32>().ok())
+                        .flatten()
+                })
+                .expect("ND2 charge present");
+            assert!(
+                (charge - (-0.6200 + nd2_delta)).abs() < 1e-3,
+                "ASN {resnr} ND2 should be patched, got {charge}"
+            );
+        }
+
+        // Net charge stays integral with both sites merged. The summed total is
+        // off from a whole number only by the 4-decimal rounding of each rendered
+        // charge column, which accumulates with atom count — tolerance scales with
+        // it rather than the single-site 1e-3.
+        let charges: Vec<f32> = atoms_block
+            .lines()
+            .filter_map(|line| {
+                let cols: Vec<&str> = line.split_whitespace().collect();
+                (cols.len() >= 7)
+                    .then(|| cols[6].parse::<f32>().ok())
+                    .flatten()
+            })
+            .collect();
+        let total: f32 = charges.iter().sum();
+        let tolerance = 5.0e-5 * charges.len() as f32;
+        assert!(
+            (total - total.round()).abs() < tolerance,
+            "merged two-site glycoprotein net charge {total} should be integral within {tolerance}"
         );
     }
 
