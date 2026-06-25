@@ -204,8 +204,8 @@ pub(crate) fn glycan_impropers(
     assignments: &[AtomTypeAssignment],
     database: &CarbTopologyDatabase,
 ) -> Vec<BondedTerm> {
-    // Group atoms by residue instance, keeping first-seen residue order and each
-    // residue's atom-name -> 0-based molecule-atom-index map.
+    // `order` tracks first-seen residue order so the emitted terms are
+    // deterministic; iterating `by_residue` directly would not be.
     let mut order: Vec<i32> = Vec::new();
     let mut by_residue: HashMap<i32, (String, HashMap<String, usize>)> = HashMap::new();
     for (index, assignment) in assignments.iter().enumerate() {
