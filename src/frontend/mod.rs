@@ -9,6 +9,7 @@ mod dispatcher;
 mod docking_commands;
 mod entry_ref;
 mod glass;
+mod glycan_commands;
 mod gpu_inventory;
 pub(crate) mod gpu_monitor;
 mod jobs;

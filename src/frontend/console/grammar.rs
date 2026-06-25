@@ -53,11 +53,15 @@ pub(crate) struct Root {
 #[derive(Debug, Subcommand)]
 pub(crate) enum Command {
     /// Load a structure file (.pdb/.cif/.xyz/.mol2/.gro) as a new entry.
-    Open { path: String },
+    Open {
+        path: String,
+    },
 
     /// Make an already-open entry active (`#id`, a bare id, or a name).
     #[command(visible_alias = "focus")]
-    Activate { reference: String },
+    Activate {
+        reference: String,
+    },
 
     /// Build a 3D structure from a SMILES string as a new entry.
     Sketch {
@@ -81,7 +85,9 @@ pub(crate) enum Command {
 
     /// Run a `.sls` script file.
     #[command(visible_alias = "run")]
-    Source { path: PathBuf },
+    Source {
+        path: PathBuf,
+    },
 
     /// Viewport settings (active entry; add `--global` for project-wide).
     View(ViewArgs),
@@ -151,6 +157,10 @@ pub(crate) enum Command {
     /// Single-point score of a ligand's input pose.
     Score(DockArgs),
 
+    Glycan(GlycanArgs),
+
+    Glycosylate(GlycosylateArgs),
+
     /// Print this help.
     Help,
 }
@@ -182,6 +192,30 @@ pub(crate) struct DockArgs {
     /// RNG seed (default 0).
     #[arg(long)]
     pub seed: Option<u32>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct GlycanArgs {
+    pub(crate) iupac: String,
+    #[arg(long)]
+    pub(crate) name: Option<String>,
+    #[allow(dead_code)]
+    #[arg(long)]
+    pub(crate) forcefield: Option<String>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct GlycosylateArgs {
+    #[arg(long)]
+    pub(crate) protein: Option<String>,
+    #[arg(long)]
+    pub(crate) iupac: Option<String>,
+    #[arg(long)]
+    pub(crate) at: Option<String>,
+    #[arg(long, default_value = "n")]
+    pub(crate) kind: String,
+    #[arg(long)]
+    pub(crate) name: Option<String>,
 }
 
 /// `--global`: apply a render command project-wide, not just to the active
@@ -377,7 +411,9 @@ impl Command {
         state: &mut AppState,
         context: &mut ScriptContext,
     ) -> Result<String> {
-        use crate::frontend::{disorder_commands, docking_commands, md_commands, qm_commands};
+        use crate::frontend::{
+            disorder_commands, docking_commands, glycan_commands, md_commands, qm_commands,
+        };
         match self {
             Command::Open { path } => super::open_command(state, context, &path),
             Command::Activate { reference } => super::activate_command(state, &reference),
@@ -403,6 +439,8 @@ impl Command {
             Command::Qm { args } => qm_commands::qm_command(state, &args),
             Command::Dock(args) => docking_commands::dock_command(state, args),
             Command::Score(args) => docking_commands::score_command(state, args),
+            Command::Glycan(args) => glycan_commands::glycan_command(state, args),
+            Command::Glycosylate(args) => glycan_commands::glycosylate_command(state, args),
             Command::Help => Ok(long_help()),
         }
     }

@@ -90,6 +90,10 @@ pub const FORCE_FIELDS: &[ForceFieldEntry] = &[
         token: "oplsaa",
         title: "OPLS-AA/L",
     },
+    ForceFieldEntry {
+        token: "charmm36",
+        title: "CHARMM36",
+    },
 ];
 
 /// Default force-field token when the structure's content does not suggest a
@@ -182,8 +186,8 @@ mod tests {
     use crate::domain::Structure;
 
     #[test]
-    fn catalog_has_all_seventeen_with_unique_tokens() {
-        assert_eq!(FORCE_FIELDS.len(), 17);
+    fn catalog_has_all_eighteen_with_unique_tokens() {
+        assert_eq!(FORCE_FIELDS.len(), 18);
         let mut tokens: Vec<&str> = FORCE_FIELDS.iter().map(|e| e.token).collect();
         tokens.sort_unstable();
         let unique = tokens.len();
