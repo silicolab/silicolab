@@ -1,4 +1,6 @@
+pub mod assembly;
 pub mod docking;
+pub mod glycan;
 pub mod gromacs;
 pub mod molecular_dynamics;
 pub mod nanosheet;

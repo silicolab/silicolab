@@ -411,6 +411,37 @@ fn sketch_parses_optional_name_flag() {
 }
 
 #[test]
+fn glycan_parses_iupac_and_name_flag() {
+    let line = "glycan Man(a1-3)[Man(a1-6)]Man(b1-4)GlcNAc(b1-4)GlcNAc --name n-glycan";
+    match parse_command(&shell_words(line).unwrap()).unwrap() {
+        Command::Glycan(args) => {
+            assert_eq!(
+                args.iupac,
+                "Man(a1-3)[Man(a1-6)]Man(b1-4)GlcNAc(b1-4)GlcNAc"
+            );
+            assert_eq!(args.name.as_deref(), Some("n-glycan"));
+            assert_eq!(args.forcefield, None);
+        }
+        other => panic!("expected glycan, got {other:?}"),
+    }
+}
+
+#[test]
+fn glycosylate_parses_protein_iupac_anchor_and_kind() {
+    let line = "glycosylate --protein active --iupac Man(b1-4)GlcNAc(b1-4)GlcNAc --at A:297 --kind n --name n-glycan";
+    match parse_command(&shell_words(line).unwrap()).unwrap() {
+        Command::Glycosylate(args) => {
+            assert_eq!(args.protein.as_deref(), Some("active"));
+            assert_eq!(args.iupac.as_deref(), Some("Man(b1-4)GlcNAc(b1-4)GlcNAc"));
+            assert_eq!(args.at.as_deref(), Some("A:297"));
+            assert_eq!(args.kind, "n");
+            assert_eq!(args.name.as_deref(), Some("n-glycan"));
+        }
+        other => panic!("expected glycosylate, got {other:?}"),
+    }
+}
+
+#[test]
 fn activate_switches_the_active_entry_by_id() {
     let mut state = AppState::scratch(Default::default(), Vec::new());
     let fixture = write_console_fixture("activate", CONSOLE_TEST_PDB);

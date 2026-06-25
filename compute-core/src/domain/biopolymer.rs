@@ -230,10 +230,12 @@ pub fn build_biopolymer(
         residue_for_atom[atom_index] = Some(residue_index);
     }
 
-    let has_protein_residues = residues
-        .iter()
-        .any(|residue| residue.is_standard_amino_acid || residue.has_peptide_backbone());
-    if !has_protein_residues && secondary_structures.is_empty() {
+    let has_overlay_residues = residues.iter().any(|residue| {
+        residue.is_standard_amino_acid
+            || residue.has_peptide_backbone()
+            || is_carbohydrate_residue(&residue.residue_name)
+    });
+    if !has_overlay_residues && secondary_structures.is_empty() {
         return None;
     }
 
@@ -252,6 +254,7 @@ pub fn build_biopolymer(
 pub enum AtomCategory {
     Protein,
     NucleicAcid,
+    Carbohydrate,
     /// A small molecule / hetero group that is neither polymer, solvent, nor a
     /// monatomic ion.
     Ligand,
@@ -270,6 +273,7 @@ impl AtomCategory {
         &[
             Self::Protein,
             Self::NucleicAcid,
+            Self::Carbohydrate,
             Self::Ligand,
             Self::Solvent,
             Self::Ion,
@@ -282,6 +286,7 @@ impl AtomCategory {
         &[
             Self::Protein,
             Self::NucleicAcid,
+            Self::Carbohydrate,
             Self::Ligand,
             Self::Solvent,
             Self::Ion,
@@ -292,6 +297,7 @@ impl AtomCategory {
         match self {
             Self::Protein => "Protein",
             Self::NucleicAcid => "Nucleic acid",
+            Self::Carbohydrate => "Carbohydrate",
             Self::Ligand => "Ligand",
             Self::Solvent => "Solvent",
             Self::Ion => "Ion",
@@ -304,6 +310,7 @@ impl AtomCategory {
         match self {
             Self::Protein => "protein",
             Self::NucleicAcid => "nucleic",
+            Self::Carbohydrate => "carbohydrate",
             Self::Ligand => "ligand",
             Self::Solvent => "solvent",
             Self::Ion => "ion",
@@ -315,6 +322,7 @@ impl AtomCategory {
         Some(match token {
             "protein" => Self::Protein,
             "nucleic" => Self::NucleicAcid,
+            "carbohydrate" => Self::Carbohydrate,
             "ligand" => Self::Ligand,
             "solvent" => Self::Solvent,
             "ion" => Self::Ion,
@@ -488,6 +496,34 @@ pub fn extend_biopolymer_coverage(
     })
 }
 
+pub fn is_carbohydrate_residue(residue_name: &str) -> bool {
+    matches!(
+        residue_name.trim(),
+        "NAG"
+            | "NDG"
+            | "NGA"
+            | "A2G"
+            | "BM3"
+            | "MAN"
+            | "BMA"
+            | "GAL"
+            | "GLA"
+            | "GLC"
+            | "BGC"
+            | "FUC"
+            | "FUL"
+            | "XYS"
+            | "XYP"
+            | "SIA"
+            | "SLB"
+            | "NGC"
+            | "BDP"
+            | "GCU"
+            | "IDR"
+            | "ADA"
+    )
+}
+
 pub fn is_standard_amino_acid(residue_name: &str) -> bool {
     matches!(
         residue_name,
@@ -525,6 +561,27 @@ mod tests {
             position: Point3::new(x, y, z),
             charge: 0.0,
         }
+    }
+
+    #[test]
+    fn carbohydrate_residue_table_matches_dictionary_ccd_codes() {
+        for code in [
+            "NAG", "MAN", "BMA", "GAL", "FUC", "SIA", "GLC", "BGC", "NDG", "A2G", "XYS",
+        ] {
+            assert!(is_carbohydrate_residue(code), "{code} not recognized");
+        }
+        assert!(!is_carbohydrate_residue("ALA"));
+        assert!(!is_carbohydrate_residue("HOH"));
+    }
+
+    #[test]
+    fn carbohydrate_atom_category_round_trips_through_token() {
+        assert_eq!(
+            AtomCategory::from_token(AtomCategory::Carbohydrate.token()),
+            Some(AtomCategory::Carbohydrate)
+        );
+        assert!(AtomCategory::all().contains(&AtomCategory::Carbohydrate));
+        assert!(AtomCategory::selectable().contains(&AtomCategory::Carbohydrate));
     }
 
     /// A residue record carrying only the backbone atom indices under test.

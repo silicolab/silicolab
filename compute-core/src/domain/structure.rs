@@ -359,6 +359,9 @@ impl Structure {
             if chemistry::is_monatomic_ion_element(element) {
                 return AtomCategory::Ion;
             }
+            if biopolymer::is_carbohydrate_residue(name) {
+                return AtomCategory::Carbohydrate;
+            }
             return AtomCategory::Ligand;
         }
 
@@ -599,6 +602,21 @@ mod tests {
         assert_eq!(structure.atom_category(0), AtomCategory::Protein);
         assert_eq!(structure.atom_category(1), AtomCategory::Ligand);
         assert_eq!(structure.atom_category(2), AtomCategory::Solvent);
+    }
+
+    #[test]
+    fn atom_category_classifies_carbohydrate_residues() {
+        let annotations = vec![annotation("C1", "NAG", 1), annotation("C1", "MAN", 2)];
+        let biopolymer = build_biopolymer(&annotations, Vec::new()).expect("biopolymer");
+        let structure = Structure {
+            title: "glycan".to_string(),
+            atoms: vec![atom("C"), atom("C")],
+            bonds: Vec::new(),
+            cell: None,
+            biopolymer: Some(biopolymer),
+        };
+        assert_eq!(structure.atom_category(0), AtomCategory::Carbohydrate);
+        assert_eq!(structure.atom_category(1), AtomCategory::Carbohydrate);
     }
 
     #[test]

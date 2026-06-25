@@ -2,7 +2,7 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::{
     domain::chemistry::normalized_symbol,
-    domain::{Atom, Structure, UnitCell},
+    domain::{Atom, PdbAtomAnnotation, Structure, UnitCell, build_biopolymer},
 };
 
 pub fn parse_cif(input: &str) -> Result<Structure> {
@@ -94,12 +94,23 @@ fn parse_mmcif(input: &str) -> Result<Structure> {
         .unwrap_or_else(|| "mmCIF structure".to_string());
 
     let cell = read_optional_cell(&tokens);
-    let atoms = read_cartesian_atom_sites(&tokens)?;
+    let parsed = read_cartesian_atom_sites(&tokens)?;
+    let atoms = parsed.atoms;
+    let biopolymer = parsed
+        .annotations
+        .and_then(|annotations| build_biopolymer(&annotations, Vec::new()));
 
-    Ok(match cell {
+    let mut structure = match cell {
         Some(cell) => Structure::with_cell(title, atoms, cell),
         None => Structure::new(title, atoms),
-    })
+    };
+    structure.biopolymer = biopolymer;
+    Ok(structure)
+}
+
+struct ParsedAtomSites {
+    atoms: Vec<Atom>,
+    annotations: Option<Vec<PdbAtomAnnotation>>,
 }
 
 fn read_optional_cell(tokens: &[String]) -> Option<UnitCell> {
@@ -120,7 +131,7 @@ fn read_optional_cell(tokens: &[String]) -> Option<UnitCell> {
     ))
 }
 
-fn read_cartesian_atom_sites(tokens: &[String]) -> Result<Vec<Atom>> {
+fn read_cartesian_atom_sites(tokens: &[String]) -> Result<ParsedAtomSites> {
     let mut index = 0;
 
     while index < tokens.len() {
@@ -153,8 +164,19 @@ fn read_cartesian_atom_sites(tokens: &[String]) -> Result<Vec<Atom>> {
         let z_index = find_header(headers, "_atom_site.Cartn_z")
             .ok_or_else(|| anyhow!("mmCIF atom site loop lacks Cartn_z"))?;
 
+        let comp_id_index = find_header(headers, "_atom_site.label_comp_id")
+            .or_else(|| find_header(headers, "_atom_site.auth_comp_id"));
+        let atom_id_index = find_header(headers, "_atom_site.label_atom_id")
+            .or_else(|| find_header(headers, "_atom_site.auth_atom_id"));
+        let asym_id_index = find_header(headers, "_atom_site.label_asym_id")
+            .or_else(|| find_header(headers, "_atom_site.auth_asym_id"));
+        let seq_id_index = find_header(headers, "_atom_site.auth_seq_id")
+            .or_else(|| find_header(headers, "_atom_site.label_seq_id"));
+        let collect_annotations = comp_id_index.is_some() && atom_id_index.is_some();
+
         let width = headers.len();
         let mut atoms = Vec::new();
+        let mut annotations: Vec<PdbAtomAnnotation> = Vec::new();
 
         while index + width <= tokens.len() {
             if tokens[index].eq_ignore_ascii_case("loop_") || tokens[index].starts_with('_') {
@@ -173,6 +195,16 @@ fn read_cartesian_atom_sites(tokens: &[String]) -> Result<Vec<Atom>> {
                 charge: 0.0,
             });
 
+            if collect_annotations {
+                annotations.push(atom_site_annotation(
+                    row,
+                    comp_id_index,
+                    atom_id_index,
+                    asym_id_index,
+                    seq_id_index,
+                ));
+            }
+
             index += width;
         }
 
@@ -180,10 +212,38 @@ fn read_cartesian_atom_sites(tokens: &[String]) -> Result<Vec<Atom>> {
             bail!("mmCIF atom site loop did not contain any atoms");
         }
 
-        return Ok(atoms);
+        let annotations =
+            (collect_annotations && annotations.len() == atoms.len()).then_some(annotations);
+        return Ok(ParsedAtomSites { atoms, annotations });
     }
 
     bail!("missing mmCIF atom site loop with Cartesian coordinates")
+}
+
+fn atom_site_annotation(
+    row: &[String],
+    comp_id_index: Option<usize>,
+    atom_id_index: Option<usize>,
+    asym_id_index: Option<usize>,
+    seq_id_index: Option<usize>,
+) -> PdbAtomAnnotation {
+    let cell = |column: Option<usize>| column.and_then(|i| row.get(i)).map(|value| value.trim());
+    let residue_name = cell(comp_id_index).unwrap_or("UNK").to_string();
+    let atom_name = cell(atom_id_index).unwrap_or("").to_string();
+    let chain_id = cell(asym_id_index)
+        .and_then(|value| value.chars().next())
+        .unwrap_or('A');
+    let residue_seq = cell(seq_id_index)
+        .and_then(|value| value.parse::<i32>().ok())
+        .unwrap_or(1);
+
+    PdbAtomAnnotation {
+        atom_name,
+        residue_name,
+        chain_id,
+        residue_seq,
+        insertion_code: ' ',
+    }
 }
 
 fn sanitize_identifier(value: &str) -> String {
@@ -358,6 +418,7 @@ fn tokenize_cif(input: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::parse_cif;
+    use crate::domain::AtomCategory;
 
     #[test]
     fn parses_fractional_atoms_and_unit_cell() {
@@ -439,6 +500,40 @@ H1 0.0 0.0 0.0
         .expect("valid cif without symmetry tags");
 
         assert_eq!(structure.atoms.len(), 1);
+    }
+
+    #[test]
+    fn classifies_mmcif_glycoprotein_residues() {
+        let structure = parse_cif(
+            "\
+data_glyco
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.auth_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+ATOM   1 N  N   ASN A 1 0.000 0.000 0.000
+ATOM   2 C  CA  ASN A 1 1.450 0.000 0.000
+HETATM 3 C  C1  NAG B 1 5.400 0.800 0.000
+HETATM 4 O  O5  NAG B 1 6.100 -0.300 0.000
+HETATM 5 C  C1  MAN B 2 8.000 0.800 0.000
+",
+        )
+        .expect("valid mmcif glycoprotein");
+
+        assert_eq!(structure.atoms.len(), 5);
+        let biopolymer = structure.biopolymer.as_ref().expect("biopolymer overlay");
+        assert!(biopolymer.is_compatible_with_atom_count(structure.atoms.len()));
+
+        assert_eq!(structure.atom_category(0), AtomCategory::Protein);
+        assert_eq!(structure.atom_category(2), AtomCategory::Carbohydrate);
+        assert_eq!(structure.atom_category(4), AtomCategory::Carbohydrate);
     }
 
     #[test]
