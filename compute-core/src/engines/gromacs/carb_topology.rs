@@ -413,6 +413,9 @@ mod tests {
         assert!(!top.contains("forcefield.itp"));
         assert!(top.contains("[ defaults ]"));
         assert!(top.contains("1         2"));
+        // Solvent/ion molecule types, so a later solvate/genion can resolve them.
+        assert!(top.contains("tip3p.itp"));
+        assert!(top.contains("ions.itp"));
     }
 
     #[test]

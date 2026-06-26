@@ -252,10 +252,11 @@ pub fn prepare_system(request: PrepareSystemRequest) -> Result<PreparedSystem> {
     })
 }
 
-/// Copy the `.itp` files sitting beside a file topology into the run directory,
-/// so `#include` directives (such as `posre.itp` for position restraints) resolve
-/// when the run directory differs from the topology's source directory. A no-op
-/// when they are the same directory; best-effort if the source dir can't be read.
+/// Copy what a file topology `#include`s — sibling `.itp` files (e.g. pdb2gmx's
+/// `posre.itp`) and any staged force-field directory (`charmm36.ff/…`) — from the
+/// topology's source directory into the run directory, so the relative includes
+/// resolve when the two directories differ. No-op when they are the same;
+/// best-effort if the source dir can't be read.
 fn copy_topology_includes(topology_source: &Path, target_dir: &Path) -> Result<()> {
     let Some(source_dir) = topology_source.parent() else {
         return Ok(());
@@ -268,10 +269,39 @@ fn copy_topology_includes(topology_source: &Path, target_dir: &Path) -> Result<(
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) == Some("itp")
-            && let Some(name) = path.file_name()
-        {
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        if path.is_dir() {
+            // A staged force-field bundle is a `<name>.ff` directory included by
+            // relative path; carry the whole tree over.
+            if path.extension().and_then(|ext| ext.to_str()) == Some("ff") {
+                copy_dir_recursive(&path, &target_dir.join(name))?;
+            }
+        } else if path.extension().and_then(|ext| ext.to_str()) == Some("itp") {
             fs::copy(&path, target_dir.join(name))
+                .with_context(|| format!("copying topology include {}", path.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_dir_recursive(source: &Path, target: &Path) -> Result<()> {
+    fs::create_dir_all(target)
+        .with_context(|| format!("creating include directory {}", target.display()))?;
+    for entry in fs::read_dir(source)
+        .with_context(|| format!("reading include directory {}", source.display()))?
+        .flatten()
+    {
+        let path = entry.path();
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        let dest = target.join(name);
+        if path.is_dir() {
+            copy_dir_recursive(&path, &dest)?;
+        } else {
+            fs::copy(&path, &dest)
                 .with_context(|| format!("copying topology include {}", path.display()))?;
         }
     }
@@ -1079,6 +1109,28 @@ AR  8
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn copy_topology_includes_carries_itp_files_and_staged_force_field() {
+        let root = std::env::temp_dir().join("silicolab_copy_includes_test");
+        let _ = fs::remove_dir_all(&root);
+        let build = root.join("build");
+        let run = root.join("run");
+        fs::create_dir_all(build.join("charmm36.ff")).unwrap();
+        fs::create_dir_all(&run).unwrap();
+
+        fs::write(build.join("topol.top"), "; top\n").unwrap();
+        fs::write(build.join("posre.itp"), "; restraints\n").unwrap();
+        fs::write(build.join("charmm36.ff/ffnonbonded.itp"), "; nb\n").unwrap();
+
+        copy_topology_includes(&build.join("topol.top"), &run).unwrap();
+
+        // Both the sibling .itp and the whole staged force-field tree carry over.
+        assert!(run.join("posre.itp").exists());
+        assert!(run.join("charmm36.ff/ffnonbonded.itp").exists());
+
+        let _ = fs::remove_dir_all(&root);
     }
 
     /// Real end-to-end energy minimization through the WSL GROMACS launch.

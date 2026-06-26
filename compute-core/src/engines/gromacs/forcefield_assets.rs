@@ -49,6 +49,11 @@ const CHARMM36_FILES: &[(&str, &str)] = &[
 pub const GLYCAN_FORCE_FIELD_INCLUDES: &[&str] =
     &["ffnonbonded.itp", "ffbonded.itp", "cmap.itp", "nbfix.itp"];
 
+/// Water (`SOL`) and ion (`NA`/`CL`) molecule-type files the self-contained
+/// glycan topology must `#include`, so a later `solvate`/`genion` step can
+/// resolve what it appends to `[ molecules ]` — as a pdb2gmx topology would.
+const GLYCAN_SOLVENT_INCLUDES: &[&str] = &["tip3p.itp", "ions.itp"];
+
 pub struct ForceFieldBundle {
     pub token: &'static str,
     files: &'static [(&'static str, &'static str)],
@@ -100,7 +105,10 @@ pub fn glycan_force_field_includes(token: &str) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("no bundled force field for token `{token}`"))?;
     let dir = bundle.dir_name();
     let mut text = String::new();
-    for name in GLYCAN_FORCE_FIELD_INCLUDES {
+    for name in GLYCAN_FORCE_FIELD_INCLUDES
+        .iter()
+        .chain(GLYCAN_SOLVENT_INCLUDES)
+    {
         text.push_str(&format!("#include \"{dir}/{name}\"\n"));
     }
     Ok(text)
@@ -408,6 +416,9 @@ mod tests {
         assert!(includes.contains(&format!("{CHARMM36_TOKEN}.ff/ffnonbonded.itp")));
         assert!(includes.contains("cmap.itp"));
         assert!(!includes.contains("forcefield.itp"));
+        // Water and ions, so a later solvate/genion's `SOL`/`NA`/`CL` resolve.
+        assert!(includes.contains(&format!("{CHARMM36_TOKEN}.ff/tip3p.itp")));
+        assert!(includes.contains(&format!("{CHARMM36_TOKEN}.ff/ions.itp")));
     }
 
     #[test]
