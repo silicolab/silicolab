@@ -6,13 +6,12 @@ use egui::viewport::{ResizeDirection, ViewportCommand};
 
 use crate::{
     backend::tasks::task_controllers,
-    engines::registry::{EngineId, EngineLaunch},
     frontend::{
         CartoonSectionStyle,
         actions::AppAction,
         services::entry_details,
         state::{
-            AppState, DockArea, EngineDraft, PANEL_MIN_HEIGHT, PrimaryView, SECONDARY_HANDLE_WIDTH,
+            AppState, DockArea, PANEL_MIN_HEIGHT, PrimaryView, SECONDARY_HANDLE_WIDTH,
             SIDEBAR_MIN_WIDTH_PRIMARY, SIDEBAR_MIN_WIDTH_SECONDARY, SelectionItem,
         },
     },

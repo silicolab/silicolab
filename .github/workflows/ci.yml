@@ -118,6 +118,33 @@ jobs:
             exit 1
           fi
 
+  # Enforce the .rules size cap: every Rust source file stays under 800 physical
+  # lines. Plain line counting, no toolchain — keeps files small enough for an
+  # agent to hold whole in context. Keep the limit here in sync with .rules.
+  file-size:
+    name: File size
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Assert no Rust file exceeds 800 physical lines
+        run: |
+          limit=800
+          fail=0
+          while IFS= read -r f; do
+            n=$(wc -l < "$f")
+            if [ "$n" -gt "$limit" ]; then
+              echo "::error file=$f::$f has $n physical lines (limit $limit)"
+              fail=1
+            fi
+          done < <(git ls-files '*.rs')
+          if [ "$fail" -ne 0 ]; then
+            echo "Split the files above; see the size rule in .rules."
+            exit 1
+          fi
+          echo "All Rust source files are within the $limit physical-line limit."
+
   test:
     name: Test (${{ matrix.os }})
     needs: changes
@@ -145,7 +172,7 @@ jobs:
   ci-complete:
     name: CI complete
     if: always()
-    needs: [changes, fmt, clippy, worker-pure-rust, test]
+    needs: [changes, fmt, clippy, worker-pure-rust, file-size, test]
     runs-on: ubuntu-latest
     steps:
       - name: Require every upstream job to have succeeded or been skipped
