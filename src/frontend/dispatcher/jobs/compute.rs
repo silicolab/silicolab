@@ -83,9 +83,7 @@ pub(crate) fn poll_engine_job(state: &mut AppState, ctx: &egui::Context) {
                 running.append_log(line);
             }
             EngineWorkerMessage::Finished(success) => {
-                // Mark MD-run output entries so the UI shows the "MD" badge and,
-                // when the run wrote a trajectory, offers playback. The badge
-                // tracks the job kind, not the trajectory, so a relax-only run
+                // The badge tracks the job kind, not the trajectory, so a relax-only run
                 // (which writes no `.xtc`) is still marked; build jobs are not.
                 let is_md_run = success.job_kind == "run-md";
                 let trajectory = success.trajectory.clone();
