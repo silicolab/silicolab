@@ -23,14 +23,17 @@ pub(crate) fn render_entry_list_item(
             [ui.available_width(), 20.0],
             egui::TextEdit::singleline(&mut state.ui.entry_list.rename_buffer),
         );
-        if response.lost_focus() {
-            actions.push(AppAction::RenameEntry {
-                entry_id,
-                new_name: state.ui.entry_list.rename_buffer.clone(),
-            });
-            state.ui.entry_list.renaming_entry_id = None;
-        }
+        // Commit only on Enter; committing on any lost_focus would rename on an
+        // incidental click-away.
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            state.ui.entry_list.renaming_entry_id = None;
+        } else if response.lost_focus() {
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                actions.push(AppAction::RenameEntry {
+                    entry_id,
+                    new_name: state.ui.entry_list.rename_buffer.clone(),
+                });
+            }
             state.ui.entry_list.renaming_entry_id = None;
         }
     } else {

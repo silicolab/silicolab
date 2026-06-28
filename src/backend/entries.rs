@@ -512,6 +512,23 @@ mod tests {
     }
 
     #[test]
+    fn rename_entry_keeps_existing_name_when_blank() {
+        let mut store = EntryStore::with_initial(
+            Structure::empty(),
+            None,
+            PathBuf::from(r"C:\tmp\untitled.xyz"),
+        );
+        let id = store.active_entry_id().expect("seeded entry");
+        let original = store.entry(id).expect("entry exists").name.clone();
+
+        store.rename_entry(id, "   ".to_string());
+        assert_eq!(store.entry(id).unwrap().name, original);
+
+        store.rename_entry(id, "  Ethanol  ".to_string());
+        assert_eq!(store.entry(id).unwrap().name, "Ethanol");
+    }
+
+    #[test]
     fn deleting_group_moves_entries_to_fallback() {
         let mut store = EntryStore::with_initial(
             Structure::empty(),
