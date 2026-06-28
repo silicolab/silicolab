@@ -360,15 +360,26 @@ fn assistant_toolbar(
                     state.ui.agent.renaming_conversation = Some(active_id);
                     state.ui.agent.rename_buffer = active_title.to_string();
                 }
-                if ui
-                    .add_enabled(
-                        can_manage,
-                        Button::new(RichText::new(egui_phosphor::regular::TRASH))
-                            .min_size(button_size),
-                    )
-                    .on_hover_text("Delete conversation")
-                    .clicked()
-                {
+                let is_last = conversations.len() <= 1;
+                let (prompt, confirm_word, hover) = if is_last {
+                    ("Clear this conversation?", "Clear", "Clear conversation")
+                } else {
+                    ("Delete this conversation?", "Delete", "Delete conversation")
+                };
+                if crate::frontend::ui::widgets::confirm_destructive(
+                    ui,
+                    ("del_conversation", active_id),
+                    prompt,
+                    confirm_word,
+                    |ui| {
+                        ui.add_enabled(
+                            can_manage,
+                            Button::new(RichText::new(egui_phosphor::regular::TRASH))
+                                .min_size(button_size),
+                        )
+                        .on_hover_text(hover)
+                    },
+                ) {
                     actions.push(AppAction::DeleteAssistantConversation(active_id));
                 }
             }
