@@ -29,7 +29,6 @@ pub(crate) fn render_assistant_panel(
     use crate::frontend::agent::TranscriptEntry;
     use crate::frontend::agent::registry;
     use crate::frontend::agent::session::AgentPhase;
-    use crate::frontend::theme::radius;
 
     let pal = crate::frontend::theme::palette(ui);
     ui.set_width(ui.available_width());
@@ -37,7 +36,8 @@ pub(crate) fn render_assistant_panel(
     let provider = registry::active_provider(&state.config.assistant);
     // Cached (the live check reads env + the key store); refreshed off the hot path.
     let key_present = state.ui.agent.key_available.unwrap_or(false);
-    let pending_call = state.ui.agent.pending_approval().cloned();
+    // Cloned so the cards can render without holding a borrow on `state`.
+    let gated_calls = crate::frontend::agent::gated_pending(state);
     let active_id = state.ui.agent.active_conversation;
     // Snapshot the queued (type-ahead) follow-ups so the strip can render without
     // holding a borrow on `state` while the composer mutably borrows the input.
@@ -75,17 +75,7 @@ pub(crate) fn render_assistant_panel(
                     0.0
                 };
             let panel_width = ui.available_width();
-            let approval_height = pending_call
-                .as_ref()
-                .map(|call| {
-                    let command = call
-                        .input
-                        .get("command")
-                        .and_then(|value| value.as_str())
-                        .unwrap_or(&call.name);
-                    approval_row_height(command, panel_width)
-                })
-                .unwrap_or(0.0);
+            let approval_height = approval_block_height(&gated_calls, panel_width);
             let running_height = running_strip_height(&running_jobs);
             let queued_height = queued_strip_height(&queued);
             let footer_height = status_height
@@ -214,64 +204,24 @@ pub(crate) fn render_assistant_panel(
 
             ui.add_space(3.0);
 
-            if let Some(call) = &pending_call {
-                let command = call
-                    .input
-                    .get("command")
-                    .and_then(|value| value.as_str())
-                    .unwrap_or(&call.name);
+            if !gated_calls.is_empty() {
                 assistant_inset_row(ui, approval_height, |ui| {
-                    let frame_inner_width = (panel_width - 20.0).max(48.0);
-                    Frame::default()
-                        .fill(blend(pal.status_amber, pal.input_fill, 0.86))
-                        .stroke(Stroke::new(1.0, blend(pal.status_amber, pal.hairline, 0.4)))
-                        .corner_radius(CornerRadius::same(radius::CARD))
-                        .inner_margin(Margin::symmetric(10, 8))
-                        .show(ui, |ui| {
-                            ui.set_width(frame_inner_width);
-                            ui.horizontal(|ui| {
-                                ui.label(
-                                    RichText::new(format!(
-                                        "{}  Approve to run",
-                                        egui_phosphor::regular::WARNING
-                                    ))
-                                    .strong()
-                                    .color(pal.status_amber),
-                                );
-                            });
-                            ui.add_space(2.0);
-                            ui.add(
-                                egui::Label::new(assistant_text(command).color(pal.text_primary))
-                                    .wrap_mode(egui::TextWrapMode::Wrap),
-                            );
-                            ui.add_space(6.0);
-                            ui.horizontal(|ui| {
-                                let approve = Button::new(
-                                    RichText::new(format!(
-                                        "{}  Approve",
-                                        egui_phosphor::regular::CHECK
-                                    ))
-                                    .color(Color32::WHITE),
-                                )
-                                .fill(pal.status_green)
-                                .corner_radius(CornerRadius::same(radius::CONTROL));
-                                if ui.add(approve).clicked() {
-                                    actions.push(AppAction::ApproveToolCall(call.id.clone()));
-                                }
-                                if ui
-                                    .add(
-                                        Button::new(
-                                            RichText::new("Reject").color(pal.text_primary),
-                                        )
-                                        .fill(pal.neutral_overlay(16))
-                                        .corner_radius(CornerRadius::same(radius::CONTROL)),
-                                    )
-                                    .clicked()
-                                {
-                                    actions.push(AppAction::RejectToolCall(call.id.clone()));
-                                }
-                            });
-                        });
+                    if gated_calls.len() > 1 {
+                        ui.label(
+                            RichText::new(format!(
+                                "{}  {} commands need your approval",
+                                egui_phosphor::regular::WARNING,
+                                gated_calls.len()
+                            ))
+                            .strong()
+                            .color(pal.status_amber),
+                        );
+                        ui.add_space(4.0);
+                    }
+                    for call in &gated_calls {
+                        render_approval_card(ui, &pal, actions, call, panel_width);
+                        ui.add_space(6.0);
+                    }
                 });
                 ui.add_space(4.0);
             }
@@ -426,11 +376,155 @@ fn assistant_toolbar(
     });
 }
 
-fn approval_row_height(command: &str, panel_width: f32) -> f32 {
+fn call_command_text(call: &crate::io::llm::types::ToolCall) -> &str {
+    call.input
+        .get("command")
+        .and_then(|value| value.as_str())
+        .unwrap_or(&call.name)
+}
+
+/// Height of one approval card: command lines, plus an impact line and the
+/// "always allow" row when present.
+fn approval_card_height(call: &crate::io::llm::types::ToolCall, panel_width: f32) -> f32 {
+    use crate::frontend::console::RiskLevel;
+    let command = call_command_text(call);
     let text_width = (panel_width - 40.0).max(48.0);
     let chars_per_line = (text_width / 7.0).max(8.0);
-    let command_lines = (command.chars().count() as f32 / chars_per_line).ceil();
-    74.0 + command_lines.max(1.0) * 22.0
+    let command_lines = (command.chars().count() as f32 / chars_per_line)
+        .ceil()
+        .max(1.0);
+    let mut height = 74.0 + command_lines * 22.0;
+    if crate::frontend::agent::impact_hint(call).is_some() {
+        height += 18.0;
+    }
+    if crate::frontend::agent::tools::risk_of_call(call) != RiskLevel::Destructive {
+        height += 28.0; // the "always allow" button row
+    }
+    height
+}
+
+/// Total height of the approval block: every card, gaps, and a multi-call header.
+fn approval_block_height(calls: &[crate::io::llm::types::ToolCall], panel_width: f32) -> f32 {
+    if calls.is_empty() {
+        return 0.0;
+    }
+    let header = if calls.len() > 1 { 24.0 } else { 0.0 };
+    let gaps = calls.len() as f32 * 6.0;
+    let cards: f32 = calls
+        .iter()
+        .map(|call| approval_card_height(call, panel_width))
+        .sum();
+    header + gaps + cards
+}
+
+/// One approval card: the command, its risk and (for compute) cost, and the
+/// approve / reject / remember controls. Destructive calls omit the remember
+/// controls — they always prompt, so "always allow" would be a lie.
+fn render_approval_card(
+    ui: &mut egui::Ui,
+    pal: &crate::frontend::theme::Palette,
+    actions: &mut Vec<AppAction>,
+    call: &crate::io::llm::types::ToolCall,
+    panel_width: f32,
+) {
+    use crate::frontend::console::RiskLevel;
+    use crate::frontend::theme::radius;
+
+    let command = call_command_text(call);
+    let risk = crate::frontend::agent::tools::risk_of_call(call);
+    let impact = crate::frontend::agent::impact_hint(call);
+    let accent = if risk == RiskLevel::Destructive {
+        pal.status_red
+    } else {
+        pal.status_amber
+    };
+    let card_height = approval_card_height(call, panel_width);
+
+    assistant_inset_row(ui, card_height, |ui| {
+        let frame_inner_width = (panel_width - 20.0).max(48.0);
+        Frame::default()
+            .fill(blend(accent, pal.input_fill, 0.86))
+            .stroke(Stroke::new(1.0, blend(accent, pal.hairline, 0.4)))
+            .corner_radius(CornerRadius::same(radius::CARD))
+            .inner_margin(Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                ui.set_width(frame_inner_width);
+                ui.horizontal(|ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "{}  Approve to run · {}",
+                            egui_phosphor::regular::WARNING,
+                            risk.label()
+                        ))
+                        .strong()
+                        .color(accent),
+                    );
+                });
+                ui.add_space(2.0);
+                ui.add(
+                    egui::Label::new(assistant_text(command).color(pal.text_primary))
+                        .wrap_mode(egui::TextWrapMode::Wrap),
+                );
+                if let Some(impact) = &impact {
+                    ui.label(RichText::new(impact).small().color(pal.text_tertiary));
+                }
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    let approve = Button::new(
+                        RichText::new(format!("{}  Approve", egui_phosphor::regular::CHECK))
+                            .color(Color32::WHITE),
+                    )
+                    .fill(pal.status_green)
+                    .corner_radius(CornerRadius::same(radius::CONTROL));
+                    if ui.add(approve).clicked() {
+                        actions.push(AppAction::ApproveToolCall(call.id.clone()));
+                    }
+                    if ui
+                        .add(
+                            Button::new(RichText::new("Reject").color(pal.text_primary))
+                                .fill(pal.neutral_overlay(16))
+                                .corner_radius(CornerRadius::same(radius::CONTROL)),
+                        )
+                        .clicked()
+                    {
+                        actions.push(AppAction::RejectToolCall(call.id.clone()));
+                    }
+                });
+                if risk != RiskLevel::Destructive {
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        let verb = crate::frontend::agent::tools::call_allow_key(call);
+                        if ui
+                            .add(small_allow_button(pal, &format!("Always allow `{verb}`")))
+                            .clicked()
+                        {
+                            actions.push(AppAction::AlwaysAllowCommand(call.id.clone()));
+                        }
+                        if ui
+                            .add(small_allow_button(
+                                pal,
+                                &format!("Always allow all {} commands", risk.label()),
+                            ))
+                            .clicked()
+                        {
+                            actions.push(AppAction::AlwaysAllowRisk(call.id.clone()));
+                        }
+                    });
+                }
+            });
+    });
+}
+
+/// A small, low-emphasis "remember this decision" button.
+fn small_allow_button(pal: &crate::frontend::theme::Palette, text: &str) -> Button<'static> {
+    use crate::frontend::theme::radius;
+    Button::new(
+        RichText::new(text.to_string())
+            .small()
+            .color(pal.text_muted),
+    )
+    .fill(pal.neutral_overlay(10))
+    .corner_radius(CornerRadius::same(radius::CONTROL))
 }
 
 pub(crate) fn assistant_inset_row<R>(

@@ -15,6 +15,8 @@ use crate::engines::registry::EngineLaunch;
 use compute_core::hosts::home_dir;
 pub use compute_core::hosts::{RemoteHost, ResourceSpec, config_dir};
 
+pub use crate::backend::assistant_config::{ApprovalMode, AssistantConfig};
+
 /// How the interface picks its light/dark appearance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum ThemeMode {
@@ -131,52 +133,6 @@ pub enum ComputeTarget {
     Local,
     /// Run on the remote host with this [`RemoteHost::id`].
     Remote(String),
-}
-
-/// Settings for the in-app LLM assistant. Holds only non-secret selection: the
-/// provider id, model, effort, and an optional `base_url` override for
-/// OpenAI-compatible providers. **The API key is never stored here** — it is read
-/// from the provider's environment variable at call time (see
-/// `frontend::agent::registry`), preserving the no-secrets-in-config invariant
-/// SSH already follows.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AssistantConfig {
-    /// Whether the assistant is usable (the Assistant tab still renders a hint when a
-    /// key is missing). On by default.
-    pub enabled: bool,
-    /// Active provider id, keyed into `frontend::agent::registry::PROVIDERS`.
-    pub provider: String,
-    /// Active model id within the selected provider.
-    pub model: String,
-    /// Reasoning effort; adapters map or drop it per model capability.
-    pub effort: crate::io::llm::types::Effort,
-    /// Base-URL override for OpenAI-compatible providers. `None` uses
-    /// the provider's registry default. Non-secret.
-    #[serde(default)]
-    pub base_url: Option<String>,
-    /// Per-model override for whether the active OpenAI-compatible model accepts
-    /// a reasoning-effort knob. `None` uses the registry heuristic (known model
-    /// → its declared capability; unknown / free-typed id → assume yes); `Some`
-    /// pins it. Lets users point a custom endpoint at a reasoning model the
-    /// built-in table can't know about — or silence the picker for one that
-    /// rejects the knob. Reset when the model or provider changes. Non-secret.
-    #[serde(default)]
-    pub effort_override: Option<bool>,
-}
-
-impl Default for AssistantConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            provider: "anthropic".to_string(),
-            // Sonnet 4.6: cheaper/faster than Opus, very strong tool use — the
-            // recommended default driver (Opus 4.8 remains selectable).
-            model: "claude-sonnet-4-6".to_string(),
-            effort: crate::io::llm::types::Effort::High,
-            base_url: None,
-            effort_override: None,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

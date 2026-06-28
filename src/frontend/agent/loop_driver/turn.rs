@@ -344,6 +344,7 @@ pub fn cancel_agent(state: &mut AppState, ctx: &egui::Context) {
     let cancelled_jobs = cancel_conversation_jobs(state, active);
     fill_pending_tool_entry(state, "Cancelled.", true);
     state.ui.agent.pending_calls.clear();
+    state.ui.agent.approved_ids.clear();
     state.ui.agent.collected_results.clear();
     discard_queued(state, "the turn was cancelled");
     state.ui.agent.current_backlog = None;

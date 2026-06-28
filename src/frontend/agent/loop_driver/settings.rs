@@ -2,6 +2,7 @@ use super::*;
 
 use eframe::egui;
 
+use crate::backend::config::ApprovalMode;
 use crate::frontend::agent::registry;
 use crate::frontend::agent::session::{AssistantConversationId, ModelFetchStatus};
 use crate::frontend::jobs::spawn_model_fetch;
@@ -75,6 +76,12 @@ pub fn set_assistant_enabled(state: &mut AppState, enabled: bool) {
 /// Set the reasoning effort and persist.
 pub fn set_assistant_effort(state: &mut AppState, effort: Effort) {
     state.config.assistant.effort = effort;
+    persist(state);
+}
+
+/// Set the command-approval mode and persist.
+pub fn set_approval_mode(state: &mut AppState, mode: ApprovalMode) {
+    state.config.assistant.approval_mode = mode;
     persist(state);
 }
 

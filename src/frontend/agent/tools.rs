@@ -7,11 +7,14 @@
 //! not act blind). Confirmation gating classifies destructive/expensive commands
 //! that need a one-click approval before they run.
 
+use std::collections::HashSet;
 use std::fmt::Write;
 
 use serde_json::{Value, json};
 
+use crate::backend::config::ApprovalMode;
 use crate::engines::registry::{EngineId, EngineRegistry};
+use crate::frontend::console::{RiskLevel, command_risk};
 use crate::frontend::state::AppState;
 use crate::io::llm::types::{ToolCall, ToolDef};
 
@@ -28,9 +31,11 @@ pub fn tool_defs() -> Vec<ToolDef> {
                 `fetch 4hhb`, `sketch CCO`, `view background white`, `color chain A red`, \
                 `representation cartoon`, `hydrogen add`, `md build`, `qm energy`, \
                 `dock --receptor active --ligand 2`). One command per call; this is the same \
-                command line a user types in the console. Destructive or expensive commands \
-                (delete, save, md, qm, dock, score, running a script) require the user to \
-                confirm before they run."
+                command line a user types in the console. Commands are risk-classified \
+                (read-only, structure edit, file write, compute, destructive); whether one \
+                needs the user's approval depends on their approval mode, and destructive \
+                commands (`delete`, running a script) always ask. Call the right command \
+                regardless and explain briefly."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -88,7 +93,8 @@ pub fn tool_defs() -> Vec<ToolDef> {
             name: "save_script".to_string(),
             description: "Save a reusable SilicoLab `.sls` script of console commands to the \
                 project so a workflow can be replayed with `run <file>`. Use this to capture a \
-                sequence of steps you ran. Writing a file requires the user to confirm."
+                sequence of steps you ran. Writes a file, so it may need the user's approval \
+                depending on their approval mode."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -117,39 +123,62 @@ pub struct ToolOutcome {
     pub is_error: bool,
 }
 
-/// Whether a tool call must be confirmed by the user before running.
-/// `save_script` writes a file (always gated); `run_command` is gated by verb.
-pub fn needs_confirmation(call: &ToolCall) -> bool {
+/// The approval [`RiskLevel`] of a tool call. `save_script` writes a file
+/// (FileWrite); `run_command` defers to the grammar's [`command_risk`] so risk is
+/// declared once, next to each command; perception tools are read-only.
+pub fn risk_of_call(call: &ToolCall) -> RiskLevel {
     match call.name.as_str() {
-        "save_script" => true,
+        "save_script" => RiskLevel::FileWrite,
         "run_command" => {
             let command = call
                 .input
                 .get("command")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
-            command_needs_confirmation(command)
+            command_risk(command)
         }
-        _ => false,
+        _ => RiskLevel::ReadOnly,
     }
 }
 
-/// Classify a `.sls` command line as needing confirmation. Read-only / cheaply
-/// reversible commands (view/color/surface/representation/inspect) auto-run;
-/// delete, save/overwrite, md/qm runs, and script execution are gated.
-pub fn command_needs_confirmation(command: &str) -> bool {
-    let mut tokens = command.split_whitespace();
-    let verb = tokens.next().unwrap_or_default();
-    // `qm recommend` only prints hartree's level-of-theory table — it runs no
-    // calculation, so it is read-only introspection and should not be gated like
-    // an actual `qm energy|optimize|freq` job. Let the agent consult it freely.
-    if verb == "qm" && tokens.next() == Some("recommend") {
+/// The allow-set key for a call: a `run_command`'s top-level verb, else the tool
+/// name. "Always allow this command" remembers this key for the conversation.
+pub fn call_allow_key(call: &ToolCall) -> String {
+    match call.name.as_str() {
+        "run_command" => call
+            .input
+            .get("command")
+            .and_then(Value::as_str)
+            .and_then(|command| command.split_whitespace().next())
+            .unwrap_or_default()
+            .to_string(),
+        other => other.to_string(),
+    }
+}
+
+/// Whether a tool call must be confirmed, given the active [`ApprovalMode`] and
+/// the conversation's allow-set. `Destructive` always confirms — the
+/// non-bypassable floor, checked before mode and allow-set.
+pub fn needs_confirmation(
+    call: &ToolCall,
+    mode: ApprovalMode,
+    allowed_verbs: &HashSet<String>,
+    allowed_risks: &HashSet<RiskLevel>,
+) -> bool {
+    let risk = risk_of_call(call);
+    if risk == RiskLevel::Destructive {
+        return true;
+    }
+    if allowed_risks.contains(&risk) || allowed_verbs.contains(&call_allow_key(call)) {
         return false;
     }
-    matches!(
-        verb,
-        "delete" | "save" | "md" | "qm" | "dock" | "score" | "run" | "source"
-    )
+    match mode {
+        ApprovalMode::Manual => risk != RiskLevel::ReadOnly,
+        ApprovalMode::AutoSafe => matches!(risk, RiskLevel::FileWrite | RiskLevel::Expensive),
+        // Auto and Plan return false here only because Destructive is handled
+        // above and Plan never reaches execution (the batch driver short-circuits).
+        ApprovalMode::Auto | ApprovalMode::Plan => false,
+    }
 }
 
 /// Execute one tool call against `AppState`, returning its textual result.
@@ -427,65 +456,210 @@ mod tests {
         }
     }
 
-    #[test]
-    fn read_only_commands_auto_run() {
-        assert!(!needs_confirmation(&call("view background white")));
-        assert!(!needs_confirmation(&call("color chain A red")));
-        assert!(!needs_confirmation(&call("representation cartoon")));
-        assert!(!needs_confirmation(&call("open 1abc.pdb")));
+    fn save_script_call() -> ToolCall {
+        ToolCall {
+            id: "s".to_string(),
+            name: "save_script".to_string(),
+            input: json!({ "filename": "wf", "commands": ["open x.pdb"] }),
+        }
+    }
+
+    /// Gate with the default mode (AutoSafe) and an empty allow-set.
+    fn gated(command: &str) -> bool {
+        needs_confirmation(
+            &call(command),
+            ApprovalMode::AutoSafe,
+            &HashSet::new(),
+            &HashSet::new(),
+        )
     }
 
     #[test]
-    fn destructive_and_expensive_commands_are_gated() {
-        assert!(needs_confirmation(&call("delete chain A")));
-        assert!(needs_confirmation(&call("save image out.png")));
-        assert!(needs_confirmation(&call("md build")));
-        assert!(needs_confirmation(&call("qm energy")));
-        assert!(needs_confirmation(&call(
-            "dock --receptor active --ligand 2"
-        )));
-        assert!(needs_confirmation(&call(
-            "score --receptor active --ligand 2"
-        )));
-        assert!(needs_confirmation(&call("run setup.sls")));
+    fn risk_classification_matches_the_grammar() {
+        assert_eq!(
+            risk_of_call(&call("view background white")),
+            RiskLevel::ReadOnly
+        );
+        assert_eq!(
+            risk_of_call(&call("color chain A red")),
+            RiskLevel::ReadOnly
+        );
+        assert_eq!(risk_of_call(&call("open 1abc.pdb")), RiskLevel::ReadOnly);
+        assert_eq!(risk_of_call(&call("hydrogen add")), RiskLevel::ReadOnly);
+        assert_eq!(
+            risk_of_call(&call("qm recommend thermochemistry")),
+            RiskLevel::ReadOnly
+        );
+        assert_eq!(
+            risk_of_call(&call("phosphorylate --protein active --at A:1")),
+            RiskLevel::Mutating
+        );
+        assert_eq!(
+            risk_of_call(&call("save image out.png")),
+            RiskLevel::FileWrite
+        );
+        assert_eq!(risk_of_call(&save_script_call()), RiskLevel::FileWrite);
+        assert_eq!(risk_of_call(&call("md build")), RiskLevel::Expensive);
+        assert_eq!(
+            risk_of_call(&call("qm energy --method r2scan-3c")),
+            RiskLevel::Expensive
+        );
+        assert_eq!(
+            risk_of_call(&call("dock --receptor active --ligand 2")),
+            RiskLevel::Expensive
+        );
+        assert_eq!(
+            risk_of_call(&call("score --receptor active")),
+            RiskLevel::Expensive
+        );
+        assert_eq!(risk_of_call(&call("run setup.sls")), RiskLevel::Destructive);
+        // A bare `*.sls` token runs as a script via the console's pre-clap
+        // shortcut, so it must classify Destructive like an explicit `run`.
+        assert_eq!(risk_of_call(&call("setup.sls")), RiskLevel::Destructive);
+        assert_eq!(
+            risk_of_call(&call("delete chain A")),
+            RiskLevel::Destructive
+        );
     }
 
     #[test]
-    fn inspect_is_never_gated() {
+    fn structure_editing_commands_are_never_read_only() {
+        // The silent-bypass bug: PTM / structure-editing verbs must not auto-run
+        // as if read-only. Each must be Mutating; `delete` Destructive.
+        for command in [
+            "phosphorylate --protein active --at A:84",
+            "acetylate --protein active --at A:120",
+            "methylate --protein active --at A:9",
+            "lipidate --protein active --at A:3",
+            "ubiquitinate --protein active --at A:48",
+            "glycosylate --protein active",
+            "glycan GlcNAc",
+        ] {
+            assert_eq!(
+                risk_of_call(&call(command)),
+                RiskLevel::Mutating,
+                "{command}"
+            );
+            assert!(
+                gated_in(command, ApprovalMode::Manual),
+                "{command} must gate in Manual"
+            );
+        }
+        assert_eq!(
+            risk_of_call(&call("save image out.png")),
+            RiskLevel::FileWrite
+        );
+        assert!(gated_in("save image out.png", ApprovalMode::Manual));
+        assert_eq!(
+            risk_of_call(&call("delete chain A")),
+            RiskLevel::Destructive
+        );
+    }
+
+    fn gated_in(command: &str, mode: ApprovalMode) -> bool {
+        needs_confirmation(&call(command), mode, &HashSet::new(), &HashSet::new())
+    }
+
+    #[test]
+    fn autosafe_runs_edits_but_gates_writes_compute_and_destructive() {
+        assert!(!gated("view background white"));
+        assert!(!gated("phosphorylate --protein active --at A:1"));
+        assert!(gated("save image out.png"));
+        assert!(gated("qm energy"));
+        assert!(gated("delete chain A"));
+        assert!(needs_confirmation(
+            &save_script_call(),
+            ApprovalMode::AutoSafe,
+            &HashSet::new(),
+            &HashSet::new(),
+        ));
+    }
+
+    #[test]
+    fn manual_gates_everything_but_read_only() {
+        assert!(!gated_in("view background white", ApprovalMode::Manual));
+        assert!(gated_in("save image out.png", ApprovalMode::Manual));
+        assert!(gated_in("qm energy", ApprovalMode::Manual));
+        assert!(gated_in("delete chain A", ApprovalMode::Manual));
+    }
+
+    #[test]
+    fn auto_runs_everything_except_destructive() {
+        assert!(!gated_in("qm energy", ApprovalMode::Auto));
+        assert!(!gated_in("save image out.png", ApprovalMode::Auto));
+        assert!(gated_in("delete chain A", ApprovalMode::Auto));
+    }
+
+    #[test]
+    fn destructive_always_confirms_and_allow_set_cannot_bypass_it() {
+        let mut verbs = HashSet::new();
+        verbs.insert("delete".to_string());
+        let mut risks = HashSet::new();
+        risks.insert(RiskLevel::Destructive);
+        for mode in ApprovalMode::all() {
+            if mode == ApprovalMode::Plan {
+                continue; // Plan never executes; the gate is not consulted
+            }
+            for command in ["delete chain A", "run setup.sls", "setup.sls"] {
+                assert!(
+                    needs_confirmation(&call(command), mode, &verbs, &risks),
+                    "{command} must confirm in {mode:?} even with an allow-set"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn allow_set_suppresses_gating_for_verb_and_risk() {
+        // Allowing the `qm` verb auto-runs qm in AutoSafe.
+        let mut verbs = HashSet::new();
+        verbs.insert("qm".to_string());
+        assert!(!needs_confirmation(
+            &call("qm energy"),
+            ApprovalMode::AutoSafe,
+            &verbs,
+            &HashSet::new()
+        ));
+        // Allowing the whole Expensive level auto-runs dock too.
+        let mut risks = HashSet::new();
+        risks.insert(RiskLevel::Expensive);
+        assert!(!needs_confirmation(
+            &call("dock --receptor active"),
+            ApprovalMode::AutoSafe,
+            &HashSet::new(),
+            &risks,
+        ));
+    }
+
+    #[test]
+    fn unparseable_command_is_read_only_so_it_runs_and_self_reports_the_error() {
+        // An invalid command reaches no effect (it errors before dispatch), so
+        // gating it would only nag the user; let it run and fail instead.
+        assert_eq!(risk_of_call(&call("inspect")), RiskLevel::ReadOnly);
+        assert!(!gated("frobnicate the molecule"));
+    }
+
+    #[test]
+    fn perception_tools_are_never_gated() {
         let inspect_call = ToolCall {
             id: "t".to_string(),
             name: "inspect".to_string(),
             input: json!({}),
         };
-        assert!(!needs_confirmation(&inspect_call));
-    }
-
-    #[test]
-    fn recommend_method_tool_is_never_gated() {
         let recommend = ToolCall {
             id: "t".to_string(),
             name: "recommend_method".to_string(),
             input: json!({ "task": "thermochemistry" }),
         };
-        assert!(!needs_confirmation(&recommend));
-    }
-
-    #[test]
-    fn qm_recommend_is_read_only_and_not_gated() {
-        // `qm recommend` only prints the level-of-theory table — never gated,
-        // even though a real `qm` calculation is.
-        assert!(!needs_confirmation(&call("qm recommend thermochemistry")));
-        assert!(needs_confirmation(&call("qm energy --method r2scan-3c")));
-    }
-
-    #[test]
-    fn save_script_is_gated() {
-        let call = ToolCall {
-            id: "s".to_string(),
-            name: "save_script".to_string(),
-            input: json!({ "filename": "wf", "commands": ["open x.pdb"] }),
-        };
-        assert!(needs_confirmation(&call));
+        for c in [&inspect_call, &recommend] {
+            assert_eq!(risk_of_call(c), RiskLevel::ReadOnly);
+            assert!(!needs_confirmation(
+                c,
+                ApprovalMode::Manual,
+                &HashSet::new(),
+                &HashSet::new()
+            ));
+        }
     }
 
     #[test]

@@ -332,6 +332,13 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
             crate::frontend::agent::approve_tool_call(state, &id, ctx)
         }
         AppAction::RejectToolCall(id) => crate::frontend::agent::reject_tool_call(state, &id, ctx),
+        AppAction::AlwaysAllowCommand(id) => {
+            crate::frontend::agent::always_allow_command(state, &id, ctx)
+        }
+        AppAction::AlwaysAllowRisk(id) => {
+            crate::frontend::agent::always_allow_risk(state, &id, ctx)
+        }
+        AppAction::SetApprovalMode(mode) => crate::frontend::agent::set_approval_mode(state, mode),
         AppAction::RemoveQueuedAgentInput(index) => {
             crate::frontend::agent::remove_queued_agent_input(state, index)
         }
