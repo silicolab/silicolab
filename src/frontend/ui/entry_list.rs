@@ -434,7 +434,7 @@ pub(crate) fn render_group_header(
                 egui::Button::new(RichText::new(egui_phosphor::regular::TRASH).size(11.0))
                     .frame(false),
             )
-            .on_hover_text("Delete group")
+            .on_hover_text("Ungroup")
             .clicked();
         let pencil = right_ui
             .add(

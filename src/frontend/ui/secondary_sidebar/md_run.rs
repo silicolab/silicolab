@@ -472,16 +472,18 @@ pub(crate) fn render_md_stage_card(
                 }
                 // A stage carrying free-form raw passthrough holds user-entered
                 // Details that a delete would discard; gate it behind a confirm.
-                // A stage without any deletes directly.
                 let remove_clicked = if stage.raw_passthrough.is_empty() {
                     ui.add(egui::Button::new(egui_phosphor::regular::TRASH))
                         .on_hover_text("Remove stage")
                         .clicked()
                 } else {
+                    // Salt by stage name as well as index: keyed on index alone, a
+                    // reorder mid-confirm would carry the armed state onto whatever
+                    // stage slides into this slot.
                     crate::frontend::ui::widgets::confirm_destructive(
                         ui,
-                        ("del_md_stage", index),
-                        "Remove this stage and its custom details?",
+                        ("del_md_stage", index, stage.name.as_str()),
+                        "Remove stage and its details?",
                         "Remove",
                         |ui| {
                             ui.add(egui::Button::new(egui_phosphor::regular::TRASH))
