@@ -66,5 +66,5 @@ Set `RUSTFLAGS=-D warnings` so clippy and test fail on warnings exactly as CI do
 ## Code conventions
 
 - **Single-responsibility files.** Split into modules rather than letting a file
-  accumulate — keep source files under 600 *code* lines (soft target ~400), per
-  [`.rules`](.rules). This is a modular Cargo workspace; lean on the module system.
+  accumulate; see [`.rules`](.rules) for the current size budget. This is a
+  modular Cargo workspace; lean on the module system.

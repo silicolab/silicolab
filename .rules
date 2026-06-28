@@ -57,3 +57,4 @@ The GUI uses an Elm-style flow.
 
 These rules are read by every agent session. Add new rules only for non-obvious, repeated traps. Prefer keeping this file small.
 Remove obsolete rules when architecture changes; stale rules are worse than missing rules.
+Each fact has one owning document; reference it from elsewhere, never restate its value (a copied threshold or command drifts the moment the owner changes).
