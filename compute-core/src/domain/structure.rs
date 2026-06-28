@@ -163,7 +163,12 @@ impl Structure {
     }
 
     pub fn recompute_bonds(&mut self) {
-        self.bonds = chemistry::infer_bonds_with_cell(&self.atoms, self.cell.as_ref());
+        // A deposited biomolecule is bonded non-periodically (see the PDB/mmCIF
+        // readers); only genuine periodic materials bond through the cell. Honor
+        // the same invariant here so the GUI "recompute bonds" action can't
+        // re-introduce the periodic path's freeze and spurious cross-cell bonds.
+        let bonding_cell = self.cell.as_ref().filter(|_| self.biopolymer.is_none());
+        self.bonds = chemistry::infer_bonds_with_cell(&self.atoms, bonding_cell);
     }
 
     pub fn add_bond(&mut self, a: usize, b: usize, bond_type: BondType) {
