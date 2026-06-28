@@ -35,7 +35,7 @@ egui_commonmark = { version = "0.23", default-features = false, features = [
     "pulldown_cmark",
 ] }
 flate2 = "1"
-hartree = "0.2.0"
+hartree = "0.2.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 nalgebra = "0.35.0"
 rfd = "0.17"
