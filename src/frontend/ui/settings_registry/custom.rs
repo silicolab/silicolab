@@ -237,6 +237,30 @@ pub(crate) fn render_assistant_settings(
             });
         });
     });
+    let current_mode = state.config.assistant.approval_mode;
+    ui.horizontal(|ui| {
+        ui.label("Approvals");
+        egui::ComboBox::from_id_salt("assistant.approval_mode")
+            .selected_text(current_mode.short_label())
+            .show_ui(ui, |ui| {
+                crate::frontend::theme::stabilize_selectable_rows(ui);
+                for mode in crate::backend::config::ApprovalMode::all() {
+                    if ui
+                        .selectable_label(mode == current_mode, mode.label())
+                        .clicked()
+                        && mode != current_mode
+                    {
+                        actions.push(AppAction::SetApprovalMode(mode));
+                    }
+                }
+            });
+    });
+    ui.label(
+        RichText::new("Destructive commands (delete, running a script) always ask.")
+            .size(CAPTION_SIZE)
+            .color(pal.text_tertiary),
+    );
+
     // OpenAI-compatible endpoints take arbitrary model ids the built-in table
     // can't know, so let the user pin effort support for the active model. The
     // checkbox shows the effective capability; toggling it persists an override.

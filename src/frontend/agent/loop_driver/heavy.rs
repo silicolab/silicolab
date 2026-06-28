@@ -59,6 +59,21 @@ pub fn heavy_kind_of(call: &ToolCall) -> Option<HeavyKind> {
     }
 }
 
+/// A short cost/impact hint for an approval card, or `None` when the call has no
+/// special cost (only heavy commands, which run off-thread one at a time, have one).
+pub fn impact_hint(call: &ToolCall) -> Option<String> {
+    let kind = heavy_kind_of(call)?;
+    let command = call
+        .input
+        .get("command")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    Some(format!(
+        "{} — heavy compute; runs in the background, one job at a time",
+        heavy_label(kind, command)
+    ))
+}
+
 /// A short human label for a heavy command, e.g. `qm optimize`, `md run`, `dock`.
 fn heavy_label(kind: HeavyKind, command: &str) -> String {
     let sub = command.split_whitespace().nth(1).unwrap_or("");

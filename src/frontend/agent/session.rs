@@ -3,9 +3,10 @@
 //! Assistant tab. Held as `UiState::agent`; mutated only through the dispatcher and
 //! the poll-driven [`loop_driver`](super::loop_driver).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::{Deref, DerefMut};
 
+use crate::frontend::console::RiskLevel;
 use crate::io::llm::types::{ChatMessage, ContentBlock, ToolCall, Usage};
 
 /// Where the session is in the turn cycle.
@@ -121,6 +122,17 @@ pub struct AssistantConversation {
     /// `tool_result` blocks gathered so far in the current batch; flushed into a
     /// single neutral `Tool` message when the batch completes.
     pub collected_results: Vec<ContentBlock>,
+    /// Command verbs (the top-level name, or `save_script`) the user chose to
+    /// auto-allow for the rest of this conversation. Checked before the approval
+    /// gate; never overrides the `Destructive` floor.
+    pub allowed_verbs: HashSet<String>,
+    /// Whole risk levels the user chose to auto-allow this conversation. Never
+    /// holds `Destructive` (that always prompts).
+    pub allowed_risks: HashSet<RiskLevel>,
+    /// Ids of gated calls the user approved in the current batch but which have
+    /// not run yet (an earlier call is still awaiting a decision). Lets the batch
+    /// be resolved in any order while executing in queue order.
+    pub approved_ids: HashSet<String>,
     /// Live preview of the assistant text streaming in this turn. Shown beneath
     /// the transcript while `AwaitingModel`, then cleared and replaced by the
     /// authoritative final text when the turn completes.
@@ -152,6 +164,9 @@ impl AssistantConversation {
             last_usage: None,
             pending_calls: VecDeque::new(),
             collected_results: Vec::new(),
+            allowed_verbs: HashSet::new(),
+            allowed_risks: HashSet::new(),
+            approved_ids: HashSet::new(),
             streaming_text: String::new(),
             queued: VecDeque::new(),
             current_backlog: None,

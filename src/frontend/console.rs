@@ -268,13 +268,13 @@ pub fn command_catalog() -> String {
         "  surface chain <id>; surface style fill|mesh; surface transparency <0-100>; surface clear",
         "  show ions [--within 3.5]",
         "",
-        "Editing (gated — the user confirms before these run):",
+        "Editing & saving (`save` writes a file; `delete` is destructive and always asks):",
         "  hydrogen add                Add missing hydrogens to the active structure.",
         "  delete chain <A,B,...>      Delete the listed chains.",
-        "  save image <path.png>       Render the viewport to a PNG.",
-        "  save view <path.sls>        Save the current view as a replayable script.",
+        "  save image <path.png>       Render the viewport to a PNG (may overwrite).",
+        "  save view <path.sls>        Save the current view as a replayable script (may overwrite).",
         "",
-        "Simulation (gated — minutes/GPU):",
+        "Simulation (compute — minutes/GPU; runs in the background):",
         "  md build                    Box + capture topology for the active structure.",
         "  md simulate [--time 1ns] [--temperature 300] [--no-relax]",
         "  qm energy|optimize|freq|ts [--method b3lyp] [--basis def2-svp] [--charge 0] [--spin 1]",
@@ -288,7 +288,9 @@ pub fn command_catalog() -> String {
         "  score --receptor <entry> --ligand <entry> [--center x,y,z] [--size x,y,z]   (single-point pose score)",
         "",
         "Tips: render commands target the active entry unless given `--global`. Call `inspect` \
-         first when you are unsure what is loaded.",
+         first when you are unsure what is loaded. Commands are risk-classified; whether one \
+         needs the user's approval depends on their approval mode (Settings ▸ Assistant), and \
+         destructive commands (`delete`, running a script) always ask.",
     ]
     .join("\n")
 }

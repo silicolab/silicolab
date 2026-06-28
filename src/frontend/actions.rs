@@ -294,10 +294,16 @@ pub enum AppAction {
     DeleteAssistantConversation(crate::frontend::agent::AssistantConversationId),
     /// Cancel the in-flight assistant turn and any pending tool batch.
     CancelAgent,
-    /// Approve the gated (destructive/expensive) tool call with this id.
+    /// Approve the gated (compute/destructive) tool call with this id.
     ApproveToolCall(String),
     /// Reject the gated tool call with this id (the model gets an error result).
     RejectToolCall(String),
+    /// Approve this id and auto-allow its command verb for the rest of the chat.
+    AlwaysAllowCommand(String),
+    /// Approve this id and auto-allow its whole risk level for the rest of the chat.
+    AlwaysAllowRisk(String),
+    /// Set the assistant's command-approval mode and persist.
+    SetApprovalMode(crate::backend::config::ApprovalMode),
     /// Drop the queued (type-ahead) assistant follow-up message at this index.
     RemoveQueuedAgentInput(usize),
     /// Cancel the running background (qm/md/dock) agent job with this id.
