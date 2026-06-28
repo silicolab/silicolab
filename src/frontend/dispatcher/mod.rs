@@ -61,6 +61,7 @@ mod gromacs;
 mod heavy_render;
 mod jobs;
 mod project;
+mod ptm;
 mod remote_jobs;
 mod selection;
 mod settings;
@@ -77,6 +78,7 @@ pub(crate) use gromacs::*;
 pub(crate) use heavy_render::*;
 pub(crate) use jobs::*;
 pub(crate) use project::*;
+pub(crate) use ptm::*;
 pub(crate) use remote_jobs::*;
 pub(crate) use selection::*;
 pub(crate) use settings::*;
@@ -166,6 +168,19 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::CancelQmPrompt => cancel_pending_qm_request(state),
         AppAction::StartDocking => start_pending_docking(state),
         AppAction::CancelDockingPrompt => cancel_pending_docking_request(state),
+        AppAction::SetPtmFamily(family) => with_ptm_prompt(state, |p| p.family = family),
+        AppAction::SetPtmChain(chain) => with_ptm_prompt(state, |p| p.chain = chain),
+        AppAction::SetPtmResSeq(res_seq) => with_ptm_prompt(state, |p| p.res_seq = res_seq),
+        AppAction::SetPtmDegree(degree) => with_ptm_prompt(state, |p| p.degree = degree),
+        AppAction::SetPtmLipid(lipid) => with_ptm_prompt(state, |p| p.lipid = lipid),
+        AppAction::SetPtmUbl(ubl) => with_ptm_prompt(state, |p| p.ubl = ubl),
+        AppAction::SetPtmUblOverride(entry) => with_ptm_prompt(state, |p| p.ubl_override = entry),
+        AppAction::SetPtmNTerminal(on) => with_ptm_prompt(state, |p| p.n_terminal = on),
+        AppAction::SetPtmGlycanIupac(iupac) => with_ptm_prompt(state, |p| p.glycan_iupac = iupac),
+        AppAction::SetPtmGlycoKind(kind) => with_ptm_prompt(state, |p| p.glyco_kind = kind),
+        AppAction::SetPtmName(name) => with_ptm_prompt(state, |p| p.output_name = name),
+        AppAction::StartPtm => start_pending_ptm(state),
+        AppAction::CancelPtmPrompt => cancel_pending_ptm_request(state),
         AppAction::ConfirmSupercell => confirm_pending_supercell(state),
         AppAction::CancelSupercellPrompt => cancel_pending_supercell_request(state),
         AppAction::ConfirmProteinPrep => confirm_pending_protein_prep(state),

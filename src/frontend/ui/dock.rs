@@ -495,6 +495,7 @@ fn render_task_body(
         TaskPanelKind::DisorderedSystemPrompt => render_disorder_task_panel(state, ui, actions),
         TaskPanelKind::MdRunPrompt => render_md_run_task_panel(state, ui, actions),
         TaskPanelKind::DockingPrompt => render_docking_task_panel(state, ui, actions),
+        TaskPanelKind::PtmPrompt => render_ptm_task_panel(state, ui, actions),
         TaskPanelKind::None => {
             ui.label("This task runs directly and does not need a panel.");
             if ui

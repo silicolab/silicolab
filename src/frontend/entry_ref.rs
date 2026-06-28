@@ -4,7 +4,7 @@
 
 use anyhow::{Result, anyhow, bail};
 
-use crate::domain::Structure;
+use crate::domain::{ResidueId, Structure};
 use crate::frontend::state::AppState;
 
 /// Resolve `active`, `#id`/`id`, or an entry name to an entry id.
@@ -47,4 +47,36 @@ pub(crate) fn entry_structure(state: &AppState, entry_id: u64, role: &str) -> Re
         bail!("{role} entry #{entry_id} has no atoms");
     }
     Ok(entry.structure.clone())
+}
+
+/// Parse a `chain:resSeq` anchor reference (e.g. `A:297`, `B:52A`) into a
+/// [`ResidueId`]. Shared by the glycosylation and PTM `--at` arguments so the
+/// residue grammar stays identical across the modification commands.
+pub(crate) fn parse_anchor(spec: &str) -> Result<ResidueId> {
+    let (chain_part, rest) = spec
+        .split_once(':')
+        .ok_or_else(|| anyhow!("--at expects `chain:resSeq` (e.g. A:297), got `{spec}`"))?;
+    let chain_id = {
+        let mut chars = chain_part.trim().chars();
+        let chain = chars
+            .next()
+            .ok_or_else(|| anyhow!("--at chain id is empty in `{spec}`"))?;
+        if chars.next().is_some() {
+            bail!("--at chain id must be a single character in `{spec}`");
+        }
+        chain
+    };
+    let rest = rest.trim();
+    let (digits, insertion_code) = match rest.find(|ch: char| !ch.is_ascii_digit() && ch != '-') {
+        Some(split) => {
+            let (num, code) = rest.split_at(split);
+            let code = code.chars().next().unwrap_or(' ');
+            (num, code)
+        }
+        None => (rest, ' '),
+    };
+    let sequence_number = digits
+        .parse::<i32>()
+        .map_err(|_| anyhow!("--at residue number is invalid in `{spec}`"))?;
+    Ok(ResidueId::new(chain_id, sequence_number, insertion_code))
 }

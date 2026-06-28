@@ -114,6 +114,10 @@ const TASK_EXECUTORS: &[TaskExecutor] = &[
         kind: TaskKind::RunDocking,
         run: run_docking_panel,
     },
+    TaskExecutor {
+        kind: TaskKind::ModifyProteinPtm,
+        run: run_ptm_panel,
+    },
 ];
 
 pub(super) fn task_executor(kind: TaskKind) -> Option<&'static TaskExecutor> {
@@ -183,6 +187,10 @@ fn run_md(state: &mut AppState, task_run_id: u64) {
 }
 
 fn run_docking_panel(state: &mut AppState, task_run_id: u64) {
+    open_panel_task(state, task_run_id);
+}
+
+fn run_ptm_panel(state: &mut AppState, task_run_id: u64) {
     open_panel_task(state, task_run_id);
 }
 

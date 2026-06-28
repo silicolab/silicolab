@@ -1,10 +1,10 @@
 use anyhow::{Result, anyhow};
 use nalgebra::Vector3;
 
-use crate::domain::glycan::{self, ProteinAnchor, TemplateAtom};
-use crate::domain::{Atom, Biopolymer, Bond, BondType, ChainRecord, ResidueId, Structure};
+use crate::domain::glycan::{self, ProteinAnchor};
+use crate::domain::{Biopolymer, BondType, ResidueId, Structure};
 use crate::engines::forcefield;
-use crate::workflows::assembly::stitch::{self, AcceptorSite, DonorSite};
+use crate::workflows::assembly::condense::{self, AcceptorSpec, DonorSpec};
 
 use super::builder::glycan_to_structure;
 
@@ -54,22 +54,8 @@ pub fn glycosylate_protein(
         .ok_or_else(|| anyhow!("glycan has no reducing-end anomeric carbon"))?;
     let leaving_oxygen = glycan_atom_by_name(&glycan, glycan_bio, reducing_c1, "O1");
     let leaving_hydrogen = glycan_atom_by_name(&glycan, glycan_bio, reducing_c1, "HO1");
-
-    let template_atoms: Vec<TemplateAtom> = glycan
-        .atoms
-        .iter()
-        .enumerate()
-        .map(|(index, atom)| TemplateAtom {
-            name: glycan_bio
-                .atom_name(index)
-                .map(str::to_string)
-                .unwrap_or_default(),
-            element: atom.element.clone(),
-            position: atom.position,
-        })
-        .collect();
-
     let donor_outward = donor_outward_direction(&glycan, reducing_c1, leaving_oxygen);
+
     let anchor_element = match kind {
         GlycosylationKind::NLinked => "N",
         GlycosylationKind::OLinked => "O",
@@ -77,34 +63,28 @@ pub fn glycosylate_protein(
     let bond_length =
         forcefield::equilibrium_bond_length("C", anchor_element, BondType::Single).unwrap_or(1.45);
 
-    let child_bonds: Vec<(usize, usize)> = glycan.bonds.iter().map(|b| (b.a, b.b)).collect();
-    let placement = stitch::place_fragment(
-        &template_atoms,
-        &child_bonds,
-        DonorSite {
-            anomeric_atom: reducing_c1,
-            outward: donor_outward,
-        },
-        AcceptorSite {
-            oxygen_atom: anchor_atom,
-            outward: anchor_outward,
-        },
-        protein.atoms[anchor_atom].position,
-        bond_length,
-        anchor_outward,
-    );
-
-    merge(
-        protein,
-        protein_bio,
-        &glycan,
-        glycan_bio,
-        &placement,
+    let acceptor = AcceptorSpec {
         anchor_atom,
-        anchor_hydrogen,
-        reducing_c1,
-        leaving_oxygen,
-        leaving_hydrogen,
+        remove: anchor_hydrogen.into_iter().collect(),
+        outward: anchor_outward,
+    };
+    let donor = DonorSpec {
+        donor_atom: reducing_c1,
+        remove: [leaving_oxygen, leaving_hydrogen]
+            .into_iter()
+            .flatten()
+            .collect(),
+        outward: donor_outward,
+    };
+
+    condense::attach_fragment(
+        protein,
+        acceptor,
+        &glycan,
+        donor,
+        bond_length,
+        BondType::Single,
+        "glycan",
     )
 }
 
@@ -204,164 +184,11 @@ fn donor_outward_direction(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn merge(
-    protein: &Structure,
-    protein_bio: &Biopolymer,
-    glycan: &Structure,
-    glycan_bio: &Biopolymer,
-    placement: &stitch::FragmentPlacement,
-    anchor_atom: usize,
-    anchor_hydrogen: Option<usize>,
-    reducing_c1: usize,
-    leaving_oxygen: Option<usize>,
-    leaving_hydrogen: Option<usize>,
-) -> Result<Structure> {
-    let removed_glycan: Vec<bool> = (0..glycan.atoms.len())
-        .map(|index| Some(index) == leaving_oxygen || Some(index) == leaving_hydrogen)
-        .collect();
-    let removed_protein: Vec<bool> = (0..protein.atoms.len())
-        .map(|index| Some(index) == anchor_hydrogen)
-        .collect();
-
-    let mut atoms: Vec<Atom> = Vec::new();
-    let mut atom_names: Vec<Option<String>> = Vec::new();
-    let mut residue_for_atom: Vec<Option<usize>> = Vec::new();
-    let mut protein_remap = vec![usize::MAX; protein.atoms.len()];
-
-    for (index, atom) in protein.atoms.iter().enumerate() {
-        if removed_protein[index] {
-            continue;
-        }
-        protein_remap[index] = atoms.len();
-        atoms.push(atom.clone());
-        atom_names.push(protein_bio.atom_name(index).map(str::to_string));
-        residue_for_atom.push(*protein_bio.residue_for_atom.get(index).unwrap_or(&None));
-    }
-
-    let protein_residue_count = protein_bio.residues.len();
-    let mut glycan_remap = vec![usize::MAX; glycan.atoms.len()];
-    for (index, placed) in placement.atoms.iter().enumerate() {
-        if removed_glycan[index] {
-            continue;
-        }
-        glycan_remap[index] = atoms.len();
-        atoms.push(Atom {
-            element: placed.element.clone(),
-            position: placed.position,
-            charge: glycan.atoms[index].charge,
-        });
-        atom_names.push(glycan_bio.atom_name(index).map(str::to_string));
-        let residue = glycan_bio
-            .residue_for_atom
-            .get(index)
-            .and_then(|r| *r)
-            .map(|r| r + protein_residue_count);
-        residue_for_atom.push(residue);
-    }
-
-    let mut bonds: Vec<Bond> = Vec::new();
-    for bond in &protein.bonds {
-        let (a, b) = (
-            protein_remap.get(bond.a).copied().unwrap_or(usize::MAX),
-            protein_remap.get(bond.b).copied().unwrap_or(usize::MAX),
-        );
-        if a != usize::MAX && b != usize::MAX {
-            bonds.push(Bond::with_type(a, b, bond.bond_type));
-        }
-    }
-    for bond in &glycan.bonds {
-        let (a, b) = (
-            glycan_remap.get(bond.a).copied().unwrap_or(usize::MAX),
-            glycan_remap.get(bond.b).copied().unwrap_or(usize::MAX),
-        );
-        if a != usize::MAX && b != usize::MAX {
-            bonds.push(Bond::with_type(a, b, bond.bond_type));
-        }
-    }
-
-    let junction_protein = protein_remap[anchor_atom];
-    let junction_c1 = glycan_remap[reducing_c1];
-    if junction_protein == usize::MAX || junction_c1 == usize::MAX {
-        return Err(anyhow!("junction atoms were removed during merge"));
-    }
-    bonds.push(Bond::with_type(
-        junction_protein,
-        junction_c1,
-        BondType::Single,
-    ));
-
-    let mut residues = protein_bio.residues.clone();
-    for residue in &mut residues {
-        remap_residue(residue, &protein_remap);
-    }
-    for glycan_residue in &glycan_bio.residues {
-        let mut residue = glycan_residue.clone();
-        remap_residue(&mut residue, &glycan_remap);
-        residues.push(residue);
-    }
-
-    let chains = merge_chains(protein_bio, glycan_bio, protein_residue_count);
-
-    let biopolymer = Biopolymer {
-        residues,
-        chains,
-        secondary_structures: protein_bio.secondary_structures.clone(),
-        residue_for_atom,
-        atom_name_for_atom: atom_names,
-    };
-
-    let title = format!("{}+glycan", protein.title);
-    let mut structure = Structure::with_bonds(title, atoms, bonds);
-    structure.biopolymer = Some(biopolymer);
-    structure.cell = protein.cell.clone();
-
-    Ok(structure)
-}
-
-fn remap_residue(residue: &mut crate::domain::ResidueRecord, remap: &[usize]) {
-    residue.atom_indices = residue
-        .atom_indices
-        .iter()
-        .filter_map(|&old| remap.get(old).copied())
-        .filter(|&new| new != usize::MAX)
-        .collect();
-    residue.alpha_carbon = remap_optional(residue.alpha_carbon, remap);
-    residue.backbone_nitrogen = remap_optional(residue.backbone_nitrogen, remap);
-    residue.backbone_carbon = remap_optional(residue.backbone_carbon, remap);
-    residue.backbone_oxygen = remap_optional(residue.backbone_oxygen, remap);
-}
-
-fn remap_optional(index: Option<usize>, remap: &[usize]) -> Option<usize> {
-    let old = index?;
-    let new = remap.get(old).copied()?;
-    if new == usize::MAX { None } else { Some(new) }
-}
-
-fn merge_chains(
-    protein_bio: &Biopolymer,
-    glycan_bio: &Biopolymer,
-    protein_residue_count: usize,
-) -> Vec<ChainRecord> {
-    let mut chains = protein_bio.chains.clone();
-    for glycan_chain in &glycan_bio.chains {
-        chains.push(ChainRecord {
-            id: glycan_chain.id,
-            residue_indices: glycan_chain
-                .residue_indices
-                .iter()
-                .map(|&index| index + protein_residue_count)
-                .collect(),
-        });
-    }
-    chains
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::glycan::{Aglycon, infer_attachment};
-    use crate::domain::{AtomCategory, ResidueRecord};
+    use crate::domain::{Atom, AtomCategory, Bond, ChainRecord, ResidueRecord};
     use nalgebra::Point3;
 
     fn atom(element: &str, x: f32, y: f32, z: f32) -> Atom {

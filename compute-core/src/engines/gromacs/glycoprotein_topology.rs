@@ -8,7 +8,7 @@ use crate::domain::biopolymer::{Biopolymer, ChainRecord, ResidueRecord, is_carbo
 use crate::domain::glycan::linkage_topology::{self, BondLinkage};
 use crate::domain::glycan::patches::{self, JunctionPatch};
 use crate::domain::structure::{Atom, Bond, Structure};
-use crate::md::{BondedTerm, MoleculeType};
+use crate::md::{BondedTerm, MdTopology, MoleculeType};
 
 use super::carb_topology::build_glycan_topology_with;
 use super::forcefield_assets::{self, CarbTopologyDatabase};
@@ -21,6 +21,19 @@ pub struct JunctionSite {
     pub anchor_sequence_number: i32,
     pub anomeric_carbon_global: usize,
     pub patch: JunctionPatch,
+}
+
+/// The modification-specific behavior the otherwise-generic protein-topology
+/// merge is parameterized over: which atoms form the modifying group, how its
+/// self-contained sub-topology is built, where it joins the protein, and the
+/// junction bond force constants. The glycan path is one instance of this; any
+/// future modification welded on as its own moleculetype reuses the same merge.
+pub struct ModificationMerge<'a> {
+    pub modifying_atoms: &'a dyn Fn(&Structure, &Biopolymer) -> Vec<usize>,
+    pub junction_sites: &'a dyn Fn(&Structure, &Biopolymer) -> Result<Vec<JunctionSite>>,
+    pub build_sub_topology: &'a dyn Fn(&Structure) -> Result<MdTopology>,
+    pub junction_bond_params: &'a dyn Fn(&str) -> (f32, f32),
+    pub empty_error: &'static str,
 }
 
 pub fn merge_glycan_into_protein_topology(
@@ -38,31 +51,51 @@ pub fn merge_glycan_into_protein_topology_with(
     force_field: &str,
     database: &CarbTopologyDatabase,
 ) -> Result<String> {
+    let build = |sub: &Structure| build_glycan_topology_with(sub, force_field, database);
+    let merge = ModificationMerge {
+        modifying_atoms: &carbohydrate_atom_indices,
+        junction_sites: &junction_sites,
+        build_sub_topology: &build,
+        junction_bond_params: &junction_bond_params,
+        empty_error: "no carbohydrate atoms to merge into the protein topology",
+    };
+    merge_modification_into_protein_topology_with(protein_top, structure, &merge)
+}
+
+/// Merge a modification's self-contained moleculetype into a single-moleculetype
+/// protein topology: append its atoms/bonds/bonded terms re-indexed onto the
+/// protein numbering, patch the anchor/junction charges, and add the junction
+/// bond(s). Modification-agnostic — see [`ModificationMerge`].
+pub fn merge_modification_into_protein_topology_with(
+    protein_top: &str,
+    structure: &Structure,
+    merge: &ModificationMerge,
+) -> Result<String> {
     let biopolymer = structure
         .biopolymer
         .as_ref()
-        .ok_or_else(|| anyhow!("a glycoprotein topology needs a biopolymer overlay"))?;
+        .ok_or_else(|| anyhow!("a modified-protein topology needs a biopolymer overlay"))?;
     if !biopolymer.is_compatible_with_atom_count(structure.atoms.len()) {
         bail!("the biopolymer overlay does not cover every atom");
     }
 
-    let glycan_atoms = carbohydrate_atom_indices(structure, biopolymer);
+    let glycan_atoms = (merge.modifying_atoms)(structure, biopolymer);
     if glycan_atoms.is_empty() {
-        bail!("no carbohydrate atoms to merge into the protein topology");
+        bail!("{}", merge.empty_error);
     }
 
-    // Every glycan-to-protein linkage gets its own junction bond and charge
-    // patch. All carbohydrate atoms (across every glycosylation site) live in one
-    // glycan moleculetype; handling only the first junction would leave the other
-    // sites' sugars topologically free-floating in the MD system.
-    let junctions = junction_sites(structure, biopolymer)?;
+    // Every modifying-group-to-protein linkage gets its own junction bond and
+    // charge patch. All modifying atoms (across every site) live in one
+    // moleculetype; handling only the first junction would leave the other
+    // sites' groups topologically free-floating in the MD system.
+    let junctions = (merge.junction_sites)(structure, biopolymer)?;
     let (glycan_structure, local_for_global) =
         extract_substructure(structure, biopolymer, &glycan_atoms, 'G');
-    let glycan_topology = build_glycan_topology_with(&glycan_structure, force_field, database)?;
+    let glycan_topology = (merge.build_sub_topology)(&glycan_structure)?;
     let glycan_molecule = glycan_topology
         .molecules
         .first()
-        .ok_or_else(|| anyhow!("glycan topology produced no molecule"))?;
+        .ok_or_else(|| anyhow!("modification topology produced no molecule"))?;
 
     let mut parsed = ProteinTopology::parse(protein_top)?;
 
@@ -99,7 +132,7 @@ pub fn merge_glycan_into_protein_topology_with(
             &junction.anchor_residue_name,
             &junction.anchor_atom_name,
         )?;
-        let (junction_b0, junction_kb) = junction_bond_params(&junction.anchor_atom_name);
+        let (junction_b0, junction_kb) = (merge.junction_bond_params)(&junction.anchor_atom_name);
         bond_lines.push(format!(
             "  {:>4} {:>4} 1 {:.5} {:.1}\n",
             anchor_topology_index, anomeric_topology_index, junction_b0, junction_kb
@@ -269,6 +302,7 @@ fn junction_sites(structure: &Structure, biopolymer: &Biopolymer) -> Result<Vec<
             linkage_topology::ProteinAnchor::SerOg | linkage_topology::ProteinAnchor::ThrOg1 => {
                 patches::o_linked_junction_patch(&anchor_atom_name)
             }
+            other => bail!("no glycan junction topology for anchor {other:?}"),
         };
         sites.push(JunctionSite {
             anchor_residue_name: residue.residue_name.clone(),
