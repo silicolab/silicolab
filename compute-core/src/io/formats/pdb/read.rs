@@ -152,16 +152,25 @@ fn build_model_structure(
         other => other.cloned(),
     };
 
+    let biopolymer = build_biopolymer(&annotations, secondary_structures.to_vec());
+
+    // A deposited biomolecule's covalent graph is intramolecular (plus the
+    // explicit CONECT/LINK records). Its crystallographic cell tiles space by
+    // symmetry operators, not the pure translation that minimum-image bonding
+    // assumes, so periodic inference across that cell discovers no real bonds and
+    // only fabricates false ones — and on a large structure its O(n^2) form
+    // stalls the load. Bond such structures non-periodically; the cell is still
+    // stored below for display and PBC.
+    let bonding_cell = effective_cell.as_ref().filter(|_| biopolymer.is_none());
+
     let bonds = resolve_bonds(
         &atoms,
-        effective_cell.as_ref(),
+        bonding_cell,
         &serial_to_index,
         &identity_to_index,
         conect_pairs,
         link_pairs,
     );
-
-    let biopolymer = build_biopolymer(&annotations, secondary_structures.to_vec());
 
     let mut structure = match effective_cell {
         Some(cell) => Structure::with_cell_and_bonds(title, atoms, bonds, cell),

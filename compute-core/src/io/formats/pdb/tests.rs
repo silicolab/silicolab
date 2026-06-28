@@ -297,3 +297,88 @@ END
         "the cross-residue bond must survive a to_pdb / parse round trip"
     );
 }
+
+#[test]
+fn deposited_protein_with_real_cell_is_bonded_nonperiodically() {
+    // 1HKN regression: a deposited biomolecule that carries a real crystallographic
+    // cell must be bonded from its single Cartesian frame, never by minimum-image
+    // across the cell — which fabricates bonds and, on a large structure, stalls the
+    // load on the O(n^2) periodic path. The cell is still kept for display/PBC.
+    //
+    // The two backbone nitrogens sit at x=0.1 and x=9.9 in a 10 A cell: 9.8 A apart
+    // in raw Cartesian (no bond), but 0.2 A apart under minimum image (would bond).
+    let structure = parse_pdb(
+        "\
+TITLE     two-residue peptide in a real cell
+CRYST1   10.000   10.000   10.000  90.00  90.00  90.00 P 1
+ATOM      1  N   ALA A   1       0.100   0.000   0.000  1.00  0.00           N
+ATOM      2  N   ALA A   2       9.900   0.000   0.000  1.00  0.00           N
+END
+",
+    )
+    .expect("valid pdb");
+
+    assert!(
+        structure.biopolymer.is_some(),
+        "standard amino acids must be recognized as a biopolymer"
+    );
+    assert!(
+        structure.cell.is_some(),
+        "the crystallographic cell is preserved for display/PBC"
+    );
+    assert!(
+        structure.bonds.is_empty(),
+        "minimum-image must not fabricate a cross-cell bond for a deposited biomolecule"
+    );
+}
+
+#[test]
+fn non_biopolymer_with_real_cell_still_bonds_periodically() {
+    // The contrast that pins the discriminator: the same cross-cell pair, but as a
+    // material / small-molecule crystal (no biopolymer overlay), keeps periodic
+    // bonding, so the minimum-image bond across the 10 A cell is still found.
+    let structure = parse_pdb(
+        "\
+TITLE     two atoms in a real cell
+CRYST1   10.000   10.000   10.000  90.00  90.00  90.00 P 1
+ATOM      1  C1  LIG A   1       0.100   0.000   0.000  1.00  0.00           C
+ATOM      2  C2  LIG A   1       9.900   0.000   0.000  1.00  0.00           C
+END
+",
+    )
+    .expect("valid pdb");
+
+    assert!(
+        structure.biopolymer.is_none(),
+        "a non-standard ligand residue is not a biopolymer"
+    );
+    assert_eq!(
+        structure.bonds.len(),
+        1,
+        "a material/small-molecule crystal keeps minimum-image periodic bonding"
+    );
+}
+
+#[test]
+fn recompute_bonds_keeps_deposited_biomolecules_nonperiodic() {
+    // The non-periodic invariant must also survive a bond recomputation (the GUI
+    // "recompute bonds" action), or that path would re-freeze and re-fabricate the
+    // cross-cell bond the loader avoids.
+    let mut structure = parse_pdb(
+        "\
+TITLE     two-residue peptide in a real cell
+CRYST1   10.000   10.000   10.000  90.00  90.00  90.00 P 1
+ATOM      1  N   ALA A   1       0.100   0.000   0.000  1.00  0.00           N
+ATOM      2  N   ALA A   2       9.900   0.000   0.000  1.00  0.00           N
+END
+",
+    )
+    .expect("valid pdb");
+
+    structure.recompute_bonds();
+
+    assert!(
+        structure.bonds.is_empty(),
+        "recompute must not periodically re-bond a deposited biomolecule"
+    );
+}
