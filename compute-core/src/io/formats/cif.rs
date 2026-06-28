@@ -1,7 +1,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 
 use crate::{
-    domain::chemistry::normalized_symbol,
+    domain::chemistry::{infer_bonds_with_cell, normalized_symbol},
     domain::{Atom, PdbAtomAnnotation, Structure, UnitCell, build_biopolymer},
 };
 
@@ -101,6 +101,13 @@ fn parse_mmcif(input: &str) -> Result<Structure> {
         .and_then(|annotations| build_biopolymer(&annotations, Vec::new()));
 
     let mut structure = match cell {
+        // See the PDB reader: a deposited biomolecule is bonded non-periodically
+        // even when it carries a crystallographic cell, which is kept for display
+        // and PBC.
+        Some(cell) if biopolymer.is_some() => {
+            let bonds = infer_bonds_with_cell(&atoms, None);
+            Structure::with_cell_and_bonds(title, atoms, bonds, cell)
+        }
         Some(cell) => Structure::with_cell(title, atoms, cell),
         None => Structure::new(title, atoms),
     };
@@ -534,6 +541,52 @@ HETATM 5 C  C1  MAN B 2 8.000 0.800 0.000
         assert_eq!(structure.atom_category(0), AtomCategory::Protein);
         assert_eq!(structure.atom_category(2), AtomCategory::Carbohydrate);
         assert_eq!(structure.atom_category(4), AtomCategory::Carbohydrate);
+    }
+
+    #[test]
+    fn deposited_protein_mmcif_with_real_cell_is_bonded_nonperiodically() {
+        // Same 1HKN regression as the PDB reader, for the mmCIF path: a protein that
+        // carries a real cell is bonded non-periodically (the two backbone nitrogens
+        // are 9.8 A apart in Cartesian but 0.2 A under minimum image), while the cell
+        // is preserved for display/PBC.
+        let structure = parse_cif(
+            "\
+data_peptide
+_cell.length_a 10.000
+_cell.length_b 10.000
+_cell.length_c 10.000
+_cell.angle_alpha 90
+_cell.angle_beta 90
+_cell.angle_gamma 90
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.auth_seq_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+ATOM 1 N N ALA A 1 0.100 0.000 0.000
+ATOM 2 N N ALA A 2 9.900 0.000 0.000
+",
+        )
+        .expect("valid mmcif");
+
+        assert!(
+            structure.biopolymer.is_some(),
+            "ALA residues form a biopolymer"
+        );
+        assert!(
+            structure.cell.is_some(),
+            "the cell is preserved for display/PBC"
+        );
+        assert!(
+            structure.bonds.is_empty(),
+            "minimum-image must not fabricate a cross-cell bond for a deposited biomolecule"
+        );
     }
 
     #[test]
