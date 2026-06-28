@@ -420,8 +420,10 @@ pub(crate) fn render_group_header(
         state.ui.entry_list.rename_group_focus_requested = false;
     }
 
-    // Edit / delete buttons in the right area.
-    let (btn_pencil, btn_trash) = {
+    // Edit / delete buttons in the right area, revealed on row hover. Gate on
+    // `contains_pointer` rather than `hovered`: the buttons win the pointer once
+    // it reaches them, so a `hovered` gate would drop them mid-reach.
+    let (btn_pencil, btn_trash) = if row_resp.contains_pointer() {
         let mut right_ui = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(right_rect)
@@ -432,6 +434,7 @@ pub(crate) fn render_group_header(
                 egui::Button::new(RichText::new(egui_phosphor::regular::TRASH).size(11.0))
                     .frame(false),
             )
+            .on_hover_text("Delete group")
             .clicked();
         let pencil = right_ui
             .add(
@@ -440,8 +443,11 @@ pub(crate) fn render_group_header(
                 )
                 .frame(false),
             )
+            .on_hover_text("Rename group")
             .clicked();
         (pencil, trash)
+    } else {
+        (false, false)
     };
 
     if btn_pencil {
