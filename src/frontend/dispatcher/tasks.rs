@@ -354,6 +354,9 @@ pub(crate) fn ensure_panel_form(state: &mut AppState, task_run_id: u64) {
                 state.ui.pending_docking = Some(prompt);
             }
         }
+        TaskPanelKind::PtmPrompt => {
+            state.ui.pending_ptm.get_or_insert_with(Default::default);
+        }
         TaskPanelKind::None => {}
     }
 }

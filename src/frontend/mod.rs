@@ -19,6 +19,7 @@ mod md_support;
 mod menu_macos;
 mod nanosheet_panel;
 mod navigation;
+mod ptm_commands;
 mod qm_commands;
 mod remote_jobs;
 mod reticular_panel;

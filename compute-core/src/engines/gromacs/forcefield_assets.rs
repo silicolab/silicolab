@@ -85,6 +85,10 @@ impl ForceFieldBundle {
     pub fn carb_rtp(&self) -> Option<&'static str> {
         self.file("carb.rtp")
     }
+
+    pub fn aminoacids_rtp(&self) -> Option<&'static str> {
+        self.file("aminoacids.rtp")
+    }
 }
 
 pub fn stage_forcefield(token: &str, working_dir: &Path) -> Result<PathBuf> {
@@ -138,6 +142,11 @@ pub struct BondedTypeDefaults {
 /// order-specific improper `[ dihedraltypes ]`.
 pub type ImproperNames = [String; 4];
 
+/// Two atom *names* naming one bond as listed in a residue's rtp `[ bonds ]`
+/// block. Names may be inter-residue references (`+N`, `-C`); those are kept
+/// verbatim.
+pub type BondNames = [String; 2];
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct CarbTopologyDatabase {
     pub typing: TypingTable,
@@ -146,6 +155,10 @@ pub struct CarbTopologyDatabase {
     /// `BGLCNA`). Unlike angles and proper dihedrals, impropers are *not*
     /// derivable from connectivity, so they are carried verbatim from the rtp.
     pub impropers: HashMap<String, Vec<ImproperNames>>,
+    /// Per-residue explicit bonds, keyed by CHARMM residue name. Carried so a
+    /// caller can confirm a junction bond (e.g. `OG`–`P` for a phospho-Ser) is
+    /// genuinely parameterized by the force field's own residue definition.
+    pub bonds: HashMap<String, Vec<BondNames>>,
 }
 
 const SUBSECTIONS: &[&str] = &[
@@ -180,11 +193,13 @@ pub fn parse_carb_rtp(text: &str) -> Result<CarbTopologyDatabase> {
     let mut typing = TypingTable::new();
     let mut defaults: Option<BondedTypeDefaults> = None;
     let mut impropers: HashMap<String, Vec<ImproperNames>> = HashMap::new();
+    let mut bonds: HashMap<String, Vec<BondNames>> = HashMap::new();
 
     let mut current_residue: Option<String> = None;
     let mut in_atoms = false;
     let mut in_bondedtypes = false;
     let mut in_impropers = false;
+    let mut in_bonds = false;
 
     for raw in text.lines() {
         let line = strip_comment(raw).trim();
@@ -197,11 +212,24 @@ pub fn parse_carb_rtp(text: &str) -> Result<CarbTopologyDatabase> {
                 in_atoms = name.eq_ignore_ascii_case("atoms");
                 in_bondedtypes = name.eq_ignore_ascii_case("bondedtypes");
                 in_impropers = name.eq_ignore_ascii_case("impropers");
+                in_bonds = name.eq_ignore_ascii_case("bonds");
             } else {
                 current_residue = Some(name.to_string());
                 in_atoms = false;
                 in_bondedtypes = false;
                 in_impropers = false;
+                in_bonds = false;
+            }
+            continue;
+        }
+
+        if in_bonds && let Some(residue) = &current_residue {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            if cols.len() >= 2 {
+                bonds
+                    .entry(residue.clone())
+                    .or_default()
+                    .push([cols[0].to_string(), cols[1].to_string()]);
             }
             continue;
         }
@@ -265,6 +293,7 @@ pub fn parse_carb_rtp(text: &str) -> Result<CarbTopologyDatabase> {
         typing,
         defaults,
         impropers,
+        bonds,
     })
 }
 
@@ -275,6 +304,30 @@ pub fn charmm36_carb_database() -> Result<CarbTopologyDatabase> {
         .carb_rtp()
         .ok_or_else(|| anyhow::anyhow!("CHARMM36 bundle has no carb.rtp"))?;
     parse_carb_rtp(carb)
+}
+
+/// CHARMM36 modified amino-acid residues fully parameterized in the bundled
+/// `aminoacids.rtp`: phospho-Ser/Thr/Tyr (monoanionic), acetyl-Lys (neutral),
+/// mono/di/tri-methyl-Lys and mono/di-methyl-Arg (cationic). Each is a
+/// *complete* residue — not a separable patch — so the correct mapping is to
+/// rename to the native residue and let the rtp own the types/charges/bonded
+/// terms. Presence here means the params exist; the rename path is currently
+/// wired for phospho-Ser/Thr/Tyr, acetyl-Lys and methyl-Lys (methyl-Arg's
+/// guanidinium remap is not yet wired — see `domain::ptm_patches`).
+pub const SUPPORTED_PTM_RESIDUES: &[&str] = &[
+    "SEP", "TPO", "PTR", "ALY", "MLZ", "MLY", "M3L", "2MR", "AGM",
+];
+
+/// Force-field typing/impropers/bonds for the modified amino-acid residues,
+/// parsed from the bundled CHARMM36 `aminoacids.rtp`. Reuses the same rtp reader
+/// as the carbohydrate database — an rtp residue is an rtp residue.
+pub fn charmm36_ptm_database() -> Result<CarbTopologyDatabase> {
+    let bundle =
+        bundle(CHARMM36_TOKEN).ok_or_else(|| anyhow::anyhow!("CHARMM36 bundle missing"))?;
+    let aminoacids = bundle
+        .aminoacids_rtp()
+        .ok_or_else(|| anyhow::anyhow!("CHARMM36 bundle has no aminoacids.rtp"))?;
+    parse_carb_rtp(aminoacids)
 }
 
 #[cfg(test)]
@@ -439,5 +492,66 @@ mod tests {
     #[test]
     fn unknown_token_has_no_bundle() {
         assert!(bundle("amber99sb-ildn").is_none());
+    }
+
+    fn residue_net_charge(db: &CarbTopologyDatabase, residue: &str) -> f32 {
+        db.typing
+            .iter()
+            .filter(|((res, _), _)| res == residue)
+            .map(|(_, typing)| typing.charge)
+            .sum()
+    }
+
+    #[test]
+    fn ptm_database_loads_every_supported_modified_residue() {
+        let db = charmm36_ptm_database().unwrap();
+        for residue in SUPPORTED_PTM_RESIDUES {
+            assert!(
+                db.typing.keys().any(|(res, _)| res == residue),
+                "aminoacids.rtp must define modified residue {residue}"
+            );
+        }
+    }
+
+    #[test]
+    fn ptm_residue_charges_are_the_documented_integers() {
+        let db = charmm36_ptm_database().unwrap();
+        // Genuine CHARMM36 rtp charges; no fabrication. Phospho is monoanionic,
+        // acetyl-Lys neutral, methyl-Lys/Arg cationic.
+        for (residue, expected) in [
+            ("SEP", -1.0),
+            ("TPO", -1.0),
+            ("PTR", -1.0),
+            ("ALY", 0.0),
+            ("MLZ", 1.0),
+            ("MLY", 1.0),
+            ("M3L", 1.0),
+            ("2MR", 1.0),
+            ("AGM", 1.0),
+        ] {
+            let net = residue_net_charge(&db, residue);
+            assert!(
+                (net - expected).abs() < 1e-3,
+                "{residue} rtp net charge {net} should be {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn ptm_database_carries_the_junction_bonds() {
+        let db = charmm36_ptm_database().unwrap();
+        let has_bond = |residue: &str, a: &str, b: &str| {
+            db.bonds.get(residue).is_some_and(|bonds| {
+                bonds.iter().any(|bond| {
+                    bond == &[a.to_string(), b.to_string()]
+                        || bond == &[b.to_string(), a.to_string()]
+                })
+            })
+        };
+        // The phosphoester / amide / N–C junctions are in the FF's own residues.
+        assert!(has_bond("SEP", "OG", "P"), "SEP must bond OG–P");
+        assert!(has_bond("PTR", "OH", "P"), "PTR must bond OH–P");
+        assert!(has_bond("ALY", "NZ", "CH"), "ALY must bond NZ–CH");
+        assert!(has_bond("MLZ", "NZ", "CM"), "MLZ must bond NZ–CM");
     }
 }

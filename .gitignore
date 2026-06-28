@@ -17,6 +17,8 @@ target/
 #   Exception: Protein Data Bank (.pdb) test fixtures are source files and
 #   must be tracked, in any crate (e.g. compute-core/src/md/fixtures/).
 !**/fixtures/**/*.pdb
+#   Exception: bundled UBL templates compiled in via include_str! are source assets.
+!/assets/ubl/*.pdb
 
 # ---- Operating system ----
 

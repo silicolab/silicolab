@@ -18,6 +18,7 @@ pub mod input;
 pub mod material;
 pub mod nonbonded;
 pub mod output;
+pub mod ptm_topology;
 pub mod realize;
 pub mod runner;
 pub mod topgen;

@@ -184,6 +184,8 @@ fn aglycon_at_protein_atom(
             ser_thr: residue.id.clone(),
             anchor_atom,
         }),
+        // Non-glycosidic anchors are not N-/O-linked aglycons; ignore them.
+        _ => None,
     }
 }
 
@@ -200,9 +202,9 @@ fn residue_name_for(biopolymer: &Biopolymer, atom_index: usize) -> Option<&str> 
 
 pub use dictionary::{MonosaccharideEntry, lookup, supported_tokens};
 pub use iupac::parse;
+pub(crate) use linkage_topology::ProteinAnchor;
 pub use linkage_topology::{
-    BondLinkage, CrossResidueLinkage, ProteinAnchor, classify_bond, cross_residue_linkages,
-    is_anomeric_carbon,
+    BondLinkage, CrossResidueLinkage, classify_bond, cross_residue_linkages, is_anomeric_carbon,
 };
 pub use templates::{CoordinationSite, RingTemplate, TemplateAtom, TemplateBond, ring_template};
 

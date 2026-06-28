@@ -1,39 +1,7 @@
 use crate::domain::biopolymer::{Biopolymer, is_carbohydrate_residue};
 use crate::domain::structure::Structure;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProteinAnchor {
-    AsnNd2,
-    SerOg,
-    ThrOg1,
-}
-
-impl ProteinAnchor {
-    pub fn residue_name(self) -> &'static str {
-        match self {
-            ProteinAnchor::AsnNd2 => "ASN",
-            ProteinAnchor::SerOg => "SER",
-            ProteinAnchor::ThrOg1 => "THR",
-        }
-    }
-
-    pub fn atom_name(self) -> &'static str {
-        match self {
-            ProteinAnchor::AsnNd2 => "ND2",
-            ProteinAnchor::SerOg => "OG",
-            ProteinAnchor::ThrOg1 => "OG1",
-        }
-    }
-
-    fn from_residue_atom(residue_name: &str, atom_name: &str) -> Option<Self> {
-        match (residue_name.trim(), atom_name) {
-            ("ASN", "ND2") => Some(ProteinAnchor::AsnNd2),
-            ("SER", "OG") => Some(ProteinAnchor::SerOg),
-            ("THR", "OG1") => Some(ProteinAnchor::ThrOg1),
-            _ => None,
-        }
-    }
-}
+pub(crate) use crate::domain::anchor::ProteinAnchor;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BondLinkage {

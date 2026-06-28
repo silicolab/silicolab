@@ -31,6 +31,12 @@ use crate::frontend::{
     state::{AppState, AtomStyle},
 };
 
+mod ptm_args;
+
+pub(crate) use ptm_args::{
+    AcetylateArgs, LipidateArgs, MethylateArgs, PhosphorylateArgs, UbiquitinateArgs,
+};
+
 /// Root of the console grammar. `no_binary_name` because the first token is the
 /// command, not an executable path; the auto `help` subcommand is disabled in
 /// favor of an explicit [`Command::Help`] so the command list is introspectable.
@@ -160,6 +166,21 @@ pub(crate) enum Command {
     Glycan(GlycanArgs),
 
     Glycosylate(GlycosylateArgs),
+
+    /// Phosphorylate a Ser/Thr/Tyr hydroxyl or His imidazole (neutral phosphate).
+    Phosphorylate(PhosphorylateArgs),
+
+    /// Acetylate a Lys side-chain NZ, or cap the chain N-terminus.
+    Acetylate(AcetylateArgs),
+
+    /// Methylate a Lys NZ or Arg NH1 to mono/di/tri degree.
+    Methylate(MethylateArgs),
+
+    /// Lipidate a Cys SG (palmitoyl/prenyl) or the Gly N-terminus (myristoyl).
+    Lipidate(LipidateArgs),
+
+    /// Conjugate a ubiquitin-like protein to a Lys NZ via an isopeptide bond.
+    Ubiquitinate(UbiquitinateArgs),
 
     /// Print this help.
     Help,
@@ -412,7 +433,8 @@ impl Command {
         context: &mut ScriptContext,
     ) -> Result<String> {
         use crate::frontend::{
-            disorder_commands, docking_commands, glycan_commands, md_commands, qm_commands,
+            disorder_commands, docking_commands, glycan_commands, md_commands, ptm_commands,
+            qm_commands,
         };
         match self {
             Command::Open { path } => super::open_command(state, context, &path),
@@ -441,6 +463,11 @@ impl Command {
             Command::Score(args) => docking_commands::score_command(state, args),
             Command::Glycan(args) => glycan_commands::glycan_command(state, args),
             Command::Glycosylate(args) => glycan_commands::glycosylate_command(state, args),
+            Command::Phosphorylate(args) => ptm_commands::phosphorylate_command(state, args),
+            Command::Acetylate(args) => ptm_commands::acetylate_command(state, args),
+            Command::Methylate(args) => ptm_commands::methylate_command(state, args),
+            Command::Lipidate(args) => ptm_commands::lipidate_command(state, args),
+            Command::Ubiquitinate(args) => ptm_commands::ubiquitinate_command(state, args),
             Command::Help => Ok(long_help()),
         }
     }
