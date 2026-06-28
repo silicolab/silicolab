@@ -20,6 +20,7 @@ pub enum TaskKind {
     RecomputeBonds,
     RunMd,
     RunDocking,
+    ModifyProteinPtm,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,6 +37,7 @@ pub enum TaskPanelKind {
     DisorderedSystemPrompt,
     MdRunPrompt,
     DockingPrompt,
+    PtmPrompt,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -357,6 +359,22 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         outcome: TaskOutcome::CreateEntry,
         backend: TaskBackend::BackgroundNative,
         uses_run_directory: true,
+    },
+    TaskController {
+        id: "modify-ptm",
+        title: "Modify Protein (PTM)",
+        short_title: "Modify PTM",
+        theme: "Structure Editing",
+        method: "Side-Chain Conjugation",
+        application: "Post-Translational Modification",
+        description: "Attach a post-translational modification — phosphorylation, acetylation, \
+                      methylation, lipidation, or ubiquitination — to a protein residue. The \
+                      modified structure is added as a new entry.",
+        kind: TaskKind::ModifyProteinPtm,
+        panel: TaskPanelKind::PtmPrompt,
+        outcome: TaskOutcome::CreateEntry,
+        backend: TaskBackend::InlineNative,
+        uses_run_directory: false,
     },
 ];
 

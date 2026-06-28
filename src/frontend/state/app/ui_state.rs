@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use crate::frontend::state::{
     DisorderedSystemPrompt, DockingPrompt, EngineDraft, EntryListState, LayoutState, MdRunPrompt,
-    MdSystemPrompt, OptimizationPrompt, ProteinPrepPrompt, QmPrompt, RemoteHostDraft,
+    MdSystemPrompt, OptimizationPrompt, PendingPtm, ProteinPrepPrompt, QmPrompt, RemoteHostDraft,
     RemoteHostStatus, SupercellPrompt,
 };
 use crate::frontend::{
@@ -97,6 +97,7 @@ pub struct UiState {
     pub pending_md_run: Option<MdRunPrompt>,
     pub pending_disorder: Option<DisorderedSystemPrompt>,
     pub pending_docking: Option<DockingPrompt>,
+    pub pending_ptm: Option<PendingPtm>,
     pub pending_pdb_fetch: Option<String>,
     /// The single active non-modal notification (a message plus optional action
     /// buttons), or `None`. Posting a new one replaces any current one.
@@ -215,6 +216,7 @@ impl Default for UiState {
             pending_md_run: None,
             pending_disorder: None,
             pending_docking: None,
+            pending_ptm: None,
             pending_pdb_fetch: None,
             notification: None,
             pending_heavy_gate: None,

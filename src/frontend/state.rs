@@ -14,6 +14,7 @@ mod engine_drafts;
 mod execution;
 mod layout;
 mod md_prompts;
+mod ptm_prompts;
 mod qm_prompts;
 
 pub use app::*;
@@ -25,6 +26,7 @@ pub use engine_drafts::*;
 pub use execution::*;
 pub use layout::*;
 pub use md_prompts::*;
+pub use ptm_prompts::*;
 pub use qm_prompts::*;
 
 #[cfg(test)]

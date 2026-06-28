@@ -442,6 +442,96 @@ fn glycosylate_parses_protein_iupac_anchor_and_kind() {
 }
 
 #[test]
+fn phosphorylate_parses_protein_and_anchor() {
+    let line = "phosphorylate --protein active --at A:84 --name phospho-ser";
+    match parse_command(&shell_words(line).unwrap()).unwrap() {
+        Command::Phosphorylate(args) => {
+            assert_eq!(args.protein.as_deref(), Some("active"));
+            assert_eq!(args.at.as_deref(), Some("A:84"));
+            assert_eq!(args.name.as_deref(), Some("phospho-ser"));
+        }
+        other => panic!("expected phosphorylate, got {other:?}"),
+    }
+}
+
+#[test]
+fn acetylate_parses_n_terminal_flag() {
+    match parse_command(&shell_words("acetylate --protein #1 --at A:120 --n-terminal").unwrap())
+        .unwrap()
+    {
+        Command::Acetylate(args) => {
+            assert_eq!(args.protein.as_deref(), Some("#1"));
+            assert_eq!(args.at.as_deref(), Some("A:120"));
+            assert!(args.n_terminal);
+        }
+        other => panic!("expected acetylate, got {other:?}"),
+    }
+
+    // Without the flag it defaults to the Lys side-chain (false).
+    match parse_command(&shell_words("acetylate --protein #1 --at A:120").unwrap()).unwrap() {
+        Command::Acetylate(args) => assert!(!args.n_terminal),
+        other => panic!("expected acetylate, got {other:?}"),
+    }
+}
+
+#[test]
+fn methylate_parses_degree_with_default() {
+    match parse_command(&shell_words("methylate --protein active --at A:9 --degree tri").unwrap())
+        .unwrap()
+    {
+        Command::Methylate(args) => {
+            assert_eq!(args.at.as_deref(), Some("A:9"));
+            assert_eq!(args.degree, "tri");
+        }
+        other => panic!("expected methylate, got {other:?}"),
+    }
+
+    match parse_command(&shell_words("methylate --protein active --at A:9").unwrap()).unwrap() {
+        Command::Methylate(args) => assert_eq!(args.degree, "mono"),
+        other => panic!("expected methylate, got {other:?}"),
+    }
+}
+
+#[test]
+fn lipidate_parses_kind_with_default() {
+    match parse_command(&shell_words("lipidate --protein active --at A:3 --kind farnesyl").unwrap())
+        .unwrap()
+    {
+        Command::Lipidate(args) => {
+            assert_eq!(args.at.as_deref(), Some("A:3"));
+            assert_eq!(args.kind, "farnesyl");
+        }
+        other => panic!("expected lipidate, got {other:?}"),
+    }
+
+    match parse_command(&shell_words("lipidate --protein active --at A:3").unwrap()).unwrap() {
+        Command::Lipidate(args) => assert_eq!(args.kind, "palmitoyl"),
+        other => panic!("expected lipidate, got {other:?}"),
+    }
+}
+
+#[test]
+fn ubiquitinate_parses_ubl_and_override() {
+    let line = "ubiquitinate --protein active --at A:48 --ubl sumo --with #2";
+    match parse_command(&shell_words(line).unwrap()).unwrap() {
+        Command::Ubiquitinate(args) => {
+            assert_eq!(args.at.as_deref(), Some("A:48"));
+            assert_eq!(args.ubl, "sumo");
+            assert_eq!(args.with.as_deref(), Some("#2"));
+        }
+        other => panic!("expected ubiquitinate, got {other:?}"),
+    }
+
+    match parse_command(&shell_words("ubiquitinate --protein active --at A:48").unwrap()).unwrap() {
+        Command::Ubiquitinate(args) => {
+            assert_eq!(args.ubl, "ubiquitin");
+            assert_eq!(args.with, None);
+        }
+        other => panic!("expected ubiquitinate, got {other:?}"),
+    }
+}
+
+#[test]
 fn activate_switches_the_active_entry_by_id() {
     let mut state = AppState::scratch(Default::default(), Vec::new());
     let fixture = write_console_fixture("activate", CONSOLE_TEST_PDB);

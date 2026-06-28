@@ -98,6 +98,34 @@ pub enum AppAction {
     CancelQmPrompt,
     StartDocking,
     CancelDockingPrompt,
+    // --- Modify protein (PTM) ---
+    /// Choose the modification family (phosphorylate/acetylate/…).
+    SetPtmFamily(crate::frontend::state::PtmUiKind),
+    /// Set the anchor residue chain id.
+    SetPtmChain(String),
+    /// Set the anchor residue sequence number.
+    SetPtmResSeq(i32),
+    /// Set the methylation degree (Methylate family).
+    SetPtmDegree(crate::domain::modification::MethylDegree),
+    /// Set the lipid (Lipidate family).
+    SetPtmLipid(crate::frontend::ptm_commands::LipidKind),
+    /// Set the ubiquitin-like modifier (Ubiquitinate family).
+    SetPtmUbl(crate::domain::modification::UblKind),
+    /// Choose an open entry to supply the UBL template (`None` uses the bundled
+    /// one).
+    SetPtmUblOverride(Option<u64>),
+    /// Acetylate the chain N-terminus instead of the Lys side-chain NZ.
+    SetPtmNTerminal(bool),
+    /// Set the IUPAC-condensed glycan notation (Glycosylate family).
+    SetPtmGlycanIupac(String),
+    /// Set the N-linked/O-linked glycosylation kind (Glycosylate family).
+    SetPtmGlycoKind(crate::workflows::glycan::GlycosylationKind),
+    /// Set the result entry's name.
+    SetPtmName(String),
+    /// Apply the modification to the active protein, creating a new entry.
+    StartPtm,
+    /// Discard the PTM draft and close the panel.
+    CancelPtmPrompt,
     ConfirmSupercell,
     CancelSupercellPrompt,
     ConfirmProteinPrep,
