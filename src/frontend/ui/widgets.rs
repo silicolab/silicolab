@@ -283,9 +283,6 @@ pub(crate) fn lerp_color(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Co
 /// `true` only on the frame the confirm button is clicked. The armed state lives
 /// in egui per-widget temp memory keyed by `id_salt`, so it is transient and is
 /// never persisted to workspace state.
-// The colocated unit test references this, so the dead-code expectation applies
-// only to non-test builds.
-#[cfg_attr(not(test), expect(dead_code))]
 pub(crate) fn confirm_destructive(
     ui: &mut egui::Ui,
     id_salt: impl std::hash::Hash,

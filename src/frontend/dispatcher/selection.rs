@@ -315,6 +315,19 @@ pub(crate) fn delete_group_with_entries(state: &mut AppState, group_id: &str) {
     delete_group(state, group_id);
 }
 
+/// The group's display name and how many entries would be destroyed alongside
+/// it, for a delete confirmation prompt. `None` if the group id is unknown.
+pub(crate) fn group_delete_summary(state: &AppState, group_id: &str) -> Option<(String, usize)> {
+    let name = state.entries.group(group_id)?.name.clone();
+    let count = state
+        .entries
+        .records
+        .iter()
+        .filter(|entry| entry.group_id == group_id)
+        .count();
+    Some((name, count))
+}
+
 pub(crate) fn move_entry_to_group(state: &mut AppState, entry_id: u64, group_id: &str) {
     if state.entries.move_entry_to_group(entry_id, group_id) {
         if group_id.is_empty() {
@@ -540,6 +553,35 @@ mod tests {
             Vec::new(),
             None,
         )
+    }
+
+    #[test]
+    fn group_delete_summary_counts_members() {
+        let mut state = scratch_state(test_structure("mol"));
+        let gid = state
+            .entries
+            .create_group("Proteins")
+            .expect("group created");
+        state.entries.add_entry_to_group(
+            test_structure("1abc"),
+            None,
+            PathBuf::from("1abc.xyz"),
+            gid.clone(),
+            None,
+            false,
+        );
+        state.entries.add_entry_to_group(
+            test_structure("2xyz"),
+            None,
+            PathBuf::from("2xyz.xyz"),
+            gid.clone(),
+            None,
+            false,
+        );
+
+        let (name, count) = super::group_delete_summary(&state, &gid).expect("group exists");
+        assert_eq!(name, "Proteins");
+        assert_eq!(count, 2);
     }
 
     #[test]

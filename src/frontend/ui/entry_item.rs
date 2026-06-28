@@ -242,6 +242,7 @@ pub(crate) fn render_entry_list_item(
             }
             ui.separator();
             render_delete_menu_items(
+                state,
                 ui,
                 actions,
                 &sel_entry_ids,
