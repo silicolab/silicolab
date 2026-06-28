@@ -71,5 +71,5 @@ By contributing, you confirm that you have the right to make that grant.
 
 ## Code conventions
 - **Single-responsibility files.** Split into modules rather than letting a file
-  accumulate â€” keep source files under 600 *code* lines (soft target ~400), per
-  [`.rules`](.rules). This is a modular Cargo workspace; lean on the module system.
+  accumulate; see [`.rules`](.rules) for the current size budget. This is a
+  modular Cargo workspace; lean on the module system.
