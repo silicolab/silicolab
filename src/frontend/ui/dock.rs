@@ -1,6 +1,6 @@
 use super::panel_bodies::{
-    render_assistant_panel, render_console_panel, render_output_panel, render_task_monitor_panel,
-    weak_panel_hairline,
+    render_assistant_panel, render_console_panel, render_output_panel, render_sequence_panel,
+    render_task_monitor_panel, weak_panel_hairline,
 };
 use super::secondary_sidebar::*;
 use super::*;
@@ -171,6 +171,7 @@ pub(super) fn render_dock_area(
     match state.ui.layout.dock.area(area).active {
         Some(DockTab::Static(StaticView::Output)) => render_output_panel(state, ui),
         Some(DockTab::Static(StaticView::Console)) => render_console_panel(state, ui, actions),
+        Some(DockTab::Static(StaticView::Sequence)) => render_sequence_panel(state, ui, actions),
         Some(DockTab::Static(StaticView::Assistant)) => render_assistant_panel(state, ui, actions),
         Some(DockTab::Static(StaticView::TaskMonitor)) => {
             render_task_monitor_panel(state, ui, actions)

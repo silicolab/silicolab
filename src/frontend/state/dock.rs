@@ -49,6 +49,7 @@ impl PrimaryView {
 pub enum StaticView {
     Output,
     Console,
+    Sequence,
     Assistant,
     TaskMonitor,
 }
@@ -60,6 +61,7 @@ impl StaticView {
     pub fn all() -> &'static [Self] {
         &[
             Self::Console,
+            Self::Sequence,
             Self::Assistant,
             Self::TaskMonitor,
             Self::Output,
@@ -69,6 +71,7 @@ impl StaticView {
     pub fn label(self) -> &'static str {
         match self {
             Self::Console => "Console",
+            Self::Sequence => "Sequence",
             Self::Assistant => "Assistant",
             Self::TaskMonitor => "Task Monitor",
             Self::Output => "Output",
@@ -81,6 +84,7 @@ impl StaticView {
     pub fn token(self) -> &'static str {
         match self {
             Self::Console => "console",
+            Self::Sequence => "sequence",
             Self::Assistant => "assistant",
             Self::TaskMonitor => "task_monitor",
             Self::Output => "output",
@@ -90,6 +94,7 @@ impl StaticView {
     pub fn from_token(token: &str) -> Option<Self> {
         Some(match token {
             "console" => Self::Console,
+            "sequence" => Self::Sequence,
             "assistant" => Self::Assistant,
             "task_monitor" => Self::TaskMonitor,
             "output" => Self::Output,
@@ -159,6 +164,7 @@ impl Default for DockModel {
             bottom: DockAreaState {
                 tabs: vec![
                     DockTab::Static(StaticView::Console),
+                    DockTab::Static(StaticView::Sequence),
                     DockTab::Static(StaticView::TaskMonitor),
                     DockTab::Static(StaticView::Output),
                 ],
@@ -429,6 +435,30 @@ mod tests {
     use crate::backend::config::{DockAreaLayout, DockLayoutConfig};
 
     #[test]
+    fn from_config_restores_missing_sequence() {
+        let config = DockLayoutConfig {
+            bottom: DockAreaLayout {
+                tabs: vec!["console".into()],
+                active: Some("console".into()),
+                collapsed: false,
+            },
+            right: DockAreaLayout {
+                tabs: vec!["assistant".into()],
+                active: Some("assistant".into()),
+                collapsed: false,
+            },
+            right_width: 320.0,
+            bottom_height: 240.0,
+        };
+        let model = DockModel::from_config(&config);
+        assert!(
+            model
+                .bottom
+                .tabs
+                .contains(&DockTab::Static(StaticView::Sequence))
+        );
+    }
+    #[test]
     fn from_config_restores_missing_task_monitor() {
         let config = DockLayoutConfig {
             bottom: DockAreaLayout {
@@ -451,5 +481,20 @@ mod tests {
                 .tabs
                 .contains(&DockTab::Static(StaticView::TaskMonitor))
         );
+    }
+
+    #[test]
+    fn dock_model_default_matches_layout_config_default() {
+        let model = DockModel::default().to_config();
+        let config = DockLayoutConfig::default();
+
+        assert_eq!(model.bottom.tabs, config.bottom.tabs);
+        assert_eq!(model.right.tabs, config.right.tabs);
+        assert_eq!(model.bottom.active, config.bottom.active);
+        assert_eq!(model.right.active, config.right.active);
+        assert_eq!(model.bottom.collapsed, config.bottom.collapsed);
+        assert_eq!(model.right.collapsed, config.right.collapsed);
+        assert_eq!(model.right_width, config.right_width);
+        assert_eq!(model.bottom_height, config.bottom_height);
     }
 }

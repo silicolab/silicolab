@@ -128,6 +128,16 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::ClearSelection => clear_selection(state),
         AppAction::SelectCategory(category) => select_category(state, category),
         AppAction::SelectAtom { atom_index, toggle } => select_atom(state, atom_index, toggle),
+        AppAction::SelectResidue {
+            residue_index,
+            toggle,
+        } => select_residue(state, residue_index, toggle),
+        AppAction::SelectResidueRange {
+            chain_id,
+            start,
+            end,
+            toggle,
+        } => select_residue_range(state, chain_id, start, end, toggle),
         AppAction::SetSelectionStyle(style) => set_selection_style(state, style),
         AppAction::SetCartoonOverlay(on) => set_overlay(state, OverlayKind::Cartoon, on),
         AppAction::SetSurfaceOverlay(on) => set_overlay(state, OverlayKind::Surface, on),

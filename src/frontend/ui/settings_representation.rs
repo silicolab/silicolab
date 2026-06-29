@@ -249,8 +249,8 @@ fn render_base_intro(_state: &mut AppState, ui: &mut egui::Ui, _actions: &mut Ve
     let pal = crate::frontend::theme::palette(ui);
     ui.label(
         RichText::new(
-            "Applies to ligands, ions, solvent, and other non-polymer atoms; biopolymer \
-             chains follow the Cartoon defaults below.",
+            "Applies to nucleic acids, ligands, ions, solvent, and other base-rendered atoms; \
+             protein chains follow the Cartoon defaults below.",
         )
         .color(pal.text_muted),
     );
@@ -399,7 +399,7 @@ pub(super) fn descriptors() -> Vec<SettingDescriptor> {
             "representation.base.scope",
             BASE_GROUP,
             "Base scope",
-            &["ligand", "ion", "solvent", "non-polymer", "base"],
+            &["nucleic", "ligand", "ion", "solvent", "base"],
             render_base_intro,
         ),
         SettingDescriptor {
@@ -407,8 +407,8 @@ pub(super) fn descriptors() -> Vec<SettingDescriptor> {
             category: SettingCategory::Representation,
             group: BASE_GROUP,
             title: "Default base style",
-            description: "Base representation for ligands, ions, solvent, and other \
-                          non-polymer atoms.",
+            description: "Base representation for nucleic acids, ligands, ions, solvent, \
+                          and other base-rendered atoms.",
             keywords: &[
                 "base",
                 "style",

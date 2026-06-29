@@ -259,6 +259,7 @@ impl Default for DockLayoutConfig {
             bottom: DockAreaLayout {
                 tabs: vec![
                     "console".to_string(),
+                    "sequence".to_string(),
                     "task_monitor".to_string(),
                     "output".to_string(),
                 ],

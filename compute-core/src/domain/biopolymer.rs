@@ -2,6 +2,9 @@ use std::collections::HashMap;
 
 use super::structure::Atom;
 
+mod sequence;
+pub use sequence::{ResiduePolymerKind, residue_polymer_kind, residue_sequence_symbol};
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ResidueId {
     pub chain_id: char,
@@ -60,7 +63,6 @@ impl ResidueRecord {
         self.alpha_carbon.is_some() && (self.has_peptide_backbone() || self.is_standard_amino_acid)
     }
 }
-
 /// Upper bound, in ångström, on the C(i)–N(i+1) peptide bond joining two
 /// consecutive residues. A real peptide bond is ~1.33 Å; the generous ceiling
 /// tolerates strained or coarse coordinates while still rejecting a chain break,
@@ -233,6 +235,7 @@ pub fn build_biopolymer(
     let has_overlay_residues = residues.iter().any(|residue| {
         residue.is_standard_amino_acid
             || residue.has_peptide_backbone()
+            || is_nucleic_acid_residue(&residue.residue_name)
             || is_carbohydrate_residue(&residue.residue_name)
     });
     if !has_overlay_residues && secondary_structures.is_empty() {
@@ -350,6 +353,7 @@ pub fn is_nucleic_acid_residue(residue_name: &str) -> bool {
             | "A"
             | "C"
             | "G"
+            | "T"
             | "U"
             | "I"
             | "RA"
@@ -600,6 +604,34 @@ mod tests {
             backbone_oxygen: None,
             is_standard_amino_acid: true,
         }
+    }
+
+    #[test]
+    fn nucleic_acid_only_annotations_build_biopolymer() {
+        let annotations = [
+            ("P", "DA", 1),
+            ("C1'", "DA", 1),
+            ("N9", "DA", 1),
+            ("P", "DC", 2),
+            ("C1'", "DC", 2),
+            ("N1", "DC", 2),
+        ]
+        .into_iter()
+        .map(|(atom_name, residue_name, residue_seq)| PdbAtomAnnotation {
+            atom_name: atom_name.to_string(),
+            residue_name: residue_name.to_string(),
+            chain_id: 'A',
+            residue_seq,
+            insertion_code: ' ',
+        })
+        .collect::<Vec<_>>();
+
+        let biopolymer = build_biopolymer(&annotations, Vec::new()).expect("biopolymer");
+        assert_eq!(biopolymer.residues.len(), 2);
+        assert!(biopolymer.residues.iter().all(|residue| {
+            residue_polymer_kind(&residue.residue_name, residue)
+                == Some(ResiduePolymerKind::NucleicAcid)
+        }));
     }
 
     #[test]
