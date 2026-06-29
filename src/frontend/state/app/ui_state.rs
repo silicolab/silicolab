@@ -54,11 +54,19 @@ pub struct StyleState {
     pub search_query: String,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct SequenceViewerState {
+    pub chain_filter: Option<char>,
+    pub last_clicked_residue: Option<usize>,
+    pub last_scrolled_primary_atom: Option<usize>,
+}
+
 pub struct UiState {
     pub layout: LayoutState,
     pub entry_list: EntryListState,
     pub settings: SettingsState,
     pub style: StyleState,
+    pub sequence: SequenceViewerState,
     pub camera: ViewCamera,
     pub viewport_cache: ViewportCache,
     /// Set once at startup when the GPU molecule renderer initializes
@@ -190,6 +198,7 @@ impl Default for UiState {
             entry_list: EntryListState::default(),
             settings: SettingsState::default(),
             style: StyleState::default(),
+            sequence: SequenceViewerState::default(),
             camera: ViewCamera::default(),
             viewport_cache: ViewportCache::default(),
             gpu_ready: false,

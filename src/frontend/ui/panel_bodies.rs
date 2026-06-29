@@ -7,6 +7,7 @@ mod assistant_composer;
 mod assistant_transcript;
 mod console;
 mod monitor;
+mod sequence;
 mod task_monitor;
 
 pub(crate) use assistant::*;
@@ -14,6 +15,7 @@ pub(crate) use assistant_composer::*;
 use assistant_transcript::*;
 pub(crate) use console::*;
 pub(crate) use monitor::*;
+pub(crate) use sequence::*;
 pub(crate) use task_monitor::*;
 
 /// Width reserved at the right edge of the log/transcript scroll areas so their

@@ -33,6 +33,16 @@ pub enum AppAction {
         atom_index: usize,
         toggle: bool,
     },
+    SelectResidue {
+        residue_index: usize,
+        toggle: bool,
+    },
+    SelectResidueRange {
+        chain_id: char,
+        start: usize,
+        end: usize,
+        toggle: bool,
+    },
     /// Apply a per-atom *base* drawing style to the current selection (or, when
     /// the selection is empty, to every atom as the new default).
     SetSelectionStyle(crate::frontend::state::AtomStyle),
