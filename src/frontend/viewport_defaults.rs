@@ -29,14 +29,15 @@ pub fn apply_entry_render_defaults(
     // is essential context.
     viewport.show_cell = structure.cell.is_some() && structure.biopolymer.is_none();
 
-    // Seed the global base-style default for non-polymer categories. Biopolymer
-    // chains (Protein/NucleicAcid) are intentionally untouched so they keep their
-    // Cartoon default and follow the cartoon geometry below. `Other` is included
-    // so freshly *built* structures (which classify as `Other`) inherit the
-    // default too. `set_category_style` clears the override when it equals the
-    // software default, so the map stays sparse.
+    // Seed the global base-style default for categories that use base geometry.
+    // Protein chains are intentionally untouched so they keep their Cartoon
+    // default and follow the cartoon geometry below. `Other` is included so
+    // freshly *built* structures (which classify as `Other`) inherit the default
+    // too. `set_category_style` clears the override when it equals the software
+    // default, so the map stays sparse.
     let base = base_style_to_atom_style(prefs.base.default_style);
     for category in [
+        AtomCategory::NucleicAcid,
         AtomCategory::Ligand,
         AtomCategory::Ion,
         AtomCategory::Solvent,
@@ -134,7 +135,7 @@ mod tests {
     }
 
     #[test]
-    fn category_resolution_cartoons_protein_seeds_nonpolymer_base_style() {
+    fn category_resolution_cartoons_protein_seeds_base_styles() {
         // Protein CA, water O, and a sodium ion — no per-atom overrides stored.
         let annotations = vec![
             annotation("CA", "ALA", 1),
@@ -153,10 +154,10 @@ mod tests {
         let mut viewport = ViewportVisualState::default();
         apply_entry_render_defaults(&mut viewport, &structure, &RepresentationPrefs::default());
 
-        // No *per-atom* overrides are materialized; non-polymer base styles come
+        // No *per-atom* overrides are materialized; base styles come
         // from the project-level category tier the defaults just seeded.
         assert!(viewport.atom_styles.is_empty());
-        // Biopolymer chains are untouched and keep their Cartoon default.
+        // Protein chains are untouched and keep their Cartoon default.
         assert_eq!(
             viewport.resolved_atom_style(&structure, 0),
             AtomStyle::Cartoon
@@ -174,6 +175,52 @@ mod tests {
         );
     }
 
+    #[test]
+    fn nucleic_acid_only_entry_defaults_to_drawable_base_style() {
+        let annotations = vec![
+            annotation("P", "DA", 1),
+            annotation("C1'", "DA", 1),
+            annotation("N9", "DA", 1),
+            annotation("P", "DC", 2),
+            annotation("C1'", "DC", 2),
+            annotation("N1", "DC", 2),
+        ];
+        let biopolymer = build_biopolymer(&annotations, Vec::new()).expect("biopolymer");
+        let structure = Structure {
+            title: "dna".to_string(),
+            atoms: vec![
+                atom("P"),
+                atom("C"),
+                atom("N"),
+                atom("P"),
+                atom("C"),
+                atom("N"),
+            ],
+            bonds: Vec::new(),
+            cell: None,
+            biopolymer: Some(biopolymer),
+        };
+
+        let mut viewport = ViewportVisualState::default();
+        apply_entry_render_defaults(&mut viewport, &structure, &RepresentationPrefs::default());
+
+        for index in 0..structure.atoms.len() {
+            assert_eq!(structure.atom_category(index), AtomCategory::NucleicAcid);
+            assert_eq!(
+                viewport.resolved_atom_style(&structure, index),
+                AtomStyle::BallAndStick
+            );
+            assert_eq!(
+                viewport.resolved_base_style(&structure, index),
+                AtomStyle::BallAndStick
+            );
+            assert!(!viewport.cartoon_enabled(&structure, index));
+        }
+        assert_eq!(
+            heavy_render_atom_count(&structure, &viewport),
+            structure.atoms.len()
+        );
+    }
     /// One protein anchor (so a biopolymer exists and SOL classifies as Solvent)
     /// plus `water` SOL oxygens.
     fn solvated(water: usize) -> Structure {
