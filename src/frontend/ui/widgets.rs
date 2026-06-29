@@ -277,6 +277,53 @@ pub(crate) fn lerp_color(a: egui::Color32, b: egui::Color32, t: f32) -> egui::Co
     )
 }
 
+/// Two-step inline confirmation for a destructive action. `trigger` renders the
+/// resting control and returns its `Response`; on first click the row swaps in
+/// place to `confirm_prompt` followed by a `confirm_label`/Cancel pair. Returns
+/// `true` only on the frame the confirm button is clicked.
+///
+/// The armed state lives in egui per-widget temp memory keyed by `id_salt`, so it
+/// is transient and never reaches workspace state. It also auto-disarms: the
+/// flag stores the pass it was last shown on, so a control whose container is
+/// dismissed while armed (a context menu clicked away, a settings page navigated
+/// off) resets to resting instead of reappearing pre-armed.
+pub(crate) fn confirm_destructive(
+    ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash,
+    confirm_prompt: &str,
+    confirm_label: &str,
+    trigger: impl FnOnce(&mut egui::Ui) -> egui::Response,
+) -> bool {
+    let pal = crate::frontend::theme::palette(ui);
+    let confirm_id = ui.id().with(id_salt);
+    let now = ui.ctx().cumulative_pass_nr();
+    let armed_at = ui.data(|data| data.get_temp::<u64>(confirm_id));
+
+    let mut fired = false;
+    if confirm_is_armed(armed_at, now) {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(confirm_prompt).color(pal.status_red));
+            if ui.button(confirm_label).clicked() {
+                fired = true;
+                ui.data_mut(|data| data.remove::<u64>(confirm_id));
+            } else if ui.button("Cancel").clicked() {
+                ui.data_mut(|data| data.remove::<u64>(confirm_id));
+            } else {
+                ui.data_mut(|data| data.insert_temp(confirm_id, now));
+            }
+        });
+    } else if trigger(ui).clicked() {
+        ui.data_mut(|data| data.insert_temp(confirm_id, now));
+    }
+    fired
+}
+
+/// Armed only if the flag was refreshed on the current or immediately preceding
+/// pass; a wider gap means the control was off-screen for a pass, which disarms.
+fn confirm_is_armed(armed_at: Option<u64>, now: u64) -> bool {
+    armed_at.is_some_and(|seen| now.saturating_sub(seen) <= 1)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -285,6 +332,32 @@ mod tests {
     fn fill_alpha(scheme: ColorScheme, dark: bool, selected: bool, hovered: bool) -> u8 {
         let pal = Palette::for_scheme(scheme, dark);
         core_button_fill(&pal, dark, selected, hovered).to_array()[3]
+    }
+
+    #[test]
+    fn confirm_arm_disarms_after_an_off_screen_pass() {
+        assert!(!confirm_is_armed(None, 10), "never armed");
+        assert!(confirm_is_armed(Some(10), 10), "armed this pass");
+        assert!(
+            confirm_is_armed(Some(9), 10),
+            "armed last pass, still on screen"
+        );
+        assert!(
+            !confirm_is_armed(Some(8), 10),
+            "a pass elapsed off-screen, so disarm"
+        );
+        assert!(!confirm_is_armed(Some(0), 1000), "long gone");
+    }
+
+    #[test]
+    fn confirm_destructive_resting_frame_does_not_fire() {
+        let ctx = egui::Context::default();
+        let mut fired = true;
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            fired =
+                confirm_destructive(ui, "salt", "Delete it?", "Delete", |ui| ui.button("Delete"));
+        });
+        assert!(!fired, "resting frame with no click must not fire");
     }
 
     #[test]

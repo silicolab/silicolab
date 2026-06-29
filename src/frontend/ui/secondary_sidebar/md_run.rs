@@ -470,10 +470,28 @@ pub(crate) fn render_md_stage_card(
                 {
                     actions.push(AppAction::ToggleMdRunStageExpanded(index));
                 }
-                if ui
-                    .add(egui::Button::new(egui_phosphor::regular::TRASH).frame(false))
-                    .clicked()
-                {
+                // A stage carrying free-form raw passthrough holds user-entered
+                // Details that a delete would discard; gate it behind a confirm.
+                let remove_clicked = if stage.raw_passthrough.is_empty() {
+                    ui.add(egui::Button::new(egui_phosphor::regular::TRASH))
+                        .on_hover_text("Remove stage")
+                        .clicked()
+                } else {
+                    // Salt by stage name as well as index: keyed on index alone, a
+                    // reorder mid-confirm would carry the armed state onto whatever
+                    // stage slides into this slot.
+                    crate::frontend::ui::widgets::confirm_destructive(
+                        ui,
+                        ("del_md_stage", index, stage.name.as_str()),
+                        "Remove stage and its details?",
+                        "Remove",
+                        |ui| {
+                            ui.add(egui::Button::new(egui_phosphor::regular::TRASH))
+                                .on_hover_text("Remove stage")
+                        },
+                    )
+                };
+                if remove_clicked {
                     actions.push(AppAction::RemoveMdRunStage(index));
                 }
                 if ui
@@ -481,6 +499,7 @@ pub(crate) fn render_md_stage_card(
                         index + 1 < total,
                         egui::Button::new(egui_phosphor::regular::ARROW_DOWN),
                     )
+                    .on_hover_text("Move down")
                     .clicked()
                 {
                     actions.push(AppAction::MoveMdRunStage { index, up: false });
@@ -490,6 +509,7 @@ pub(crate) fn render_md_stage_card(
                         index > 0,
                         egui::Button::new(egui_phosphor::regular::ARROW_UP),
                     )
+                    .on_hover_text("Move up")
                     .clicked()
                 {
                     actions.push(AppAction::MoveMdRunStage { index, up: true });
