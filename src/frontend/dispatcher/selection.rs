@@ -1,5 +1,8 @@
 use super::*;
 
+mod residue;
+pub(crate) use residue::{select_residue, select_residue_range};
+
 pub(crate) fn select_all(state: &mut AppState) {
     state.ui.selection.select_all(state.structure().atoms.len());
     state.set_message(format!("Selected {} atom(s)", state.ui.selection.len()));

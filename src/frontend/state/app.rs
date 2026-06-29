@@ -26,7 +26,7 @@ pub use monitor::RemoteGpuLive;
 // non-test code reaches it through `RemoteGpuLive::gpus`, so gate the re-export.
 #[cfg(test)]
 pub use monitor::RemoteGpuView;
-pub use ui_state::{SelfUpdateStatus, TextViewer, UiState};
+pub use ui_state::{SelfUpdateStatus, SequenceViewerState, TextViewer, UiState};
 
 use super::*;
 

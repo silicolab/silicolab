@@ -9,12 +9,13 @@ use crate::{domain::AtomCategory, domain::Structure, frontend::state::AtomStyle}
 /// category, and individual atoms may override the project.
 pub fn software_default_style(category: AtomCategory) -> AtomStyle {
     match category {
-        AtomCategory::Protein | AtomCategory::NucleicAcid => AtomStyle::Cartoon,
+        AtomCategory::Protein => AtomStyle::Cartoon,
         AtomCategory::Ion => AtomStyle::Sphere,
         // Solvent is shown like any other molecule by default; the user hides it
         // on demand from the View panel (or `view water off`). No automatic
         // program-side hiding.
-        AtomCategory::Carbohydrate
+        AtomCategory::NucleicAcid
+        | AtomCategory::Carbohydrate
         | AtomCategory::Solvent
         | AtomCategory::Ligand
         | AtomCategory::Other => AtomStyle::BallAndStick,
@@ -286,7 +287,7 @@ impl ViewportVisualState {
     /// ribbon — a peptide backbone (decided from atoms via
     /// [`Structure::atom_has_peptide_backbone`], so force-field-protonated,
     /// disulfide, and modified residues count too) or a category whose software
-    /// default is cartoon (e.g. nucleic acids). The residue name never gates this.
+    /// default is cartoon. The residue name never gates this.
     pub fn cartoon_enabled(&self, structure: &Structure, atom_index: usize) -> bool {
         let category = structure.atom_category(atom_index);
         let default_on = structure.atom_has_peptide_backbone(atom_index)
