@@ -420,8 +420,10 @@ pub(crate) fn render_group_header(
         state.ui.entry_list.rename_group_focus_requested = false;
     }
 
-    // Edit / delete buttons in the right area.
-    let (btn_pencil, btn_trash) = {
+    // Edit / delete buttons in the right area, revealed on row hover. Gate on
+    // `contains_pointer` rather than `hovered`: the buttons win the pointer once
+    // it reaches them, so a `hovered` gate would drop them mid-reach.
+    let (btn_pencil, btn_trash) = if row_resp.contains_pointer() {
         let mut right_ui = ui.new_child(
             egui::UiBuilder::new()
                 .max_rect(right_rect)
@@ -432,6 +434,7 @@ pub(crate) fn render_group_header(
                 egui::Button::new(RichText::new(egui_phosphor::regular::TRASH).size(11.0))
                     .frame(false),
             )
+            .on_hover_text("Ungroup")
             .clicked();
         let pencil = right_ui
             .add(
@@ -440,8 +443,11 @@ pub(crate) fn render_group_header(
                 )
                 .frame(false),
             )
+            .on_hover_text("Rename group")
             .clicked();
         (pencil, trash)
+    } else {
+        (false, false)
     };
 
     if btn_pencil {
@@ -476,6 +482,7 @@ pub(crate) fn render_group_header(
         }
         ui.separator();
         render_delete_menu_items(
+            state,
             ui,
             actions,
             &sel_entry_ids,
@@ -550,6 +557,7 @@ pub(crate) fn render_group_header(
 }
 
 pub(crate) fn render_delete_menu_items(
+    state: &AppState,
     ui: &mut egui::Ui,
     actions: &mut Vec<AppAction>,
     sel_entry_ids: &[u64],
@@ -571,7 +579,19 @@ pub(crate) fn render_delete_menu_items(
                 actions.push(AppAction::DeleteGroup(gid.to_string()));
                 ui.close();
             }
-            if ui.button("Delete Group and All Entries").clicked() {
+            let (gname, gcount) = crate::frontend::dispatcher::group_delete_summary(state, gid)
+                .unwrap_or_else(|| (gid.to_string(), 0));
+            let noun = if gcount == 1 { "entry" } else { "entries" };
+            let prompt = format!(
+                "Delete \u{201c}{gname}\u{201d} and {gcount} {noun}? This cannot be undone."
+            );
+            if crate::frontend::ui::widgets::confirm_destructive(
+                ui,
+                ("del_group_entries", gid),
+                &prompt,
+                "Delete",
+                |ui| ui.button("Delete Group and All Entries"),
+            ) {
                 actions.push(AppAction::DeleteGroupWithEntries(gid.to_string()));
                 ui.close();
             }
@@ -607,7 +627,25 @@ pub(crate) fn render_delete_menu_items(
         } else {
             format!("Delete {} Groups and Their Entries", n_groups)
         };
-        if ui.button(lbl2).clicked() {
+        let total_entries: usize = sel_group_ids
+            .iter()
+            .filter_map(|gid| crate::frontend::dispatcher::group_delete_summary(state, gid))
+            .map(|(_, count)| count)
+            .sum();
+        let noun = if total_entries == 1 {
+            "entry"
+        } else {
+            "entries"
+        };
+        let prompt =
+            format!("Delete {n_groups} groups and {total_entries} {noun}? This cannot be undone.");
+        if crate::frontend::ui::widgets::confirm_destructive(
+            ui,
+            "del_groups_entries_batch",
+            &prompt,
+            "Delete",
+            |ui| ui.button(lbl2),
+        ) {
             for gid in sel_group_ids {
                 actions.push(AppAction::DeleteGroupWithEntries(gid.clone()));
             }

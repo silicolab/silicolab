@@ -171,7 +171,13 @@ pub(crate) fn render_engine_settings(
             if ui.button("Apply & Detect").clicked() {
                 actions.push(AppAction::ApplyEngineOverride(row.id));
             }
-            if ui.button("Clear").clicked() {
+            if crate::frontend::ui::widgets::confirm_destructive(
+                ui,
+                ("clear_engine_override", row.id.as_str()),
+                "Clear this engine override?",
+                "Clear",
+                |ui| ui.button("Clear"),
+            ) {
                 actions.push(AppAction::ClearEngineOverride(row.id));
             }
         });

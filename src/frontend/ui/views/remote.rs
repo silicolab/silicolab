@@ -162,10 +162,18 @@ pub(crate) fn render_remote_hosts_settings(
             if ui.button("Set up passwordless login").clicked() {
                 actions.push(AppAction::SetupRemoteHostKey(id.clone()));
             }
-            if ui.button("Remove").clicked() {
-                actions.push(AppAction::RemoveRemoteHost(id.clone()));
-            }
         });
+
+        ui.add_space(8.0);
+        if crate::frontend::ui::widgets::confirm_destructive(
+            ui,
+            ("remove_remote_host", id.as_str()),
+            "Remove this host and its connection settings?",
+            "Remove",
+            |ui| ui.button(RichText::new("Remove").color(pal.status_red)),
+        ) {
+            actions.push(AppAction::RemoveRemoteHost(id.clone()));
+        }
 
         if let Some(mut command) = bootstrap_cmd {
             ui.label(caption_text(
