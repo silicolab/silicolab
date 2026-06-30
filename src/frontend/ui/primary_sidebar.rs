@@ -94,7 +94,7 @@ pub(crate) fn render_primary_sidebar(
                 .on_hover_text("Hide sidebar")
                 .clicked()
                 {
-                    state.ui.layout.show_primary_sidebar = false;
+                    actions.push(AppAction::TogglePrimarySidebar);
                 }
                 let search_selected =
                     state.ui.entry_list.search_open || sidebar_search_active(state);

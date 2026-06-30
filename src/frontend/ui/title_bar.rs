@@ -65,22 +65,40 @@ pub(crate) fn render_title_bar(
             .on_hover_text("Show sidebar")
             .clicked()
             {
-                state.ui.layout.show_primary_sidebar = true;
+                actions.push(AppAction::TogglePrimarySidebar);
             }
         }
 
         if show_inline_menus {
             with_core_button_style(ui, false, |ui| {
                 ui.menu_button(RichText::new("File").color(title_color), |ui| {
-                    if ui.button("Create a new project...").clicked() {
+                    if ui
+                        .button(crate::frontend::shortcuts::menu_text(
+                            "file.new_project",
+                            "Create a new project...",
+                        ))
+                        .clicked()
+                    {
                         actions.push(AppAction::CreateProject);
                         ui.close();
                     }
-                    if ui.button("Open Project...").clicked() {
+                    if ui
+                        .button(crate::frontend::shortcuts::menu_text(
+                            "file.open_project",
+                            "Open Project...",
+                        ))
+                        .clicked()
+                    {
                         actions.push(AppAction::OpenProject);
                         ui.close();
                     }
-                    if ui.button("Save Project").clicked() {
+                    if ui
+                        .button(crate::frontend::shortcuts::menu_text(
+                            "file.save_project",
+                            "Save Project",
+                        ))
+                        .clicked()
+                    {
                         actions.push(AppAction::SaveProject);
                         ui.close();
                     }
@@ -114,7 +132,13 @@ pub(crate) fn render_title_bar(
                         actions.push(AppAction::SketchMolecule);
                         ui.close();
                     }
-                    if ui.button("Open File...").clicked() {
+                    if ui
+                        .button(crate::frontend::shortcuts::menu_text(
+                            "file.open_file",
+                            "Open File...",
+                        ))
+                        .clicked()
+                    {
                         actions.push(AppAction::OpenFile);
                         ui.close();
                     }
@@ -124,21 +148,36 @@ pub(crate) fn render_title_bar(
                     }
                     ui.separator();
                     if ui
-                        .add_enabled(has_active_entry, Button::new("Save"))
+                        .add_enabled(
+                            has_active_entry,
+                            Button::new(crate::frontend::shortcuts::menu_text("file.save", "Save")),
+                        )
                         .clicked()
                     {
                         actions.push(AppAction::Save);
                         ui.close();
                     }
                     if ui
-                        .add_enabled(has_active_entry, Button::new("Save As..."))
+                        .add_enabled(
+                            has_active_entry,
+                            Button::new(crate::frontend::shortcuts::menu_text(
+                                "file.save_as",
+                                "Save As...",
+                            )),
+                        )
                         .clicked()
                     {
                         actions.push(AppAction::SaveAs);
                         ui.close();
                     }
                     ui.separator();
-                    if ui.button("Settings...\tCtrl+,").clicked() {
+                    if ui
+                        .button(crate::frontend::shortcuts::menu_text(
+                            "app.settings",
+                            "Settings...",
+                        ))
+                        .clicked()
+                    {
                         state.ui.layout.settings_open = true;
                         ui.close();
                     }
@@ -148,14 +187,25 @@ pub(crate) fn render_title_bar(
             with_core_button_style(ui, false, |ui| {
                 ui.menu_button(RichText::new("Edit").color(title_color), |ui| {
                     if ui
-                        .add_enabled(state.can_undo(), Button::new("Undo\tCtrl+Z"))
+                        .add_enabled(
+                            state.can_undo(),
+                            Button::new(crate::frontend::shortcuts::menu_text("edit.undo", "Undo")),
+                        )
                         .clicked()
                     {
                         actions.push(AppAction::Undo);
                         ui.close();
                     }
                     if ui
-                        .add_enabled(state.can_redo(), Button::new("Redo\tCtrl+Y / Ctrl+Shift+Z"))
+                        .add_enabled(
+                            state.can_redo(),
+                            Button::new(format!(
+                                "{} / {}",
+                                crate::frontend::shortcuts::menu_text("edit.redo", "Redo"),
+                                crate::frontend::shortcuts::label_for("edit.redo_alt")
+                                    .unwrap_or_else(|| "Ctrl+Shift+Z".to_string())
+                            )),
+                        )
                         .clicked()
                     {
                         actions.push(AppAction::Redo);
@@ -203,27 +253,66 @@ pub(crate) fn render_title_bar(
 
             with_core_button_style(ui, false, |ui| {
                 ui.menu_button(RichText::new("View").color(title_color), |ui| {
-                    ui.checkbox(
-                        &mut state.ui.layout.show_primary_sidebar,
-                        "Primary Side Bar",
-                    );
+                    let mut primary_visible = state.ui.layout.show_primary_sidebar;
+                    if ui
+                        .checkbox(
+                            &mut primary_visible,
+                            crate::frontend::shortcuts::menu_text(
+                                "view.primary_sidebar",
+                                "Primary Side Bar",
+                            ),
+                        )
+                        .changed()
+                    {
+                        actions.push(AppAction::TogglePrimarySidebar);
+                    }
                     // The dock areas' visibility is derived (a checkbox reflects
                     // whether the area is shown); the toggle routes through an
                     // action so revealing an empty area restores a default view.
                     let mut right_visible = state.ui.layout.dock.is_visible(DockArea::Right);
                     if ui
-                        .checkbox(&mut right_visible, "Secondary Side Bar")
+                        .checkbox(
+                            &mut right_visible,
+                            crate::frontend::shortcuts::menu_text(
+                                "view.secondary_sidebar",
+                                "Secondary Side Bar",
+                            ),
+                        )
                         .changed()
                     {
                         actions.push(AppAction::ToggleDockArea(DockArea::Right));
                     }
                     let mut bottom_visible = state.ui.layout.dock.is_visible(DockArea::Bottom);
-                    if ui.checkbox(&mut bottom_visible, "Panel").changed() {
+                    if ui
+                        .checkbox(
+                            &mut bottom_visible,
+                            crate::frontend::shortcuts::menu_text("view.panel", "Panel"),
+                        )
+                        .changed()
+                    {
                         actions.push(AppAction::ToggleDockArea(DockArea::Bottom));
                     }
-                    ui.checkbox(&mut state.ui.viewport.show_atom_labels, "Show Atom Labels");
+                    let mut show_atom_labels = state.ui.viewport.show_atom_labels;
+                    if ui
+                        .checkbox(
+                            &mut show_atom_labels,
+                            crate::frontend::shortcuts::menu_text(
+                                "style.atom_labels",
+                                "Show Atom Labels",
+                            ),
+                        )
+                        .changed()
+                    {
+                        actions.push(AppAction::ToggleAtomLabels);
+                    }
                     ui.separator();
-                    if ui.button("Reset Workbench Layout").clicked() {
+                    if ui
+                        .button(crate::frontend::shortcuts::menu_text(
+                            "view.reset_layout",
+                            "Reset Workbench Layout",
+                        ))
+                        .clicked()
+                    {
                         actions.push(AppAction::ResetWorkbenchLayout);
                         ui.close();
                     }
@@ -270,11 +359,9 @@ pub(crate) fn render_title_bar(
             // AFTER the window controls, so it lands to their LEFT — clear of
             // minimize/maximize/close. On macOS (no window controls here) it is
             // the right-most item. Sized to match the sidebar-toggle button.
-            let settings_hint = if cfg!(target_os = "macos") {
-                "Settings (Cmd+,)"
-            } else {
-                "Settings (Ctrl+,)"
-            };
+            let settings_hint = crate::frontend::shortcuts::label_for("app.settings")
+                .map(|shortcut| format!("Settings ({shortcut})"))
+                .unwrap_or_else(|| "Settings".to_string());
             let settings_hint = match &state.ui.available_update {
                 Some(update) => {
                     format!("{settings_hint} — update available: {}", update.version)

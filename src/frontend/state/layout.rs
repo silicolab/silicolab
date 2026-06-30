@@ -42,18 +42,8 @@ pub enum MonitorSource {
 pub struct LayoutState {
     pub active_primary_view: PrimaryView,
     pub show_primary_sidebar: bool,
-    /// Whether the Settings modal dialog is open. Transient window chrome (it is
-    /// never persisted), so — like the sidebar-visibility flags above — it is
-    /// flipped directly by the UI entry points rather than through an AppAction:
-    /// no persisted state changes when it toggles, so there is nothing for the
-    /// dispatcher to mediate.
     pub settings_open: bool,
-    /// Whether the custom About window is open. Transient chrome like
-    /// `settings_open`: flipped directly by the menu entry points, never
-    /// persisted, so the dispatcher does not mediate it.
     pub about_open: bool,
-    /// Whether the system-monitor detail popover is open. Transient chrome like
-    /// `settings_open`: flipped directly by clicking the compact monitor widget.
     pub monitor_popover_open: bool,
     /// Screen rect of the compact monitor widget (sidebar footer, or status-bar
     /// fallback when the sidebar is hidden), captured each frame so the popover

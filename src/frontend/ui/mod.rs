@@ -88,14 +88,6 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
         render_window_resize_handles(&ctx);
     }
 
-    // Ctrl+, (Cmd+, on macOS) toggles the Settings modal — the platform
-    // convention for Preferences. `consume_key` so the keystroke doesn't also
-    // reach a focused text field. Transient chrome, flipped directly (see
-    // `LayoutState::settings_open`).
-    if ctx.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::Comma)) {
-        state.ui.layout.settings_open = !state.ui.layout.settings_open;
-    }
-
     // Frame-consistent snapshot of the sidebar visibility: the toggle button,
     // View menu, and settings checkbox can all flip `show_primary_sidebar`
     // mid-frame, and the corner radii, panel order, and the title bar's

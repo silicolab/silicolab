@@ -402,6 +402,8 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::ResetSidebar => reset_sidebar(state, ctx),
         AppAction::ResizeArea(area, delta) => resize_area(state, area, delta, ctx),
         AppAction::ResetArea(area) => reset_area(state, area, ctx),
+        AppAction::TogglePrimarySidebar => toggle_primary_sidebar(state, ctx),
+        AppAction::ToggleAtomLabels => toggle_atom_labels(state),
         AppAction::MoveDockTab { tab, to, index } => move_dock_tab(state, tab, to, index, ctx),
         AppAction::ToggleDockArea(area) => toggle_dock_area(state, area, ctx),
         AppAction::ResetWorkbenchLayout => reset_workbench_layout(state),
@@ -429,6 +431,10 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
 /// is saved promptly.
 const AUTOSAVE_DEBOUNCE_SECS: f64 = 0.5;
 
+fn toggle_atom_labels(state: &mut AppState) {
+    state.ui.viewport.show_atom_labels = !state.ui.viewport.show_atom_labels;
+}
+
 pub(crate) fn run_console_command(state: &mut AppState, command: &str) {
     let prompt = format!("sls> {command}");
     state.output_log.push(prompt);
@@ -440,27 +446,5 @@ pub(crate) fn run_console_command(state: &mut AppState, command: &str) {
             }
         }
         Err(error) => state.set_message(format!("command failed: {error}")),
-    }
-}
-
-pub fn handle_history_shortcuts(state: &mut AppState, ctx: &egui::Context) {
-    if !state.history_navigation_enabled() || ctx.egui_wants_keyboard_input() {
-        return;
-    }
-
-    let (undo_pressed, redo_pressed) = ctx.input(|input| {
-        let command = input.modifiers.command || input.modifiers.ctrl;
-        (
-            command && input.key_pressed(egui::Key::Z) && !input.modifiers.shift,
-            command
-                && (input.key_pressed(egui::Key::Y)
-                    || (input.modifiers.shift && input.key_pressed(egui::Key::Z))),
-        )
-    });
-
-    if undo_pressed {
-        dispatch(state, AppAction::Undo, ctx);
-    } else if redo_pressed {
-        dispatch(state, AppAction::Redo, ctx);
     }
 }
