@@ -423,6 +423,8 @@ pub enum AppAction {
     ResizeArea(crate::frontend::state::DockArea, f32),
     /// Reset a dock area to its default size.
     ResetArea(crate::frontend::state::DockArea),
+    TogglePrimarySidebar,
+    ToggleAtomLabels,
     /// Move a dock tab into `to` at `index` (`None` appends) — the single
     /// drag-and-drop handler for both reorder-within-area and move-across-area.
     MoveDockTab {

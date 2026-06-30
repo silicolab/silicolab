@@ -172,30 +172,35 @@ impl MacMenu {
         let file_menu = Submenu::new("File", true);
         file_menu
             .append_items(&[
-                &MenuItem::with_id("file.new_project", "Create a new project…", true, None),
+                &MenuItem::with_id(
+                    "file.new_project",
+                    "Create a new project…",
+                    true,
+                    accel(Modifiers::META, Code::KeyN),
+                ),
                 &MenuItem::with_id(
                     "file.open_project",
                     "Open Project…",
                     true,
-                    accel(Modifiers::META | Modifiers::SHIFT, Code::KeyO),
+                    accel(Modifiers::META, Code::KeyO),
                 ),
-                &MenuItem::with_id("file.save_project", "Save Project", true, None),
+                &MenuItem::with_id(
+                    "file.save_project",
+                    "Save Project",
+                    true,
+                    accel(Modifiers::META | Modifiers::ALT, Code::KeyS),
+                ),
                 &close_project,
                 &PredefinedMenuItem::separator(),
                 &recent_submenu,
                 &PredefinedMenuItem::separator(),
-                &MenuItem::with_id(
-                    "file.new_entry",
-                    "New Empty Entry",
-                    true,
-                    accel(Modifiers::META, Code::KeyN),
-                ),
+                &MenuItem::with_id("file.new_entry", "New Empty Entry", true, None),
                 &MenuItem::with_id("file.sketch_molecule", "Sketch Molecule…", true, None),
                 &MenuItem::with_id(
                     "file.open_file",
                     "Open File…",
                     true,
-                    accel(Modifiers::META, Code::KeyO),
+                    accel(Modifiers::META | Modifiers::SHIFT, Code::KeyO),
                 ),
                 &MenuItem::with_id("file.fetch_pdb", "Fetch from PDB ID…", true, None),
                 &PredefinedMenuItem::separator(),
@@ -441,7 +446,7 @@ impl MacMenu {
         // Disable Undo/Redo while a text field is focused so their Cmd+Z /
         // Cmd+Shift+Z key equivalents fall through to egui's own text editing
         // (a disabled NSMenuItem does not consume its key equivalent). Mirrors
-        // the `egui_wants_keyboard_input` guard in `dispatcher::handle_history_shortcuts`.
+        // the `egui_wants_keyboard_input` guard in the shortcut registry.
         let typing = ctx.egui_wants_keyboard_input();
         let can_undo = state.can_undo() && !typing;
         if can_undo != self.cache.can_undo {
