@@ -67,6 +67,11 @@ pub(crate) fn resize_area(state: &mut AppState, area: DockArea, delta: f32, ctx:
     mark_dirty(state, ctx);
 }
 
+pub(crate) fn toggle_primary_sidebar(state: &mut AppState, ctx: &egui::Context) {
+    state.ui.layout.show_primary_sidebar = !state.ui.layout.show_primary_sidebar;
+    mark_dirty(state, ctx);
+}
+
 pub(crate) fn reset_area(state: &mut AppState, area: DockArea, ctx: &egui::Context) {
     match area {
         DockArea::Right => {

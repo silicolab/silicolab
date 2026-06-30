@@ -10,7 +10,7 @@ use crate::{
         project::{WorkspaceSession, open_project, remember_opened_project},
     },
     domain::Structure,
-    frontend::{actions::AppAction, dispatcher, state::AppState, ui},
+    frontend::{actions::AppAction, dispatcher, shortcuts, state::AppState, ui},
 };
 
 pub fn run(structure: Structure, source_path: Option<PathBuf>) -> Result<()> {
@@ -457,7 +457,7 @@ impl eframe::App for SilicoLabApp {
         }
         self.open_dropped_files(&ctx);
         dispatcher::poll_jobs(&mut self.state, &ctx);
-        dispatcher::handle_history_shortcuts(&mut self.state, &ctx);
+        shortcuts::handle_frame(&mut self.state, &ctx);
 
         // Resolve once per frame whether the frosted glass is revealed; read by
         // the chrome fills below and by `clear_color`. Re-evaluated every frame
@@ -487,8 +487,7 @@ impl eframe::App for SilicoLabApp {
                         *open = !*open;
                     }
                     MenuCommand::TogglePrimarySidebar => {
-                        let flag = &mut self.state.ui.layout.show_primary_sidebar;
-                        *flag = !*flag;
+                        actions.push(AppAction::TogglePrimarySidebar)
                     }
                     MenuCommand::ToggleSecondarySidebar => actions.push(AppAction::ToggleDockArea(
                         crate::frontend::state::DockArea::Right,
@@ -496,10 +495,7 @@ impl eframe::App for SilicoLabApp {
                     MenuCommand::TogglePanel => actions.push(AppAction::ToggleDockArea(
                         crate::frontend::state::DockArea::Bottom,
                     )),
-                    MenuCommand::ToggleAtomLabels => {
-                        let flag = &mut self.state.ui.viewport.show_atom_labels;
-                        *flag = !*flag;
-                    }
+                    MenuCommand::ToggleAtomLabels => actions.push(AppAction::ToggleAtomLabels),
                     MenuCommand::ResetWorkbenchLayout => {
                         actions.push(AppAction::ResetWorkbenchLayout)
                     }

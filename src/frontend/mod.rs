@@ -25,6 +25,7 @@ mod remote_jobs;
 mod reticular_panel;
 mod selection;
 mod services;
+mod shortcuts;
 mod sketcher;
 mod state;
 mod structure_editor;
