@@ -135,6 +135,34 @@ pub enum ComputeTarget {
     Remote(String),
 }
 
+/// Where newly opened task panels appear by default. The user can still drag a
+/// task tab between dock areas after it opens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum TaskPanelPlacement {
+    #[default]
+    Floating,
+    RightSidebar,
+    BottomPanel,
+}
+
+impl TaskPanelPlacement {
+    pub const fn all() -> [TaskPanelPlacement; 3] {
+        [
+            TaskPanelPlacement::Floating,
+            TaskPanelPlacement::RightSidebar,
+            TaskPanelPlacement::BottomPanel,
+        ]
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            TaskPanelPlacement::Floating => "Floating window",
+            TaskPanelPlacement::RightSidebar => "Right sidebar",
+            TaskPanelPlacement::BottomPanel => "Bottom panel",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub default_project_dir: PathBuf,
@@ -155,6 +183,10 @@ pub struct AppConfig {
     /// it at launch. Defaults to [`ComputeTarget::Local`].
     #[serde(default)]
     pub default_compute_target: ComputeTarget,
+    /// App-wide default host for newly opened task panels. Per-panel task tabs
+    /// remain session state and can still be dragged between hosts after opening.
+    #[serde(default)]
+    pub default_task_panel_placement: TaskPanelPlacement,
     /// Light/dark preference. Defaults to following the system.
     #[serde(default)]
     pub theme: ThemeMode,
@@ -338,6 +370,7 @@ impl Default for AppConfig {
             engine_overrides: HashMap::default(),
             remote_hosts: HashMap::default(),
             default_compute_target: ComputeTarget::default(),
+            default_task_panel_placement: TaskPanelPlacement::default(),
             theme: ThemeMode::default(),
             color_scheme: ColorScheme::default(),
             glass: default_glass(),

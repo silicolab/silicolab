@@ -1,5 +1,12 @@
 use super::{AppState, DockArea, DockModel, DockTab, MdRunPrompt, MdStageEdit, StaticView};
+use crate::backend::config::TaskPanelPlacement;
 use crate::workflows::molecular_dynamics::{MdStage, StageLength};
+
+fn has_floating_task(dock: &DockModel, task_run_id: u64) -> bool {
+    dock.floating_tasks
+        .iter()
+        .any(|panel| panel.task_run_id == task_run_id)
+}
 
 /// The config-side literal default (`DockLayoutConfig::default`, in the
 /// backend layer) must stay in lock-step with `DockModel::default`, since the
@@ -158,23 +165,41 @@ fn remove_tab_repoints_active_to_last() {
 }
 
 #[test]
-fn add_task_is_sticky_to_the_area_holding_tasks() {
+fn add_task_defaults_to_floating_window() {
     let mut dock = DockModel::default();
-    // First task homes to the right sidebar.
-    dock.add_task(1);
+    dock.add_task(1, TaskPanelPlacement::Floating);
+
+    assert!(has_floating_task(&dock, 1));
+    assert_eq!(dock.area_of(DockTab::Task(1)), None);
+}
+
+#[test]
+fn add_task_honors_docked_default_location() {
+    let mut dock = DockModel::default();
+    dock.add_task(1, TaskPanelPlacement::BottomPanel);
+
+    assert_eq!(dock.area_of(DockTab::Task(1)), Some(DockArea::Bottom));
+    assert!(!has_floating_task(&dock, 1));
+}
+
+#[test]
+fn moving_floating_task_to_dock_removes_floating_copy() {
+    let mut dock = DockModel::default();
+    dock.add_task(1, TaskPanelPlacement::Floating);
+
+    dock.move_tab(DockTab::Task(1), DockArea::Right, None);
+
     assert_eq!(dock.area_of(DockTab::Task(1)), Some(DockArea::Right));
-    // Drag it to the bottom; a second task now homes alongside it (sticky).
-    dock.move_tab(DockTab::Task(1), DockArea::Bottom, None);
-    dock.add_task(2);
-    assert_eq!(dock.area_of(DockTab::Task(2)), Some(DockArea::Bottom));
+    assert!(!has_floating_task(&dock, 1));
 }
 
 #[test]
 fn clear_task_tabs_keeps_fixed_views() {
     let mut dock = DockModel::default();
-    dock.add_task(7); // -> right, active
+    dock.add_task(7, TaskPanelPlacement::Floating);
     dock.clear_task_tabs();
     assert!(dock.area_of(DockTab::Task(7)).is_none());
+    assert!(!has_floating_task(&dock, 7));
     // The fixed Assistant view remains and is the right area's active tab again.
     assert!(
         dock.right
