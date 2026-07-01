@@ -4,7 +4,7 @@ use super::panel_bodies::{
 };
 use super::secondary_sidebar::*;
 use super::*;
-use crate::backend::tasks::TaskPanelKind;
+use crate::backend::tasks::{TaskPanelKind, TaskRun};
 use crate::frontend::state::{DockArea, DockModel, DockTab, StaticView};
 use crate::frontend::theme::Palette;
 
@@ -258,6 +258,84 @@ fn collapsed_area_label(state: &AppState, area: DockArea) -> String {
             .unwrap_or_else(|| "Panel".to_string()),
         None => "Panel".to_string(),
     }
+}
+
+/// Render task panels that are not currently docked in the bottom panel or the
+/// right sidebar. They stay session-only, like docked task tabs, but default to
+/// their own movable window so opening a builder does not consume the right
+/// sidebar unless the user drags it there.
+pub(super) fn render_floating_task_windows(
+    state: &mut AppState,
+    ctx: &egui::Context,
+    actions: &mut Vec<AppAction>,
+) {
+    let floating = state.ui.layout.dock.floating_tasks.clone();
+    let mut stale_tasks = Vec::new();
+
+    for (index, panel) in floating.into_iter().enumerate() {
+        let task_run_id = panel.task_run_id;
+        let Some(task) = state.tasks.task_run(task_run_id).cloned() else {
+            stale_tasks.push(task_run_id);
+            continue;
+        };
+
+        let mut open = true;
+        egui::Window::new(task.title.clone())
+            .id(Id::new(("floating_task_window", task_run_id)))
+            .default_pos(default_floating_task_pos(ctx, index))
+            .default_size(egui::vec2(380.0, 560.0))
+            .min_width(320.0)
+            .min_height(260.0)
+            .resizable(true)
+            .collapsible(false)
+            .order(Order::Foreground)
+            .open(&mut open)
+            .show(ctx, |ui| {
+                render_floating_task_handle(ui, &task, actions);
+                weak_panel_hairline(ui, 10);
+                docked_sidebar_scroll_area()
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        render_task_body(state, ui, task_run_id, actions);
+                    });
+            });
+
+        if !open {
+            actions.push(AppAction::CloseTaskPanel(task_run_id));
+        }
+    }
+
+    for task_run_id in stale_tasks {
+        state.ui.layout.dock.remove_task(task_run_id);
+    }
+}
+
+fn default_floating_task_pos(ctx: &egui::Context, index: usize) -> egui::Pos2 {
+    let rect = ctx.content_rect();
+    let offset = (index.min(5) as f32) * 26.0;
+    rect.center() - egui::vec2(190.0 - offset, 280.0 - offset)
+}
+
+fn render_floating_task_handle(ui: &mut egui::Ui, task: &TaskRun, actions: &mut Vec<AppAction>) {
+    let pal = crate::frontend::theme::palette(ui);
+    ui.horizontal(|ui| {
+        let tab = DockTab::Task(task.id);
+        let id = Id::new(("floating_task_handle", task.id));
+        let info = TabInfo {
+            tab,
+            label: task.title.clone(),
+            closeable: false,
+            selected: true,
+        };
+        let dragged = drag_source(ui, id, DraggedTab { tab }, |ui| {
+            render_tab_inner(ui, id, &info, &pal)
+        });
+        let (chip, _) = dragged.inner;
+        if chip.clicked() {
+            actions.push(AppAction::ActivateTaskPanel(task.id));
+        }
+        chip.on_hover_text("Drag to dock this task panel");
+    });
 }
 
 /// The floating-preview half of a dock-tab drag, standing in for the painting

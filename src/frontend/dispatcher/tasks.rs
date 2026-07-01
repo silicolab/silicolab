@@ -11,9 +11,13 @@ pub(crate) fn create_task_from_template(state: &mut AppState, template_id: &'sta
     state.ui.layout.show_primary_sidebar = true;
     if controller.requires_panel() {
         state.tasks.open_panel(task_run_id);
-        // Dock the panel as a tab in its home area (revealing the area). Task tabs
-        // are session state, so this placement is never persisted.
-        state.ui.layout.dock.add_task(task_run_id);
+        // Task panel placement is session state; only the default preference is
+        // persisted.
+        state
+            .ui
+            .layout
+            .dock
+            .add_task(task_run_id, state.config.default_task_panel_placement);
     }
     state.set_message(format!(
         "Opened task #{}: {}",
@@ -144,7 +148,11 @@ pub(crate) fn record_task_result_entry(state: &mut AppState, task_run_id: u64, e
 
 pub(crate) fn open_task_panel(state: &mut AppState, task_run_id: u64) {
     state.tasks.open_panel(task_run_id);
-    state.ui.layout.dock.add_task(task_run_id);
+    state
+        .ui
+        .layout
+        .dock
+        .add_task(task_run_id, state.config.default_task_panel_placement);
     ensure_panel_form(state, task_run_id);
 }
 

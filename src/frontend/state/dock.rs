@@ -1,6 +1,6 @@
 use super::*;
 
-use crate::backend::config::{DockAreaLayout, DockLayoutConfig};
+use crate::backend::config::{DockAreaLayout, DockLayoutConfig, TaskPanelPlacement};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PrimaryView {
@@ -143,6 +143,14 @@ pub struct DockAreaState {
     pub collapsed: bool,
 }
 
+/// Session-only placement for a task panel shown as an in-window floating
+/// window. The window's live position and size are owned by egui's window memory;
+/// this model only records which task panels are currently floating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FloatingTaskPanel {
+    pub task_run_id: u64,
+}
+
 /// Placement and sizing of the two dock areas. The single source of truth for
 /// which view/panel is shown where; the renderer and the dispatcher both drive
 /// it through the helpers below (none of which touch `egui::Context`). The fixed
@@ -152,6 +160,7 @@ pub struct DockAreaState {
 pub struct DockModel {
     pub bottom: DockAreaState,
     pub right: DockAreaState,
+    pub floating_tasks: Vec<FloatingTaskPanel>,
     pub right_width: f32,
     pub bottom_height: f32,
 }
@@ -178,6 +187,7 @@ impl Default for DockModel {
                 active: Some(DockTab::Static(StaticView::Assistant)),
                 collapsed: false,
             },
+            floating_tasks: Vec::new(),
             right_width: SIDEBAR_DEFAULT_WIDTH_SECONDARY,
             bottom_height: PANEL_DEFAULT_HEIGHT,
         }
@@ -226,6 +236,10 @@ impl DockModel {
     /// tab to the last remaining one when the removed tab was active (mirrors
     /// `TaskManager::close_panel`). Returns the area it left.
     pub fn remove_tab(&mut self, tab: DockTab) -> Option<DockArea> {
+        if let DockTab::Task(task_run_id) = tab {
+            self.floating_tasks
+                .retain(|panel| panel.task_run_id != task_run_id);
+        }
         let area = self.area_of(tab)?;
         let state = self.area_mut(area);
         state.tabs.retain(|candidate| *candidate != tab);
@@ -285,11 +299,31 @@ impl DockModel {
         self.activate(area, tab);
     }
 
-    /// Add a task panel tab to its home area (the area already holding a task tab,
-    /// else the right sidebar), make it active, and reveal the area.
-    pub fn add_task(&mut self, task_run_id: u64) {
-        let home = self.task_home_area();
-        self.insert_tab(home, DockTab::Task(task_run_id), None);
+    /// Add a task panel to the requested default host, unless it is already open.
+    /// Existing docked panels stay docked; existing floating panels are brought
+    /// to the front by rendering them last.
+    pub fn add_task(&mut self, task_run_id: u64, placement: TaskPanelPlacement) {
+        let tab = DockTab::Task(task_run_id);
+        if let Some(area) = self.area_of(tab) {
+            self.activate(area, tab);
+            return;
+        }
+        if let Some(index) = self
+            .floating_tasks
+            .iter()
+            .position(|panel| panel.task_run_id == task_run_id)
+        {
+            let panel = self.floating_tasks.remove(index);
+            self.floating_tasks.push(panel);
+            return;
+        }
+        match placement {
+            TaskPanelPlacement::Floating => {
+                self.floating_tasks.push(FloatingTaskPanel { task_run_id });
+            }
+            TaskPanelPlacement::RightSidebar => self.insert_tab(DockArea::Right, tab, None),
+            TaskPanelPlacement::BottomPanel => self.insert_tab(DockArea::Bottom, tab, None),
+        }
     }
 
     pub fn remove_task(&mut self, task_run_id: u64) {
@@ -298,6 +332,7 @@ impl DockModel {
 
     /// Drop every task tab (keeping the fixed views), e.g. on project close.
     pub fn clear_task_tabs(&mut self) {
+        self.floating_tasks.clear();
         for area in DockArea::all() {
             let state = self.area_mut(area);
             state.tabs.retain(|tab| matches!(tab, DockTab::Static(_)));
@@ -308,21 +343,6 @@ impl DockModel {
                 state.active = state.tabs.last().copied();
             }
         }
-    }
-
-    /// Where a freshly opened task panel docks: the area already hosting a task
-    /// tab (so a run of tasks stays grouped after the user moves one), else the
-    /// right sidebar.
-    fn task_home_area(&self) -> DockArea {
-        DockArea::all()
-            .into_iter()
-            .find(|&area| {
-                self.area(area)
-                    .tabs
-                    .iter()
-                    .any(|tab| matches!(tab, DockTab::Task(_)))
-            })
-            .unwrap_or(DockArea::Right)
     }
 
     /// Serialize the fixed-view placement (task tabs are excluded structurally).
@@ -342,6 +362,7 @@ impl DockModel {
         let mut model = Self {
             bottom: area_from_config(&config.bottom),
             right: area_from_config(&config.right),
+            floating_tasks: Vec::new(),
             right_width: config.right_width,
             bottom_height: config.bottom_height,
         };

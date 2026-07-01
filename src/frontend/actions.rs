@@ -275,6 +275,9 @@ pub enum AppAction {
     /// panel can still override it per run). Written to the settings file by the
     /// dispatcher.
     SetDefaultComputeTarget(crate::backend::config::ComputeTarget),
+    /// Set where newly opened task panels appear by default. Users can still drag
+    /// an open task panel into another dock host.
+    SetDefaultTaskPanelPlacement(crate::backend::config::TaskPanelPlacement),
     /// Fetch the static hardware inventory (CPU/memory/GPU) of the host with this
     /// id over SSH, for the Hardware ▸ Remote settings panel (worker thread).
     FetchRemoteHardware(String),

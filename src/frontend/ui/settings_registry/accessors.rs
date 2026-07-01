@@ -7,7 +7,7 @@
 //! and the action that restores that default.
 
 use crate::{
-    backend::config::{AppConfig, ColorScheme, MonitorRefresh, ThemeMode},
+    backend::config::{AppConfig, ColorScheme, MonitorRefresh, TaskPanelPlacement, ThemeMode},
     frontend::{actions::AppAction, state::AppState},
 };
 
@@ -24,6 +24,15 @@ pub(crate) const SCHEME_OPTIONS: [&str; 5] = {
         schemes[2].label(),
         schemes[3].label(),
         schemes[4].label(),
+    ]
+};
+
+pub(crate) const TASK_PANEL_PLACEMENT_OPTIONS: [&str; 3] = {
+    let placements = TaskPanelPlacement::all();
+    [
+        placements[0].label(),
+        placements[1].label(),
+        placements[2].label(),
     ]
 };
 
@@ -47,6 +56,22 @@ pub(crate) fn scheme_read(state: &AppState) -> usize {
 
 pub(crate) fn scheme_change(index: usize) -> AppAction {
     AppAction::SetColorScheme(ColorScheme::all().get(index).copied().unwrap_or_default())
+}
+
+pub(crate) fn task_panel_placement_read(state: &AppState) -> usize {
+    TaskPanelPlacement::all()
+        .iter()
+        .position(|placement| *placement == state.config.default_task_panel_placement)
+        .unwrap_or(0)
+}
+
+pub(crate) fn task_panel_placement_change(index: usize) -> AppAction {
+    AppAction::SetDefaultTaskPanelPlacement(
+        TaskPanelPlacement::all()
+            .get(index)
+            .copied()
+            .unwrap_or_default(),
+    )
 }
 
 pub(crate) fn glass_read(state: &AppState) -> bool {
@@ -83,6 +108,14 @@ pub(crate) fn scheme_is_default(state: &AppState) -> bool {
 
 pub(crate) fn scheme_reset() -> AppAction {
     AppAction::SetColorScheme(AppConfig::default().color_scheme)
+}
+
+pub(crate) fn task_panel_placement_is_default(state: &AppState) -> bool {
+    state.config.default_task_panel_placement == AppConfig::default().default_task_panel_placement
+}
+
+pub(crate) fn task_panel_placement_reset() -> AppAction {
+    AppAction::SetDefaultTaskPanelPlacement(AppConfig::default().default_task_panel_placement)
 }
 
 pub(crate) fn glass_is_default(state: &AppState) -> bool {
