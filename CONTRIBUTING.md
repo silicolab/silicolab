@@ -54,14 +54,15 @@ now, and hold the integration code until its real-run test exists.
 
 ### Pre-commit gates
 
-All of the following must pass before you commit. They mirror the CI merge gate,
-which runs with `RUSTFLAGS=-D warnings` across the whole workspace:
+Run the local PR check before you commit:
 
-1. `cargo fmt --all --check`
-2. `cargo clippy --workspace --all-targets --all-features`
-3. `cargo test --workspace --all-features`
+```powershell
+cargo pr-check
+```
 
-Set `RUSTFLAGS=-D warnings` so clippy and test fail on warnings exactly as CI does.
+The command mirrors CI's local Rust gates, including warning-as-error builds. It
+does not replace CI's cross-OS matrix or the ignored machine-specific acceptance
+tests.
 
 ## Code conventions
 

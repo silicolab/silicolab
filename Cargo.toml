@@ -1,5 +1,5 @@
 [workspace]
-members = ["compute-core", "silicolab-compute"]
+members = ["compute-core", "silicolab-compute", "xtask"]
 
 # Single source of truth for the version shared across the GUI, the headless
 # worker, and `compute-core`. The deploy version pin and release tag require all
