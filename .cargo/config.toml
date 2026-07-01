@@ -1,0 +1,3 @@
+[alias]
+pr-check = "run -p xtask -- pr-check"
+xtask = "run -p xtask --"
