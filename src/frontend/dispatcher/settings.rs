@@ -40,6 +40,18 @@ pub(crate) fn set_default_compute_target(
     }
 }
 
+pub(crate) fn set_default_task_panel_placement(
+    state: &mut AppState,
+    placement: crate::backend::config::TaskPanelPlacement,
+) {
+    state.config.default_task_panel_placement = placement;
+    if let Err(error) = save_config(&state.config) {
+        state.set_message(format!(
+            "Could not save default task panel location: {error}"
+        ));
+    }
+}
+
 /// Apply one Representation default edit and persist. These defaults only seed
 /// the appearance of *future* new entries/surfaces, so there is no live
 /// re-render here — the change lands the next time a structure is built/loaded

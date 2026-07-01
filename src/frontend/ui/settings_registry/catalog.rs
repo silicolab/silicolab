@@ -46,6 +46,27 @@ pub fn registry() -> Vec<SettingDescriptor> {
             reset: Some(scheme_reset),
             subgroup: None,
         },
+        SettingDescriptor {
+            id: "workbench.default_task_panel_location",
+            category: SettingCategory::General,
+            group: "Workbench",
+            title: "Default task panel location",
+            description: "Where newly opened task panels appear; open panels can still be dragged to another dock host.",
+            keywords: &[
+                "task", "panel", "floating", "window", "sidebar", "dock", "bottom", "default",
+                "location",
+            ],
+            control: Control::Choice {
+                read: task_panel_placement_read,
+                options: &TASK_PANEL_PLACEMENT_OPTIONS,
+                on_change: task_panel_placement_change,
+            },
+            enabled: None,
+            indent: false,
+            is_default: Some(task_panel_placement_is_default),
+            reset: Some(task_panel_placement_reset),
+            subgroup: None,
+        },
     ];
 
     // Frosted-glass settings only exist where the platform supports the material

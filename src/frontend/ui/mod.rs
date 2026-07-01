@@ -33,7 +33,7 @@ mod settings_representation;
 mod style_panel;
 mod workspace;
 
-use dock::{drag_in_flight, render_dock_reveal_targets};
+use dock::{drag_in_flight, render_dock_reveal_targets, render_floating_task_windows};
 use notification::render_notification;
 use panel_bodies::render_status_bar;
 use style_panel::render_style_panel;
@@ -421,6 +421,8 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
             }
         }
     }
+
+    render_floating_task_windows(state, &ctx, actions);
 
     // While a tab is being dragged, offer inset drop targets along the workspace
     // edges so a hidden/empty dock area can receive the tab (and reveal itself).
