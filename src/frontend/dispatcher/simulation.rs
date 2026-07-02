@@ -151,6 +151,14 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
 
 pub(crate) fn cancel_pending_md_run_request(state: &mut AppState) {
     bind_active_panel_task(state, TaskPanelKind::MdRunPrompt);
+    if state.jobs.engine_running() {
+        let _ = crate::frontend::jobs::cancel_controlled_job(
+            state,
+            &crate::frontend::jobs::JobControlId::Local(
+                crate::frontend::jobs::LocalJobSlot::Engine,
+            ),
+        );
+    }
     state.ui.pending_md_run = None;
     state.set_message("MD run canceled".to_string());
     complete_active_task(state, TaskKind::RunMd, TaskStatus::Failed);

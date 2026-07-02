@@ -157,6 +157,13 @@ pub(crate) enum Command {
         args: Vec<String>,
     },
 
+    /// List or cancel background jobs.
+    #[command(visible_alias = "job")]
+    Jobs {
+        #[command(subcommand)]
+        action: Option<JobsAction>,
+    },
+
     /// Dock a ligand into a receptor (Vina).
     Dock(DockArgs),
 
@@ -424,6 +431,14 @@ pub(crate) enum SaveTarget {
     View { path: PathBuf },
 }
 
+#[derive(Debug, Subcommand)]
+pub(crate) enum JobsAction {
+    /// List running and tracked jobs.
+    Status,
+    /// Request cancellation for a job id shown by `jobs status`.
+    Cancel { id: String },
+}
+
 /// How consequential a command is — the input to the assistant's approval gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum RiskLevel {
@@ -472,16 +487,17 @@ impl Command {
             | Command::Show(_)
             | Command::Representation(_)
             | Command::Hydrogen { .. }
+            | Command::Jobs {
+                action: None | Some(JobsAction::Status),
+            }
             | Command::Help => ReadOnly,
             // `qm recommend` only prints the level-of-theory table (read-only);
             // every other `qm` sub-verb launches a calculation.
-            Command::Qm { args } => {
-                if args.first().map(String::as_str) == Some("recommend") {
-                    ReadOnly
-                } else {
-                    Expensive
-                }
-            }
+            Command::Qm { args } => match args.first().map(String::as_str) {
+                Some("recommend" | "status") => ReadOnly,
+                Some("cancel") => Destructive,
+                _ => Expensive,
+            },
             Command::Glycan(_)
             | Command::Glycosylate(_)
             | Command::Phosphorylate(_)
@@ -496,7 +512,11 @@ impl Command {
             | Command::Score(_) => Expensive,
             // `Source` runs a script's lines straight through the console with no
             // per-line gate, so it can `delete` — it must clear the floor itself.
-            Command::Delete { .. } | Command::Source { .. } => Destructive,
+            Command::Delete { .. }
+            | Command::Source { .. }
+            | Command::Jobs {
+                action: Some(JobsAction::Cancel { .. }),
+            } => Destructive,
         }
     }
 
@@ -534,6 +554,10 @@ impl Command {
             Command::Md { args } => md_commands::md_command(state, &args),
             Command::Disorder { args } => disorder_commands::disorder_command(state, &args),
             Command::Qm { args } => qm_commands::qm_command(state, &args),
+            Command::Jobs { action } => match action.unwrap_or(JobsAction::Status) {
+                JobsAction::Status => Ok(crate::frontend::jobs::format_jobs_status(state)),
+                JobsAction::Cancel { id } => crate::frontend::jobs::cancel_job_by_token(state, &id),
+            },
             Command::Dock(args) => docking_commands::dock_command(state, args),
             Command::Score(args) => docking_commands::score_command(state, args),
             Command::Glycan(args) => glycan_commands::glycan_command(state, args),

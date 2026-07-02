@@ -110,6 +110,7 @@ pub struct Running {
     updates: Receiver<JobUpdate>,
 }
 
+#[derive(Clone)]
 enum CancelHandle {
     /// The cooperative flag the in-process engine polls.
     Flag(Arc<AtomicBool>),
@@ -117,13 +118,33 @@ enum CancelHandle {
     Child(Arc<Mutex<Child>>),
 }
 
-impl Running {
-    pub fn updates(&self) -> &Receiver<JobUpdate> {
-        &self.updates
+#[derive(Clone)]
+pub struct JobCancelHandle {
+    inner: CancelHandle,
+}
+
+impl JobCancelHandle {
+    pub fn from_flag(flag: Arc<AtomicBool>) -> Self {
+        Self {
+            inner: CancelHandle::Flag(flag),
+        }
     }
 
     pub fn cancel(&self) {
-        match &self.cancel {
+        self.inner.cancel();
+    }
+
+    pub fn flag(&self) -> Option<Arc<AtomicBool>> {
+        match &self.inner {
+            CancelHandle::Flag(flag) => Some(Arc::clone(flag)),
+            CancelHandle::Child(_) => None,
+        }
+    }
+}
+
+impl CancelHandle {
+    fn cancel(&self) {
+        match self {
             CancelHandle::Flag(flag) => flag.store(true, Ordering::SeqCst),
             CancelHandle::Child(child) => {
                 if let Ok(mut child) = child.lock() {
@@ -132,16 +153,29 @@ impl Running {
             }
         }
     }
+}
+
+impl Running {
+    pub fn updates(&self) -> &Receiver<JobUpdate> {
+        &self.updates
+    }
+
+    pub fn cancel(&self) {
+        self.cancel.cancel();
+    }
+
+    pub fn cancel_handle(&self) -> JobCancelHandle {
+        JobCancelHandle {
+            inner: self.cancel.clone(),
+        }
+    }
 
     /// The cooperative cancel flag, when the job runs in-process. Lets a caller
     /// that already speaks the flag protocol (the engine-specific UI handles) share
     /// one cancel signal with the worker. `None` for a subprocess job, which
     /// cancels by kill instead.
     pub fn cancel_flag(&self) -> Option<Arc<AtomicBool>> {
-        match &self.cancel {
-            CancelHandle::Flag(flag) => Some(Arc::clone(flag)),
-            CancelHandle::Child(_) => None,
-        }
+        self.cancel_handle().flag()
     }
 }
 

@@ -284,6 +284,8 @@ pub enum AppAction {
     /// Opt-in refresh of every detached remote job: probe liveness and retrieve
     /// any finished outcome over SSH (off the UI thread). Never automatic.
     RefreshRemoteJobs,
+    /// Request cancellation for a job through the unified control plane.
+    CancelControlledJob(crate::frontend::jobs::JobControlId),
     /// Remove the remote scratch directory of the remote job with this `run_uuid`
     /// and drop its registry row.
     RemoveRemoteScratch(String),
@@ -319,8 +321,6 @@ pub enum AppAction {
     SetApprovalMode(crate::backend::config::ApprovalMode),
     /// Drop the queued (type-ahead) assistant follow-up message at this index.
     RemoveQueuedAgentInput(usize),
-    /// Cancel the running background (qm/md/dock) agent job with this id.
-    CancelAgentJob(u64),
     /// Switch the active assistant provider + model and persist.
     SwitchProviderModel {
         provider: String,

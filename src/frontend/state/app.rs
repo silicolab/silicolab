@@ -502,11 +502,16 @@ impl AppState {
     }
 
     pub fn cancel_transient_jobs(&mut self) {
-        self.jobs.cancel_optimization();
-        self.jobs.cancel_disorder();
-        self.jobs.cancel_qm();
-        self.jobs.cancel_docking();
-        self.jobs.cancel_engine();
+        use crate::frontend::jobs::{JobControlId, LocalJobSlot, cancel_controlled_job};
+        for slot in [
+            LocalJobSlot::Optimizer,
+            LocalJobSlot::Disorder,
+            LocalJobSlot::Qm,
+            LocalJobSlot::Docking,
+            LocalJobSlot::Engine,
+        ] {
+            let _ = cancel_controlled_job(self, &JobControlId::Local(slot));
+        }
     }
 
     pub fn reset_layout_keep_view(&mut self) {

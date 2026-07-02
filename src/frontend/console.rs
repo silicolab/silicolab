@@ -283,12 +283,21 @@ pub fn command_catalog() -> String {
         "                              (--product <entry> [--neb] | --scan-bond i,j --scan-from <v> --scan-to <v>)",
         "  qm recommend <task>         Print the recommended QM level of theory (general|barriers|nci|",
         "                              thermochemistry). Read-only, not gated — consult it before choosing.",
+        "  qm status                   Convenience view of running QM jobs.",
+        "  qm cancel                   Cancel the only running QM job; if multiple match, use jobs cancel <id>.",
         "  qm periodic [--functional pade] [--basis SZV-GTH] [--kmesh 2x2x2] [--cutoff 280] (needs a cell)",
         "  dock --receptor <entry> --ligand <entry> [--center x,y,z] [--size x,y,z] [--exhaustiveness 8] [--modes 9] [--seed 0]",
         "  score --receptor <entry> --ligand <entry> [--center x,y,z] [--size x,y,z]   (single-point pose score)",
         "",
+        "Task control:",
+        "  jobs                        List running and tracked local, assistant, and remote jobs.",
+        "  jobs status                 Same as `jobs`.",
+        "  jobs cancel <id>            Request cancellation through the unified job control plane.",
+        "",
         "Tips: render commands target the active entry unless given `--global`. Call `inspect` \
-         first when you are unsure what is loaded. Commands are risk-classified; whether one \
+         first when you are unsure what is loaded. Assistant task control should use \
+         `list_jobs` and `cancel_job`, not guessed cancel/stop/kill/abort console commands. \
+         Commands are risk-classified; whether one \
          needs the user's approval depends on their approval mode (Settings ▸ Assistant), and \
          destructive commands (`delete`, running a script) always ask.",
     ]

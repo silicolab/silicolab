@@ -72,7 +72,12 @@ pub(crate) fn start_pending_disorder(state: &mut AppState) {
 pub(crate) fn cancel_pending_disorder_request(state: &mut AppState) {
     bind_active_panel_task(state, TaskPanelKind::DisorderedSystemPrompt);
     if state.jobs.disorder_running() {
-        state.jobs.cancel_disorder();
+        let _ = crate::frontend::jobs::cancel_controlled_job(
+            state,
+            &crate::frontend::jobs::JobControlId::Local(
+                crate::frontend::jobs::LocalJobSlot::Disorder,
+            ),
+        );
     }
     state.ui.pending_disorder = None;
     state.set_message("Packing canceled".to_string());

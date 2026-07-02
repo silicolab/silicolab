@@ -393,8 +393,10 @@ pub enum TaskStatus {
     Ready,
     WaitingInput,
     Running,
+    Cancelling,
     Completed,
     Failed,
+    Cancelled,
 }
 
 impl TaskStatus {
@@ -403,8 +405,10 @@ impl TaskStatus {
             Self::Ready => "Ready",
             Self::WaitingInput => "Waiting Input",
             Self::Running => "Running",
+            Self::Cancelling => "Cancelling",
             Self::Completed => "Completed",
             Self::Failed => "Failed",
+            Self::Cancelled => "Cancelled",
         }
     }
 }
@@ -521,7 +525,10 @@ impl TaskManager {
     pub fn mark_status(&mut self, task_run_id: u64, status: TaskStatus) {
         if let Some(task) = self.task_run_mut(task_run_id) {
             task.status = status;
-            if matches!(status, TaskStatus::Completed | TaskStatus::Failed) {
+            if matches!(
+                status,
+                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
+            ) {
                 task.finished_at_ms = Some(now_unix_ms());
             }
         }
@@ -596,7 +603,7 @@ impl TaskManager {
     pub fn running_task_runs(&self) -> Vec<&TaskRun> {
         self.tasks
             .iter()
-            .filter(|task| task.status == TaskStatus::Running)
+            .filter(|task| matches!(task.status, TaskStatus::Running | TaskStatus::Cancelling))
             .collect()
     }
 }

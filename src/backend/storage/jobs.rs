@@ -28,6 +28,7 @@ pub enum RemoteJobStatus {
     Done,
     Failed,
     Lost,
+    Cancelled,
 }
 
 impl RemoteJobStatus {
@@ -38,6 +39,7 @@ impl RemoteJobStatus {
             RemoteJobStatus::Done => "done",
             RemoteJobStatus::Failed => "failed",
             RemoteJobStatus::Lost => "lost",
+            RemoteJobStatus::Cancelled => "cancelled",
         }
     }
 
@@ -48,6 +50,7 @@ impl RemoteJobStatus {
             "done" => RemoteJobStatus::Done,
             "failed" => RemoteJobStatus::Failed,
             "lost" => RemoteJobStatus::Lost,
+            "cancelled" => RemoteJobStatus::Cancelled,
             _ => return None,
         })
     }
@@ -55,7 +58,10 @@ impl RemoteJobStatus {
     pub fn is_terminal(self) -> bool {
         matches!(
             self,
-            RemoteJobStatus::Done | RemoteJobStatus::Failed | RemoteJobStatus::Lost
+            RemoteJobStatus::Done
+                | RemoteJobStatus::Failed
+                | RemoteJobStatus::Lost
+                | RemoteJobStatus::Cancelled
         )
     }
 }
@@ -363,6 +369,7 @@ mod tests {
             RemoteJobStatus::Done,
             RemoteJobStatus::Failed,
             RemoteJobStatus::Lost,
+            RemoteJobStatus::Cancelled,
         ] {
             assert_eq!(RemoteJobStatus::from_token(status.token()), Some(status));
         }

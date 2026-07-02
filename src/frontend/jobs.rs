@@ -1,4 +1,5 @@
 mod agent;
+mod control;
 mod disorder;
 mod docking;
 mod engine;
@@ -10,6 +11,7 @@ mod remote;
 mod update;
 
 pub(crate) use agent::*;
+pub(crate) use control::*;
 pub(crate) use disorder::*;
 pub(crate) use docking::*;
 pub(crate) use engine::*;

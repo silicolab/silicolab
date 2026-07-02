@@ -72,7 +72,10 @@ pub fn gated_pending(state: &AppState) -> Vec<ToolCall> {
 /// to see the workspace to propose a grounded plan.
 fn propose_in_plan_mode(state: &mut AppState, ctx: &egui::Context) {
     while let Some(call) = state.ui.agent.pending_calls.pop_front() {
-        if matches!(call.name.as_str(), "run_command" | "save_script") {
+        if matches!(
+            call.name.as_str(),
+            "run_command" | "save_script" | "cancel_job"
+        ) {
             push_tool_call_entry(state, &call);
             let summary = format!(
                 "Plan mode: not executed. Proposed {}.",

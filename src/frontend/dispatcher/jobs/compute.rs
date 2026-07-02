@@ -213,21 +213,19 @@ pub(crate) fn poll_optimization_job(state: &mut AppState, ctx: &egui::Context) {
 }
 
 pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
-    let Some(running) = state.jobs.take_qm() else {
+    let Some(mut running) = state.jobs.take_qm() else {
         return;
     };
     let task_run_id = state.active_task_run;
     let fingerprint_before = state.entries_fingerprint();
 
     if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-        running
-            .cancel
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        // hartree runs the calculation in one opaque call, so a cancel only takes
-        // effect at the next stage boundary; the in-flight step runs to the end.
-        state.set_message(
-            "QM calculation stopping (the current step runs to completion)".to_string(),
-        );
+        running.cancel_requested = true;
+        running.cancel.cancel();
+        if let Some(task_run_id) = task_run_id {
+            mark_task_status(state, task_run_id, TaskStatus::Cancelling);
+        }
+        state.set_message("QM calculation stopping".to_string());
     }
 
     let mut finished = false;
@@ -236,8 +234,15 @@ pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
         match message {
             QmWorkerMessage::Progress { stage } => {
                 state.set_message(format!("QM: {stage}; press Esc to stop"));
+                running.latest_stage = Some(stage);
             }
             QmWorkerMessage::Finished(outcome) => {
+                if running.cancel_requested {
+                    state.set_message("QM calculation cancelled".to_string());
+                    complete_active_qm_task(state, TaskStatus::Cancelled);
+                    finished = true;
+                    continue;
+                }
                 let outcome = *outcome;
                 for line in outcome.summary.lines() {
                     state.output_log.push(line.to_string());
@@ -271,8 +276,13 @@ pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
                 finished = true;
             }
             QmWorkerMessage::Failed(error) => {
-                state.set_message(format!("QM calculation failed: {error}"));
-                complete_active_qm_task(state, TaskStatus::Failed);
+                if running.cancel_requested {
+                    state.set_message("QM calculation cancelled".to_string());
+                    complete_active_qm_task(state, TaskStatus::Cancelled);
+                } else {
+                    state.set_message(format!("QM calculation failed: {error}"));
+                    complete_active_qm_task(state, TaskStatus::Failed);
+                }
                 finished = true;
             }
         }

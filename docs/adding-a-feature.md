@@ -49,8 +49,8 @@ arms won't build); ⚠ marks the steps it does **not** catch.
 4. ⚠ **`frontend/task_executor.rs`** — a `TaskExecutor` + `run_<x>_panel`. The
    `every_task_controller_has_frontend_executor` test fails if you forget this.
 5. **`frontend/jobs.rs`** — `RunningXJob` + `XWorkerMessage` + `spawn_x_job`, a
-   `JobManager` slot + accessors, and a `cancel_x()` call in
-   `AppState::cancel_transient_jobs`.
+   `JobManager` slot + accessors, and a `JobControlId`/`LocalJobSlot` arm in the
+   unified job control plane used by `AppState::cancel_transient_jobs`.
 6. **`frontend/state/<x>_prompts.rs`** — the draft struct; `mod`/`pub use` in
    `state.rs`; a `pending_x` field on `UiState` (struct + init +
    `restore_edit_snapshot`).
