@@ -25,12 +25,12 @@
 
 use std::sync::OnceLock;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::engines::qm::QmMethod;
 
 /// Which engine / command surface a rule applies to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Engine {
     /// Molecular QM (`qm energy|optimize|freq`).
@@ -45,7 +45,7 @@ pub enum Engine {
 
 impl Engine {
     /// The `.sls` verb(s) a rule's commands must start with.
-    fn verbs(self) -> &'static [&'static str] {
+    pub(crate) fn verbs(self) -> &'static [&'static str] {
         match self {
             Engine::Qm | Engine::QmPeriodic => &["qm"],
             Engine::Md => &["md"],
@@ -54,7 +54,7 @@ impl Engine {
     }
 
     /// Section heading in the always-on table.
-    fn heading(self) -> &'static str {
+    pub(crate) fn heading(self) -> &'static str {
         match self {
             Engine::Qm => "Quantum chemistry — molecular (qm energy|optimize|freq)",
             Engine::QmPeriodic => "Quantum chemistry — periodic / crystal (qm periodic)",
@@ -64,7 +64,8 @@ impl Engine {
     }
 
     /// Render order for the table.
-    const ALL: [Engine; 4] = [Engine::Qm, Engine::QmPeriodic, Engine::Md, Engine::Docking];
+    pub(crate) const ALL: [Engine; 4] =
+        [Engine::Qm, Engine::QmPeriodic, Engine::Md, Engine::Docking];
 }
 
 /// One knowledge unit: a situation, the runnable command(s) for it, its
@@ -102,7 +103,7 @@ fn default_true() -> bool {
 
 /// The embedded, parsed core. Immutable after first init (like the engine
 /// registry tables); not mutable global state.
-fn rules() -> &'static [MethodRule] {
+pub(crate) fn rules() -> &'static [MethodRule] {
     static RULES: OnceLock<Vec<MethodRule>> = OnceLock::new();
     RULES.get_or_init(load_embedded)
 }
@@ -125,124 +126,16 @@ fn load_embedded() -> Vec<MethodRule> {
 }
 
 /// The always-on decision table injected into the (cacheable) system prompt.
-/// Holds no volatile state, so the string is byte-stable across turns.
+/// Delegates to the skills manifest over the built-in set, so there is one
+/// renderer. Holds no volatile state, so the string is byte-stable across turns.
 pub fn kb_table() -> String {
-    render_table(rules())
+    crate::skills::skills_manifest(&crate::skills::builtin_skills())
 }
 
-fn render_table(rules: &[MethodRule]) -> String {
-    let mut out = String::from(
-        "Method-selection guide — pick the engine + command for the task, then act. \
-         Reach for QM (`qm …`) for electronic structure, energies, and spectra of \
-         molecules and small systems; MD (`md …`) for dynamics, solvation, and large \
-         flexible systems; docking (`dock …`) for ligand–receptor poses; periodic QM \
-         (`qm periodic`) for crystals. Call the `recommend_method` tool for the full \
-         details/caveats of any line, and `qm recommend <task>` for the curated QM \
-         level of theory.\n",
-    );
-    for engine in Engine::ALL {
-        let group: Vec<&MethodRule> = rules
-            .iter()
-            .filter(|rule| rule.engine == engine && rule.in_table)
-            .collect();
-        if group.is_empty() {
-            continue;
-        }
-        out.push('\n');
-        out.push_str(engine.heading());
-        out.push_str(":\n");
-        for rule in group {
-            out.push_str("- ");
-            out.push_str(&rule.description);
-            out.push('\n');
-            for line in &rule.command {
-                out.push_str("    ");
-                out.push_str(line);
-                out.push('\n');
-            }
-        }
-    }
-    out
-}
-
-/// On-demand guidance for a free-text task: keyword-scores every rule (in-table
-/// and tool-only) and returns the best one or two in full. Backs the read-only
-/// `recommend_method` tool. Never errors; an unmatched task returns the table.
+/// On-demand guidance for a free-text task over the built-in set. Delegates to
+/// the skills lookup, so there is one scorer. Never errors.
 pub fn recommend(task: &str) -> String {
-    let rules = rules();
-    let query = task.to_ascii_lowercase();
-    let terms: Vec<&str> = query
-        .split(|c: char| !c.is_alphanumeric())
-        .filter(|term| term.len() > 2)
-        .collect();
-
-    let mut scored: Vec<(usize, &MethodRule)> = rules
-        .iter()
-        .map(|rule| (score_rule(rule, &terms), rule))
-        .filter(|(score, _)| *score > 0)
-        .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.name.cmp(&b.1.name)));
-
-    if scored.is_empty() {
-        return format!(
-            "No specific rule matched \u{201c}{task}\u{201d}. The full method-selection \
-             guide:\n\n{}",
-            render_table(rules)
-        );
-    }
-    let mut out = String::new();
-    for (_, rule) in scored.iter().take(2) {
-        out.push_str(&render_detail(rule));
-        out.push('\n');
-    }
-    out.trim_end().to_string()
-}
-
-/// Score a rule against the query terms: an exact trigger match weighs more than
-/// a substring hit in the name/description.
-fn score_rule(rule: &MethodRule, terms: &[&str]) -> usize {
-    let haystack = format!(
-        "{} {} {}",
-        rule.name,
-        rule.description,
-        rule.triggers.join(" ")
-    )
-    .to_ascii_lowercase();
-    terms
-        .iter()
-        .map(|term| {
-            if rule.triggers.iter().any(|tr| tr.eq_ignore_ascii_case(term)) {
-                3
-            } else if haystack.contains(term) {
-                1
-            } else {
-                0
-            }
-        })
-        .sum()
-}
-
-fn render_detail(rule: &MethodRule) -> String {
-    let mut out = format!("## {}\n{}\n", rule.name, rule.description);
-    if !rule.command.is_empty() {
-        out.push_str("run:\n");
-        for line in &rule.command {
-            out.push_str("  ");
-            out.push_str(line);
-            out.push('\n');
-        }
-    }
-    for caveat in &rule.caveats {
-        out.push_str("- caveat: ");
-        out.push_str(caveat);
-        out.push('\n');
-    }
-    if !rule.body.trim().is_empty() {
-        out.push('\n');
-        out.push_str(rule.body.trim());
-        out.push('\n');
-    }
-    out
+    crate::skills::recommend(&crate::skills::builtin_skills(), task)
 }
 
 /// Validate one rule against the **live** engine capabilities. Returns a
@@ -355,7 +248,7 @@ const VETTED_FUNCTIONALS: &[&str] = &[
 /// composite, or a DFT functional on [`VETTED_FUNCTIONALS`] — never the free-text
 /// `Dft(_)` fallback (which `QmMethod::parse` produces for typos, since it never
 /// rejects). A trailing `-d3`/`-d4` dispersion suffix is allowed.
-fn is_vetted_qm_method(token: &str) -> bool {
+pub(crate) fn is_vetted_qm_method(token: &str) -> bool {
     let (method, _dispersion) = QmMethod::parse(token);
     match method {
         QmMethod::Dft(name) => VETTED_FUNCTIONALS
@@ -389,7 +282,7 @@ const VETTED_BASES: &[&str] = &[
     "aug-cc-pvtz",
 ];
 
-fn is_vetted_qm_basis(token: &str) -> bool {
+pub(crate) fn is_vetted_qm_basis(token: &str) -> bool {
     VETTED_BASES
         .iter()
         .any(|basis| basis.eq_ignore_ascii_case(token))

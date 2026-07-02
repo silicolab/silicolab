@@ -6,6 +6,7 @@
 pub mod loop_driver;
 pub mod registry;
 pub mod session;
+mod skills_bridge;
 pub mod tools;
 
 #[cfg(test)]

@@ -122,27 +122,61 @@ pub fn tool_defs() -> Vec<ToolDef> {
             }),
         },
         ToolDef {
-            name: "save_script".to_string(),
-            description: "Save a reusable SilicoLab `.sls` script of console commands to the \
-                project so a workflow can be replayed with `run <file>`. Use this to capture a \
-                sequence of steps you ran. Writes a file, so it may need the user's approval \
-                depending on their approval mode."
+            name: "save_skill".to_string(),
+            description: "Save a reusable SilicoLab skill so a workflow can be discovered and \
+                replayed later. A skill is a named set of `.sls` command steps with a short \
+                description and trigger keywords; use `{placeholder}` in a step for a value the \
+                user supplies at run time and declare each in `params`. Saved skills surface \
+                through `recommend_method` on the next turn. Writes a file, so it may need the \
+                user's approval depending on their approval mode."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
-                    "filename": {
+                    "name": {
                         "type": "string",
-                        "description": "Script file name (a `.sls` suffix is added if missing). \
-                            No directories — a bare name."
+                        "description": "Kebab-case skill id (letters, digits, dashes), e.g. `dock-a-ligand`."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "One line: what the skill does and when to use it (<= 200 chars)."
+                    },
+                    "triggers": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Keywords that should surface this skill."
                     },
                     "commands": {
                         "type": "array",
                         "items": { "type": "string" },
-                        "description": "One `.sls` command per array element."
+                        "description": "One `.sls` command per element; `{placeholder}` for run-time values."
+                    },
+                    "params": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {
+                                    "type": "string",
+                                    "description": "Placeholder name, without braces, referenced as `{name}` in a command."
+                                },
+                                "required": {
+                                    "type": "boolean",
+                                    "description": "Whether the caller must supply this placeholder at run time."
+                                }
+                            },
+                            "required": ["name"],
+                            "additionalProperties": false
+                        },
+                        "description": "One entry per `{placeholder}` used in `commands`; every placeholder must be declared here."
+                    },
+                    "caveats": {
+                        "type": "array",
+                        "items": { "type": "string" },
+                        "description": "Optional trade-offs or gotchas."
                     }
                 },
-                "required": ["filename", "commands"],
+                "required": ["name", "description", "triggers", "commands"],
                 "additionalProperties": false
             }),
         },
@@ -155,12 +189,12 @@ pub struct ToolOutcome {
     pub is_error: bool,
 }
 
-/// The approval [`RiskLevel`] of a tool call. `save_script` writes a file
+/// The approval [`RiskLevel`] of a tool call. `save_skill` writes a file
 /// (FileWrite); `run_command` defers to the grammar's [`command_risk`] so risk is
 /// declared once, next to each command; perception tools are read-only.
 pub fn risk_of_call(call: &ToolCall) -> RiskLevel {
     match call.name.as_str() {
-        "save_script" => RiskLevel::FileWrite,
+        "save_skill" => RiskLevel::FileWrite,
         "cancel_job" => RiskLevel::Destructive,
         "run_command" => {
             let command = call
@@ -248,12 +282,17 @@ pub fn execute_tool(state: &mut AppState, call: &ToolCall) -> ToolOutcome {
                 .get("task")
                 .and_then(Value::as_str)
                 .unwrap_or_default();
+            let project_root = state
+                .workspace
+                .project()
+                .map(|project| project.root.clone());
+            state.ui.agent.ensure_skills_loaded(project_root);
             ToolOutcome {
-                content: crate::engines::methods::recommend(task),
+                content: crate::skills::recommend(&state.ui.agent.skills, task),
                 is_error: false,
             }
         }
-        "save_script" => save_script_tool(state, &call.input),
+        "save_skill" => save_skill_tool(state, &call.input),
         other => ToolOutcome {
             content: format!("Unknown tool `{other}`."),
             is_error: true,
@@ -305,61 +344,81 @@ fn cancel_job_tool(state: &mut AppState, id: &str) -> ToolOutcome {
     }
 }
 
-/// Write a `.sls` script of console commands into the project's `scripts/`
-/// directory (or a temp scripts dir in a scratch workspace). The filename is
-/// restricted to a bare name to keep writes inside that directory.
-fn save_script_tool(state: &mut AppState, input: &Value) -> ToolOutcome {
-    let Some(filename) = input.get("filename").and_then(Value::as_str) else {
+/// Write a skill as `<dir>/<name>/SKILL.md` — the project's `skills/` dir when a
+/// project is open, else the user dir (`~/.silicolab/skills/`). Validates before
+/// writing and reloads the session's skills so the new one is discoverable.
+fn save_skill_tool(state: &mut AppState, input: &Value) -> ToolOutcome {
+    let Some(name) = input.get("name").and_then(Value::as_str) else {
         return ToolOutcome {
-            content: "save_script requires a `filename`.".to_string(),
+            content: "save_skill requires a `name`.".to_string(),
             is_error: true,
         };
     };
-    let commands: Vec<String> = match input.get("commands").and_then(Value::as_array) {
-        Some(items) => items
-            .iter()
-            .filter_map(|value| value.as_str().map(str::to_string))
-            .collect(),
-        None => {
+    let Some(description) = input.get("description").and_then(Value::as_str) else {
+        return ToolOutcome {
+            content: "save_skill requires a `description`.".to_string(),
+            is_error: true,
+        };
+    };
+    let triggers = string_array(input, "triggers");
+    let commands = string_array(input, "commands");
+    let caveats = string_array(input, "caveats");
+    let params = param_array(input, "params");
+    if commands.is_empty() {
+        return ToolOutcome {
+            content: "save_skill requires at least one command.".to_string(),
+            is_error: true,
+        };
+    }
+
+    let md = render_skill_md(name, description, &triggers, &commands, &caveats, &params);
+
+    // Validate by round-tripping through the parser + validator before writing.
+    // The write path below is derived from `skill.name` (the parsed/validated
+    // value), never the raw `name` input, so a name that only *looks* safe
+    // after YAML parsing (e.g. truncated by an unquoted `#` comment) can never
+    // steer `dir` outside the skills tree: it either round-trips to the exact
+    // raw string and gets checked by `validate_skill`, or it's rejected here.
+    let skill = match crate::skills::parse_skill_md(&md, crate::skills::SkillSource::User) {
+        Ok(skill) => match crate::skills::validate_skill(&skill) {
+            Ok(()) => skill,
+            Err(reason) => {
+                return ToolOutcome {
+                    content: format!("invalid skill: {reason}"),
+                    is_error: true,
+                };
+            }
+        },
+        Err(reason) => {
             return ToolOutcome {
-                content: "save_script requires a `commands` array.".to_string(),
+                content: format!("invalid skill: {reason}"),
                 is_error: true,
             };
         }
     };
 
-    let name = std::path::Path::new(filename.trim());
-    // Reject any path components — only a bare file name is allowed.
-    if filename.contains(['/', '\\']) || name.file_name() != Some(name.as_os_str()) {
-        return ToolOutcome {
-            content: format!("`{filename}` must be a bare file name (no directories)."),
-            is_error: true,
-        };
-    }
-    let mut file_name = name.to_string_lossy().to_string();
-    if !file_name.to_ascii_lowercase().ends_with(".sls") {
-        file_name.push_str(".sls");
-    }
-
-    let dir = agent_scripts_dir(state);
+    let project_root = state
+        .workspace
+        .project()
+        .map(|project| project.root.clone());
+    let base = project_root
+        .clone()
+        .map(|root| root.join("skills"))
+        .unwrap_or_else(|| crate::hosts::config_dir().join("skills"));
+    let dir = base.join(&skill.name);
     if let Err(error) = std::fs::create_dir_all(&dir) {
         return ToolOutcome {
             content: format!("could not create {}: {error}", dir.display()),
             is_error: true,
         };
     }
-    let path = dir.join(&file_name);
-    let mut body = String::from("# SilicoLab script — generated by the assistant.\n");
-    for command in &commands {
-        body.push_str(command.trim());
-        body.push('\n');
-    }
-    match std::fs::write(&path, body) {
+    let path = dir.join("SKILL.md");
+    match std::fs::write(&path, md) {
         Ok(()) => {
+            state.ui.agent.reload_skills(project_root);
             let summary = format!(
-                "saved {} ({} command(s)); replay with `run {}`",
-                path.display(),
-                commands.len(),
+                "saved skill `{}` to {}; discoverable via recommend_method",
+                skill.name,
                 path.display()
             );
             state.output_log.push(summary.clone());
@@ -375,14 +434,112 @@ fn save_script_tool(state: &mut AppState, input: &Value) -> ToolOutcome {
     }
 }
 
-/// Where agent-authored scripts are written: a `scripts/` dir in the open
-/// project, or a temp fallback in a scratch workspace.
-fn agent_scripts_dir(state: &AppState) -> std::path::PathBuf {
-    state
-        .workspace
-        .project()
-        .map(|project| project.root.join("scripts"))
-        .unwrap_or_else(|| std::env::temp_dir().join("silicolab").join("scripts"))
+/// Collect a JSON string-array field into a `Vec<String>` (missing → empty).
+fn string_array(input: &Value, key: &str) -> Vec<String> {
+    input
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|v| v.as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// A declared `{placeholder}`, as read from the tool's `params` input. Mirrors
+/// [`crate::skills::SkillParam`], the shape `render_skill_md` emits and
+/// `parse_skill_md` reads back.
+struct ToolParam {
+    name: String,
+    required: bool,
+}
+
+/// Collect the JSON `params` array into `Vec<ToolParam>` (missing/malformed
+/// entries → skipped; missing key → empty).
+fn param_array(input: &Value, key: &str) -> Vec<ToolParam> {
+    input
+        .get(key)
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| {
+                    let name = item.get("name")?.as_str()?.to_string();
+                    let required = item
+                        .get("required")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false);
+                    Some(ToolParam { name, required })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Render a `SKILL.md` document from the tool's fields. Every scalar,
+/// including `name`, is routed through [`yaml_scalar`] so the value
+/// `parse_skill_md` reads back matches the raw input exactly (no YAML
+/// comment/special-character truncation can desync the two).
+fn render_skill_md(
+    name: &str,
+    description: &str,
+    triggers: &[String],
+    commands: &[String],
+    caveats: &[String],
+    params: &[ToolParam],
+) -> String {
+    let mut out = String::from("---\n");
+    out.push_str(&format!("name: {}\n", yaml_scalar(name)));
+    out.push_str(&format!("description: {}\n", yaml_scalar(description)));
+    out.push_str("triggers:\n");
+    for t in triggers {
+        out.push_str(&format!("  - {}\n", yaml_scalar(t)));
+    }
+    // Saved skills are lookup-only by default: discoverable via recommend_method
+    // and triggers, but kept out of the always-on system-prompt manifest so a
+    // growing library can't inflate every turn's prompt.
+    out.push_str("in_table: false\n");
+    if !params.is_empty() {
+        out.push_str("params:\n");
+        for p in params {
+            out.push_str(&format!(
+                "  - name: {}\n    required: {}\n",
+                yaml_scalar(&p.name),
+                p.required
+            ));
+        }
+    }
+    out.push_str("command:\n");
+    for c in commands {
+        out.push_str(&format!("  - {}\n", yaml_scalar(c)));
+    }
+    if !caveats.is_empty() {
+        out.push_str("caveats:\n");
+        for c in caveats {
+            out.push_str(&format!("  - {}\n", yaml_scalar(c)));
+        }
+    }
+    out.push_str("---\n");
+    out.push_str(&format!("# {name}\n\nGenerated by the assistant.\n"));
+    out
+}
+
+/// Quote a YAML scalar so special characters (`:`, `{`, `#`, quotes, embedded
+/// newlines/carriage returns) are safe and round-trip exactly.
+fn yaml_scalar(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len() + 2);
+    for c in value.chars() {
+        match c {
+            '\\' => escaped.push_str("\\\\"),
+            '"' => escaped.push_str("\\\""),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            other => escaped.push(other),
+        }
+    }
+    format!("\"{escaped}\"")
 }
 
 /// Run one `.sls` command, echoing it and its result into the shared

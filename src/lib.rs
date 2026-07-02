@@ -5,4 +5,4 @@ pub mod frontend;
 // and the serializable payload/wire bridge) lives in `compute-core`. Re-export it
 // under the historical module paths so the rest of the app keeps using
 // `crate::domain`, `crate::engines`, etc. unchanged.
-pub use compute_core::{domain, engines, hosts, io, payload, wire, workflows};
+pub use compute_core::{domain, engines, hosts, io, payload, skills, wire, workflows};

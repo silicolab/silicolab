@@ -95,12 +95,17 @@ pub fn spawn_next_turn(state: &mut AppState, ctx: &egui::Context) {
     let stream = registry::active_provider(&state.config.assistant)
         .caps_for(&state.config.assistant.model)
         .supports_streaming;
+    let project_root = state
+        .workspace
+        .project()
+        .map(|project| project.root.clone());
+    state.ui.agent.ensure_skills_loaded(project_root);
     let cfg = LlmConfig {
         model: state.config.assistant.model.clone(),
         effort: state.config.assistant.effort,
         max_output_tokens: MAX_OUTPUT_TOKENS,
         stream,
-        system: system_prompt(),
+        system: system_prompt(&state.ui.agent.skills),
     };
     let tools = tools::tool_defs();
     let history = state.ui.agent.history.clone();
