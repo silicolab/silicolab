@@ -1,6 +1,6 @@
 use super::*;
 use crate::frontend::gpu_monitor::GpuSample;
-use crate::frontend::jobs::{Metrics, RunningMetricsSampler};
+use crate::frontend::jobs::{Metrics, QmWorkerMessage, RunningMetricsSampler, RunningQmJob};
 
 #[test]
 fn poll_remote_gpu_monitor_drains_sample_into_state() {
@@ -125,4 +125,33 @@ fn poll_metrics_drains_latest_into_state() {
             .and_then(|h| h.back().copied()),
         Some(Some(50.0))
     );
+}
+
+#[test]
+fn esc_still_requests_qm_cancel_with_stage_boundary_message() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let (_tx, rx) = std::sync::mpsc::channel::<QmWorkerMessage>();
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    state.jobs.qm = Some(RunningQmJob {
+        cancel: crate::wire::JobCancelHandle::from_flag(std::sync::Arc::clone(&cancel)),
+        receiver: rx,
+        latest_stage: Some("SCF".into()),
+        cancel_requested: false,
+    });
+    let ctx = egui::Context::default();
+    ctx.input_mut(|input| {
+        input.events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: Some(egui::Key::Escape),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+    });
+
+    poll_qm_job(&mut state, &ctx);
+
+    assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
+    assert_eq!(state.message, "QM calculation stopping");
+    assert!(state.jobs.qm.is_some());
 }

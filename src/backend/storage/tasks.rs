@@ -76,8 +76,10 @@ pub(crate) fn task_status_token(status: TaskStatus) -> &'static str {
         TaskStatus::Ready => "ready",
         TaskStatus::WaitingInput => "waiting_input",
         TaskStatus::Running => "running",
+        TaskStatus::Cancelling => "cancelling",
         TaskStatus::Completed => "completed",
         TaskStatus::Failed => "failed",
+        TaskStatus::Cancelled => "cancelled",
     }
 }
 
@@ -85,8 +87,10 @@ fn parse_task_status(token: &str) -> TaskStatus {
     match token {
         "waiting_input" => TaskStatus::WaitingInput,
         "running" => TaskStatus::Running,
+        "cancelling" => TaskStatus::Cancelling,
         "completed" => TaskStatus::Completed,
         "failed" => TaskStatus::Failed,
+        "cancelled" => TaskStatus::Cancelled,
         _ => TaskStatus::Ready,
     }
 }

@@ -221,6 +221,14 @@ pub(crate) fn start_pending_optimization(state: &mut AppState) {
 
 pub(crate) fn cancel_pending_optimization_request(state: &mut AppState) {
     bind_active_panel_task(state, TaskPanelKind::OptimizationPrompt);
+    if state.jobs.optimization_running() {
+        let _ = crate::frontend::jobs::cancel_controlled_job(
+            state,
+            &crate::frontend::jobs::JobControlId::Local(
+                crate::frontend::jobs::LocalJobSlot::Optimizer,
+            ),
+        );
+    }
     state.ui.pending_optimization = None;
     state.set_message("forcefield optimization canceled".to_string());
     complete_active_task(state, TaskKind::OptimizeGeometry, TaskStatus::Failed);

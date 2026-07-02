@@ -1,5 +1,3 @@
-use std::sync::atomic::Ordering;
-
 use crate::frontend::remote_jobs::{RunningRemoteJobsRefresh, RunningRemoteSubmit};
 
 use super::agent::{RunningAgentTurn, TrackedAgentJob};
@@ -75,12 +73,6 @@ impl JobManager {
         self.optimizer = Some(optimizer);
     }
 
-    pub fn cancel_optimization(&mut self) {
-        if let Some(running) = self.optimizer.take() {
-            running.cancel.store(true, Ordering::Relaxed);
-        }
-    }
-
     pub fn disorder_running(&self) -> bool {
         self.disorder.is_some()
     }
@@ -91,12 +83,6 @@ impl JobManager {
 
     pub fn set_disorder(&mut self, disorder: RunningDisorderJob) {
         self.disorder = Some(disorder);
-    }
-
-    pub fn cancel_disorder(&mut self) {
-        if let Some(running) = self.disorder.take() {
-            running.cancel.store(true, Ordering::Relaxed);
-        }
     }
 
     pub fn qm_running(&self) -> bool {
@@ -111,12 +97,6 @@ impl JobManager {
         self.qm = Some(qm);
     }
 
-    pub fn cancel_qm(&mut self) {
-        if let Some(running) = self.qm.take() {
-            running.cancel.store(true, Ordering::Relaxed);
-        }
-    }
-
     pub fn docking_running(&self) -> bool {
         self.docking.is_some()
     }
@@ -129,12 +109,6 @@ impl JobManager {
         self.docking = Some(docking);
     }
 
-    pub fn cancel_docking(&mut self) {
-        if let Some(running) = self.docking.take() {
-            running.cancel.store(true, Ordering::Relaxed);
-        }
-    }
-
     pub fn engine_running(&self) -> bool {
         self.engine.is_some()
     }
@@ -145,11 +119,5 @@ impl JobManager {
 
     pub fn set_engine(&mut self, engine: RunningEngineJob) {
         self.engine = Some(engine);
-    }
-
-    pub fn cancel_engine(&mut self) {
-        if let Some(running) = self.engine.take() {
-            running.cancel.store(true, Ordering::Relaxed);
-        }
     }
 }

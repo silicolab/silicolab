@@ -58,6 +58,12 @@ pub fn qm_command(state: &mut AppState, args: &[String]) -> Result<String> {
     if sub == "recommend" {
         return qm_recommend(&args[1..]);
     }
+    if sub == "status" {
+        return Ok(crate::frontend::jobs::qm_jobs_status(state));
+    }
+    if sub == "cancel" {
+        return crate::frontend::jobs::cancel_qm_job_alias(state);
+    }
     // `qm periodic` runs a periodic (crystalline) single point on the active
     // unit cell — a distinct option set from the molecular subcommands.
     if sub == "periodic" {
@@ -71,7 +77,7 @@ pub fn qm_command(state: &mut AppState, args: &[String]) -> Result<String> {
         other => {
             bail!(
                 "unknown qm subcommand `{other}` \
-                 (expected energy, optimize, freq, ts, periodic, or recommend)"
+                 (expected energy, optimize, freq, ts, periodic, recommend, status, or cancel)"
             )
         }
     };

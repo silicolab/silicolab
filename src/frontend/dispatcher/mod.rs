@@ -322,6 +322,7 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         }
         AppAction::FetchRemoteHardware(id) => fetch_remote_hardware(state, id),
         AppAction::RefreshRemoteJobs => refresh_remote_jobs(state),
+        AppAction::CancelControlledJob(id) => cancel_controlled_job_action(state, &id),
         AppAction::RemoveRemoteScratch(run_uuid) => remove_remote_job_scratch(state, &run_uuid),
         AppAction::SetMonitorSource(src) => set_monitor_source(state, src),
         AppAction::RunConsoleCommand(command) => run_console_command(state, &command),
@@ -355,7 +356,6 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::RemoveQueuedAgentInput(index) => {
             crate::frontend::agent::remove_queued_agent_input(state, index)
         }
-        AppAction::CancelAgentJob(id) => crate::frontend::agent::cancel_agent_job(state, id),
         AppAction::SwitchProviderModel { provider, model } => {
             crate::frontend::agent::switch_provider_model(state, &provider, &model)
         }
@@ -436,6 +436,19 @@ const AUTOSAVE_DEBOUNCE_SECS: f64 = 0.5;
 
 fn toggle_atom_labels(state: &mut AppState) {
     state.ui.viewport.show_atom_labels = !state.ui.viewport.show_atom_labels;
+}
+
+fn cancel_controlled_job_action(state: &mut AppState, id: &crate::frontend::jobs::JobControlId) {
+    let job = crate::frontend::jobs::list_controlled_jobs(state)
+        .into_iter()
+        .find(|job| job.id == *id);
+    match crate::frontend::jobs::cancel_controlled_job(state, id) {
+        Ok(outcome) => state.set_message(crate::frontend::jobs::format_cancel_outcome_for_job(
+            &outcome,
+            job.as_ref(),
+        )),
+        Err(error) => state.set_message(format!("Could not cancel job: {error}")),
+    }
 }
 
 pub(crate) fn run_console_command(state: &mut AppState, command: &str) {

@@ -38,7 +38,7 @@ impl AgentHeavyJob {
     /// Signal the worker to stop at its next cancellation checkpoint.
     pub fn cancel(&self) {
         match self {
-            AgentHeavyJob::Qm(job) => job.cancel.store(true, Ordering::Relaxed),
+            AgentHeavyJob::Qm(job) => job.cancel.cancel(),
             AgentHeavyJob::Engine(job) => job.cancel.store(true, Ordering::Relaxed),
             AgentHeavyJob::Docking(job) => job.cancel.store(true, Ordering::Relaxed),
         }

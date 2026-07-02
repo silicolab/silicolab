@@ -15,7 +15,7 @@ const MAX_QUEUED_SHOWN: usize = 4;
 
 /// Reserved height for the running-jobs strip (0 when there are none). Shared with
 /// the panel so the transcript above can be sized before this strip is drawn.
-pub(crate) fn running_strip_height(running_jobs: &[(u64, String, u64)]) -> f32 {
+pub(crate) fn running_strip_height(running_jobs: &[crate::frontend::jobs::LiveJobSnapshot]) -> f32 {
     if running_jobs.is_empty() {
         0.0
     } else {
@@ -47,7 +47,7 @@ pub(crate) fn render_assistant_composer(
     ui: &mut egui::Ui,
     actions: &mut Vec<AppAction>,
     pal: &Palette,
-    running_jobs: &[(u64, String, u64)],
+    running_jobs: &[crate::frontend::jobs::LiveJobSnapshot],
     queued: &[String],
 ) {
     let busy = state.ui.agent.is_busy();
@@ -60,23 +60,25 @@ pub(crate) fn render_assistant_composer(
     if !running_jobs.is_empty() {
         assistant_inset_row(ui, running_height, |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            for (id, label, task_run_id) in running_jobs.iter().take(MAX_QUEUED_SHOWN) {
+            for job in running_jobs.iter().take(MAX_QUEUED_SHOWN) {
                 ui.horizontal(|ui| {
                     if assistant_remove_button(ui, "Cancel job") {
-                        actions.push(AppAction::CancelAgentJob(*id));
+                        actions.push(AppAction::CancelControlledJob(job.id.clone()));
                     }
                     ui.add(egui::Spinner::new().size(12.0));
                     let label_resp = ui.add(
                         egui::Label::new(
-                            RichText::new(format!("#{id}  {label}"))
+                            RichText::new(format!("{}  {}", job.id.token(), job.label))
                                 .small()
                                 .color(pal.text_primary),
                         )
                         .truncate()
                         .sense(egui::Sense::click()),
                     );
-                    if label_resp.on_hover_text("Open in Task Monitor").clicked() {
-                        actions.push(AppAction::OpenTaskPanel(*task_run_id));
+                    if label_resp.on_hover_text("Open in Task Monitor").clicked()
+                        && let Some(task_run_id) = job.task_run_id
+                    {
+                        actions.push(AppAction::OpenTaskPanel(task_run_id));
                     }
                 });
             }
