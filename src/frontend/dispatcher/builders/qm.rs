@@ -187,6 +187,16 @@ fn start_remote_qm(
 
 pub(crate) fn cancel_pending_qm_request(state: &mut AppState) {
     bind_active_panel_task(state, TaskPanelKind::QmPrompt);
+    if state.jobs.qm_running() {
+        let _ = crate::frontend::jobs::cancel_controlled_job(
+            state,
+            &crate::frontend::jobs::JobControlId::Local(crate::frontend::jobs::LocalJobSlot::Qm),
+        );
+        state.ui.pending_qm = None;
+        state.set_message("QM calculation stopping".to_string());
+        close_active_task_panel(state);
+        return;
+    }
     state.ui.pending_qm = None;
     state.set_message("QM calculation canceled".to_string());
     complete_active_qm_task(state, TaskStatus::Failed);

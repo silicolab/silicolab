@@ -244,25 +244,6 @@ pub fn poll_agent_jobs(state: &mut AppState, ctx: &egui::Context) {
     }
 }
 
-/// Cancel one background job by id (composer running-jobs ✕). Leaves a notice in
-/// the originating conversation; a no-op if the id is unknown.
-pub fn cancel_agent_job(state: &mut AppState, id: u64) {
-    let Some(pos) = state.jobs.agent_jobs.iter().position(|job| job.id == id) else {
-        return;
-    };
-    let tracked = state.jobs.agent_jobs.remove(pos);
-    tracked.job.cancel();
-    complete_agent_task_run(state, tracked.task_run_id, true);
-    if let Some(conversation) = state.ui.agent.conversation_mut(tracked.conversation) {
-        conversation
-            .transcript
-            .push(TranscriptEntry::Notice(format!(
-                "Cancelled background job #{id} ({}).",
-                tracked.label
-            )));
-    }
-}
-
 /// Cancel and remove every background job belonging to `conversation`, returning
 /// how many were stopped. Used when the user Stops the agent or deletes a chat, so
 /// detached workers and their orphaned results don't linger.
@@ -281,7 +262,7 @@ pub fn cancel_conversation_jobs(
         }
     });
     for task_run_id in &cancelled_runs {
-        complete_agent_task_run(state, *task_run_id, true);
+        crate::frontend::dispatcher::mark_task_status(state, *task_run_id, TaskStatus::Cancelled);
     }
     cancelled_runs.len()
 }
@@ -295,8 +276,23 @@ fn finish_agent_job(
     summary: String,
     is_error: bool,
 ) {
-    complete_agent_task_run(state, tracked.task_run_id, is_error);
-    let verb = if is_error { "failed" } else { "finished" };
+    let cancelled = matches!(&tracked.job, AgentHeavyJob::Qm(job) if job.cancel_requested);
+    if cancelled {
+        crate::frontend::dispatcher::mark_task_status(
+            state,
+            tracked.task_run_id,
+            TaskStatus::Cancelled,
+        );
+    } else {
+        complete_agent_task_run(state, tracked.task_run_id, is_error);
+    }
+    let verb = if cancelled {
+        "cancelled"
+    } else if is_error {
+        "failed"
+    } else {
+        "finished"
+    };
     let note = format!("Background job #{} ({}) {verb}.", tracked.id, tracked.label);
     if let Some(conversation) = state.ui.agent.conversation_mut(tracked.conversation) {
         conversation.transcript.push(TranscriptEntry::Notice(note));
@@ -331,7 +327,7 @@ fn drain_docking(state: &mut AppState, running: &RunningDockingJob) -> Option<(S
 
 fn drain_qm(
     state: &mut AppState,
-    running: &RunningQmJob,
+    running: &mut RunningQmJob,
     task_run_id: u64,
 ) -> Option<(String, bool)> {
     let mut completion = None;
@@ -339,8 +335,13 @@ fn drain_qm(
         match message {
             QmWorkerMessage::Progress { stage } => {
                 state.set_message(format!("QM: {stage}; running in background"));
+                running.latest_stage = Some(stage);
             }
             QmWorkerMessage::Finished(outcome) => {
+                if running.cancel_requested {
+                    completion = Some(("QM calculation cancelled".to_string(), true));
+                    continue;
+                }
                 let outcome = *outcome;
                 if let Some(optimized) = outcome.optimized_structure {
                     let save_path = default_structure_save_path(&optimized, None);
@@ -359,7 +360,11 @@ fn drain_qm(
                 completion = Some((outcome.summary, false));
             }
             QmWorkerMessage::Failed(error) => {
-                completion = Some((format!("QM calculation failed: {error}"), true));
+                completion = if running.cancel_requested {
+                    Some(("QM calculation cancelled".to_string(), true))
+                } else {
+                    Some((format!("QM calculation failed: {error}"), true))
+                };
             }
         }
     }

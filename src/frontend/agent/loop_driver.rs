@@ -49,11 +49,15 @@ Tools:
 - `run_command` runs one SilicoLab `.sls` console command (the same line a user types \
 in the console). One command per call.
 - `inspect` returns a read-only view of the current workspace.
+- `list_jobs` returns local, assistant, and remote jobs from the unified job control plane.
+- `cancel_job` requests cancellation for a job id returned by `list_jobs`.
 - `save_script` saves a reusable `.sls` workflow of commands to the project.
 
 Working style:
 - Call `inspect` before acting when you are unsure of the current state — never guess \
 what is loaded.
+- For task control, use `list_jobs` and `cancel_job`. Do not guess or invent \
+cancel/stop/kill/abort console commands.
 - Take one concrete step at a time and keep your prose short; the user sees both your \
 text and the commands you run.
 - Commands are risk-classified (read-only, structure edit, file write, compute, destructive). \
@@ -125,6 +129,13 @@ fn describe_call(call: &crate::io::llm::types::ToolCall) -> String {
             .map(|command| command.to_string())
             .unwrap_or_else(|| "run_command".to_string()),
         "inspect" => "inspect".to_string(),
+        "list_jobs" => "list_jobs".to_string(),
+        "cancel_job" => call
+            .input
+            .get("id")
+            .and_then(|value| value.as_str())
+            .map(|id| format!("cancel_job {id}"))
+            .unwrap_or_else(|| "cancel_job".to_string()),
         "recommend_method" => call
             .input
             .get("task")

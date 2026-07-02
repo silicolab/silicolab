@@ -39,8 +39,10 @@ fn task_status_badge(pal: &crate::frontend::theme::Palette, status: TaskStatus) 
         TaskStatus::Ready => pal.status_blue,
         TaskStatus::WaitingInput => pal.status_amber,
         TaskStatus::Running => pal.status_green,
+        TaskStatus::Cancelling => pal.status_amber,
         TaskStatus::Completed => pal.status_green,
         TaskStatus::Failed => pal.status_red,
+        TaskStatus::Cancelled => pal.status_amber,
     };
 
     RichText::new(status.label()).strong().color(color)
@@ -80,7 +82,7 @@ pub(crate) fn render_task_monitor_panel(
     render_active_task_summary(state, ui);
     ui.add_space(8.0);
 
-    render_remote_jobs(state, ui, actions);
+    render_controlled_jobs(state, ui, actions);
 
     if state.tasks.tasks.is_empty() {
         ui.label("No task run yet.");
@@ -220,37 +222,47 @@ pub(crate) fn render_task_monitor_panel(
         });
 }
 
-fn remote_status_badge(
+fn job_status_badge(
     pal: &crate::frontend::theme::Palette,
-    status: crate::backend::storage::jobs::RemoteJobStatus,
-    exit_code: Option<i64>,
+    status: crate::frontend::jobs::JobStatus,
+    remote: bool,
 ) -> RichText {
-    use crate::backend::storage::jobs::RemoteJobStatus;
-    let (label, color) = match status {
-        RemoteJobStatus::Queued => ("Queued", pal.status_blue),
-        RemoteJobStatus::Running => ("Running", pal.status_green),
-        RemoteJobStatus::Done => ("Done", pal.status_green),
-        RemoteJobStatus::Failed => ("Failed", pal.status_red),
-        RemoteJobStatus::Lost => ("Lost", pal.status_amber),
+    let color = match status {
+        crate::frontend::jobs::JobStatus::Queued => pal.status_blue,
+        crate::frontend::jobs::JobStatus::Running => pal.status_green,
+        crate::frontend::jobs::JobStatus::Done => pal.status_green,
+        crate::frontend::jobs::JobStatus::Failed => pal.status_red,
+        crate::frontend::jobs::JobStatus::Cancelling
+        | crate::frontend::jobs::JobStatus::Lost
+        | crate::frontend::jobs::JobStatus::Cancelled => pal.status_amber,
     };
-    let text = match exit_code {
-        Some(code) if code != 0 => format!("{label} ({code})"),
-        _ => label.to_string(),
+    let label = if remote {
+        format!("Last known: {}", status.label())
+    } else {
+        status.label().to_string()
     };
-    RichText::new(text).strong().color(color)
+    RichText::new(label).strong().color(color)
 }
 
-/// The detached remote jobs from the global registry: status, identity, and a
-/// per-row remote-scratch cleanup. Populated by the opt-in refresh, so it
-/// reflects the last probe rather than live state.
-fn render_remote_jobs(state: &AppState, ui: &mut egui::Ui, actions: &mut Vec<AppAction>) {
-    if state.ui.remote_jobs.is_empty() {
+fn render_controlled_jobs(state: &AppState, ui: &mut egui::Ui, actions: &mut Vec<AppAction>) {
+    let jobs = crate::frontend::jobs::list_controlled_jobs(state);
+    if jobs.is_empty() {
         return;
     }
     let pal = crate::frontend::theme::palette(ui);
-    ui.label(RichText::new("Remote Jobs").strong());
+    ui.label(RichText::new("Jobs").strong());
+    if jobs
+        .iter()
+        .any(|job| job.backend == crate::frontend::jobs::JobBackend::RemoteRegistry)
+    {
+        ui.label(
+            RichText::new("Remote status is last-known; use Refresh Remote to probe it.")
+                .small()
+                .color(pal.text_tertiary),
+        );
+    }
     ui.add_space(4.0);
-    for job in &state.ui.remote_jobs {
+    for job in &jobs {
         Frame::group(ui.style())
             .inner_margin(Margin::same(8))
             .show(ui, |ui| {
@@ -258,21 +270,36 @@ fn render_remote_jobs(state: &AppState, ui: &mut egui::Ui, actions: &mut Vec<App
                 ui.horizontal(|ui| {
                     ui.vertical(|ui| {
                         ui.label(
-                            RichText::new(format!("{} · {}", job.host_label, job.job_kind))
-                                .strong(),
+                            RichText::new(format!("{} / {}", job.kind.label(), job.label)).strong(),
                         );
-                        let short = job.run_uuid.get(..8).unwrap_or(job.run_uuid.as_str());
                         ui.label(
-                            RichText::new(format!("{short} · {}", job.engine_id))
-                                .small()
-                                .color(pal.text_tertiary),
+                            RichText::new(format!(
+                                "{} / {}{}",
+                                job.id.token(),
+                                job.backend.label(),
+                                job.stage
+                                    .as_ref()
+                                    .map(|stage| format!(" / {stage}"))
+                                    .unwrap_or_default()
+                            ))
+                            .small()
+                            .color(pal.text_tertiary),
                         );
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.button("Remove scratch").clicked() {
-                            actions.push(AppAction::RemoveRemoteScratch(job.run_uuid.clone()));
+                        if let Some(run_uuid) = job.run_uuid.as_ref()
+                            && ui.button("Remove scratch").clicked()
+                        {
+                            actions.push(AppAction::RemoveRemoteScratch(run_uuid.clone()));
                         }
-                        ui.label(remote_status_badge(&pal, job.status, job.exit_code));
+                        if job.cancel.can_cancel() && ui.button("Cancel").clicked() {
+                            actions.push(AppAction::CancelControlledJob(job.id.clone()));
+                        }
+                        ui.label(job_status_badge(
+                            &pal,
+                            job.status,
+                            job.backend == crate::frontend::jobs::JobBackend::RemoteRegistry,
+                        ));
                     });
                 });
             });

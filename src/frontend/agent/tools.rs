@@ -34,8 +34,9 @@ pub fn tool_defs() -> Vec<ToolDef> {
                 command line a user types in the console. Commands are risk-classified \
                 (read-only, structure edit, file write, compute, destructive); whether one \
                 needs the user's approval depends on their approval mode, and destructive \
-                commands (`delete`, running a script) always ask. Call the right command \
-                regardless and explain briefly."
+                commands (`delete`, running a script) always ask. For task control, use \
+                `list_jobs` and `cancel_job`; do not guess cancel/stop/kill/abort console \
+                commands. Call the right command regardless and explain briefly."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -54,8 +55,10 @@ pub fn tool_defs() -> Vec<ToolDef> {
             description: "Read-only look at the current workspace: the active entry, its \
                 atom/bond/chain counts, composition and bond geometry, MD/QM provenance and \
                 trajectory state, the list of open entries, available compute engines, and the \
-                latest status. Call this before acting so you know the current state. Takes no \
-                required arguments."
+                latest status, including a short running-jobs summary. Call this before acting so \
+                you know the current state. For detailed task control, use `list_jobs` and \
+                `cancel_job`; do not guess cancel/stop/kill/abort commands. Takes no required \
+                arguments."
                 .to_string(),
             input_schema: json!({
                 "type": "object",
@@ -65,6 +68,35 @@ pub fn tool_defs() -> Vec<ToolDef> {
                         "description": "Optional free-text focus (currently advisory)."
                     }
                 },
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
+            name: "list_jobs".to_string(),
+            description: "Read-only task-control view. Lists local, assistant, and remote jobs \
+                from the unified job control plane with job id, kind, label, status, stage, \
+                backend, and cancel capability. Use this before cancelling a job."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+            }),
+        },
+        ToolDef {
+            name: "cancel_job".to_string(),
+            description: "Request cancellation for a job id returned by `list_jobs`, using the \
+                unified job control plane. Do not invent stop/kill/abort console commands."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "id": {
+                        "type": "string",
+                        "description": "Job id from list_jobs, e.g. local:qm, agent:7, or remote:<uuid>."
+                    }
+                },
+                "required": ["id"],
                 "additionalProperties": false
             }),
         },
@@ -129,6 +161,7 @@ pub struct ToolOutcome {
 pub fn risk_of_call(call: &ToolCall) -> RiskLevel {
     match call.name.as_str() {
         "save_script" => RiskLevel::FileWrite,
+        "cancel_job" => RiskLevel::Destructive,
         "run_command" => {
             let command = call
                 .input
@@ -198,6 +231,17 @@ pub fn execute_tool(state: &mut AppState, call: &ToolCall) -> ToolOutcome {
                 is_error: false,
             }
         }
+        "list_jobs" => ToolOutcome {
+            content: list_jobs_tool(state),
+            is_error: false,
+        },
+        "cancel_job" => match call.input.get("id").and_then(Value::as_str) {
+            Some(id) => cancel_job_tool(state, id),
+            None => ToolOutcome {
+                content: "cancel_job requires an `id` string from list_jobs.".to_string(),
+                is_error: true,
+            },
+        },
         "recommend_method" => {
             let task = call
                 .input
@@ -214,6 +258,50 @@ pub fn execute_tool(state: &mut AppState, call: &ToolCall) -> ToolOutcome {
             content: format!("Unknown tool `{other}`."),
             is_error: true,
         },
+    }
+}
+
+fn list_jobs_tool(state: &AppState) -> String {
+    let jobs = crate::frontend::jobs::list_controlled_jobs(state);
+    if jobs.is_empty() {
+        return "[]".to_string();
+    }
+    let rows = jobs
+        .iter()
+        .map(|job| {
+            json!({
+                "id": job.id.token(),
+                "kind": job.kind.label(),
+                "label": job.label.clone(),
+                "status": crate::frontend::jobs::job_status_display(job),
+                "stage": job.stage.clone(),
+                "backend": job.backend.label(),
+                "cancel_capability": job.cancel.label(),
+                "can_cancel": job.cancel.can_cancel(),
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::to_string_pretty(&rows).unwrap_or_else(|_| "[]".to_string())
+}
+
+fn cancel_job_tool(state: &mut AppState, id: &str) -> ToolOutcome {
+    match crate::frontend::jobs::cancel_job_by_token(state, id) {
+        Ok(message) => {
+            state.output_log.push(format!("agent cancel_job> {id}"));
+            state.output_log.push(message.clone());
+            ToolOutcome {
+                content: message,
+                is_error: false,
+            }
+        }
+        Err(error) => {
+            let message = format!("cancel_job failed: {error}");
+            state.output_log.push(message.clone());
+            ToolOutcome {
+                content: message,
+                is_error: true,
+            }
+        }
     }
 }
 
@@ -422,6 +510,34 @@ pub fn inspect(state: &AppState, _query: Option<&str>) -> String {
         }
     );
 
+    let running_jobs = crate::frontend::jobs::list_controlled_jobs(state)
+        .into_iter()
+        .filter(|job| job.status.is_running())
+        .collect::<Vec<_>>();
+    if running_jobs.is_empty() {
+        let _ = writeln!(out, "running jobs: none");
+    } else {
+        let summary = running_jobs
+            .iter()
+            .take(5)
+            .map(|job| {
+                format!(
+                    "{} {} ({})",
+                    job.id.token(),
+                    job.label,
+                    job.stage.as_deref().unwrap_or(job.status.label())
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let suffix = if running_jobs.len() > 5 {
+            format!("; +{} more", running_jobs.len() - 5)
+        } else {
+            String::new()
+        };
+        let _ = writeln!(out, "running jobs: {summary}{suffix}");
+    }
+
     let _ = writeln!(out, "status: {}", state.message);
     out
 }
@@ -444,247 +560,4 @@ fn element_histogram(structure: &crate::domain::Structure) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::io::llm::types::ToolCall;
-
-    fn call(command: &str) -> ToolCall {
-        ToolCall {
-            id: "t".to_string(),
-            name: "run_command".to_string(),
-            input: json!({ "command": command }),
-        }
-    }
-
-    fn save_script_call() -> ToolCall {
-        ToolCall {
-            id: "s".to_string(),
-            name: "save_script".to_string(),
-            input: json!({ "filename": "wf", "commands": ["open x.pdb"] }),
-        }
-    }
-
-    /// Gate with the default mode (AutoSafe) and an empty allow-set.
-    fn gated(command: &str) -> bool {
-        needs_confirmation(
-            &call(command),
-            ApprovalMode::AutoSafe,
-            &HashSet::new(),
-            &HashSet::new(),
-        )
-    }
-
-    #[test]
-    fn risk_classification_matches_the_grammar() {
-        assert_eq!(
-            risk_of_call(&call("view background white")),
-            RiskLevel::ReadOnly
-        );
-        assert_eq!(
-            risk_of_call(&call("color chain A red")),
-            RiskLevel::ReadOnly
-        );
-        assert_eq!(risk_of_call(&call("open 1abc.pdb")), RiskLevel::ReadOnly);
-        assert_eq!(risk_of_call(&call("hydrogen add")), RiskLevel::ReadOnly);
-        assert_eq!(
-            risk_of_call(&call("qm recommend thermochemistry")),
-            RiskLevel::ReadOnly
-        );
-        assert_eq!(
-            risk_of_call(&call("phosphorylate --protein active --at A:1")),
-            RiskLevel::Mutating
-        );
-        assert_eq!(
-            risk_of_call(&call("save image out.png")),
-            RiskLevel::FileWrite
-        );
-        assert_eq!(risk_of_call(&save_script_call()), RiskLevel::FileWrite);
-        assert_eq!(risk_of_call(&call("md build")), RiskLevel::Expensive);
-        assert_eq!(
-            risk_of_call(&call("qm energy --method r2scan-3c")),
-            RiskLevel::Expensive
-        );
-        assert_eq!(
-            risk_of_call(&call("dock --receptor active --ligand 2")),
-            RiskLevel::Expensive
-        );
-        assert_eq!(
-            risk_of_call(&call("score --receptor active")),
-            RiskLevel::Expensive
-        );
-        assert_eq!(risk_of_call(&call("run setup.sls")), RiskLevel::Destructive);
-        // A bare `*.sls` token runs as a script via the console's pre-clap
-        // shortcut, so it must classify Destructive like an explicit `run`.
-        assert_eq!(risk_of_call(&call("setup.sls")), RiskLevel::Destructive);
-        assert_eq!(
-            risk_of_call(&call("delete chain A")),
-            RiskLevel::Destructive
-        );
-    }
-
-    #[test]
-    fn structure_editing_commands_are_never_read_only() {
-        // The silent-bypass bug: PTM / structure-editing verbs must not auto-run
-        // as if read-only. Each must be Mutating; `delete` Destructive.
-        for command in [
-            "phosphorylate --protein active --at A:84",
-            "acetylate --protein active --at A:120",
-            "methylate --protein active --at A:9",
-            "lipidate --protein active --at A:3",
-            "ubiquitinate --protein active --at A:48",
-            "glycosylate --protein active",
-            "glycan GlcNAc",
-        ] {
-            assert_eq!(
-                risk_of_call(&call(command)),
-                RiskLevel::Mutating,
-                "{command}"
-            );
-            assert!(
-                gated_in(command, ApprovalMode::Manual),
-                "{command} must gate in Manual"
-            );
-        }
-        assert_eq!(
-            risk_of_call(&call("save image out.png")),
-            RiskLevel::FileWrite
-        );
-        assert!(gated_in("save image out.png", ApprovalMode::Manual));
-        assert_eq!(
-            risk_of_call(&call("delete chain A")),
-            RiskLevel::Destructive
-        );
-    }
-
-    fn gated_in(command: &str, mode: ApprovalMode) -> bool {
-        needs_confirmation(&call(command), mode, &HashSet::new(), &HashSet::new())
-    }
-
-    #[test]
-    fn autosafe_runs_edits_but_gates_writes_compute_and_destructive() {
-        assert!(!gated("view background white"));
-        assert!(!gated("phosphorylate --protein active --at A:1"));
-        assert!(gated("save image out.png"));
-        assert!(gated("qm energy"));
-        assert!(gated("delete chain A"));
-        assert!(needs_confirmation(
-            &save_script_call(),
-            ApprovalMode::AutoSafe,
-            &HashSet::new(),
-            &HashSet::new(),
-        ));
-    }
-
-    #[test]
-    fn manual_gates_everything_but_read_only() {
-        assert!(!gated_in("view background white", ApprovalMode::Manual));
-        assert!(gated_in("save image out.png", ApprovalMode::Manual));
-        assert!(gated_in("qm energy", ApprovalMode::Manual));
-        assert!(gated_in("delete chain A", ApprovalMode::Manual));
-    }
-
-    #[test]
-    fn auto_runs_everything_except_destructive() {
-        assert!(!gated_in("qm energy", ApprovalMode::Auto));
-        assert!(!gated_in("save image out.png", ApprovalMode::Auto));
-        assert!(gated_in("delete chain A", ApprovalMode::Auto));
-    }
-
-    #[test]
-    fn destructive_always_confirms_and_allow_set_cannot_bypass_it() {
-        let mut verbs = HashSet::new();
-        verbs.insert("delete".to_string());
-        let mut risks = HashSet::new();
-        risks.insert(RiskLevel::Destructive);
-        for mode in ApprovalMode::all() {
-            if mode == ApprovalMode::Plan {
-                continue; // Plan never executes; the gate is not consulted
-            }
-            for command in ["delete chain A", "run setup.sls", "setup.sls"] {
-                assert!(
-                    needs_confirmation(&call(command), mode, &verbs, &risks),
-                    "{command} must confirm in {mode:?} even with an allow-set"
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn allow_set_suppresses_gating_for_verb_and_risk() {
-        // Allowing the `qm` verb auto-runs qm in AutoSafe.
-        let mut verbs = HashSet::new();
-        verbs.insert("qm".to_string());
-        assert!(!needs_confirmation(
-            &call("qm energy"),
-            ApprovalMode::AutoSafe,
-            &verbs,
-            &HashSet::new()
-        ));
-        // Allowing the whole Expensive level auto-runs dock too.
-        let mut risks = HashSet::new();
-        risks.insert(RiskLevel::Expensive);
-        assert!(!needs_confirmation(
-            &call("dock --receptor active"),
-            ApprovalMode::AutoSafe,
-            &HashSet::new(),
-            &risks,
-        ));
-    }
-
-    #[test]
-    fn unparseable_command_is_read_only_so_it_runs_and_self_reports_the_error() {
-        // An invalid command reaches no effect (it errors before dispatch), so
-        // gating it would only nag the user; let it run and fail instead.
-        assert_eq!(risk_of_call(&call("inspect")), RiskLevel::ReadOnly);
-        assert!(!gated("frobnicate the molecule"));
-    }
-
-    #[test]
-    fn perception_tools_are_never_gated() {
-        let inspect_call = ToolCall {
-            id: "t".to_string(),
-            name: "inspect".to_string(),
-            input: json!({}),
-        };
-        let recommend = ToolCall {
-            id: "t".to_string(),
-            name: "recommend_method".to_string(),
-            input: json!({ "task": "thermochemistry" }),
-        };
-        for c in [&inspect_call, &recommend] {
-            assert_eq!(risk_of_call(c), RiskLevel::ReadOnly);
-            assert!(!needs_confirmation(
-                c,
-                ApprovalMode::Manual,
-                &HashSet::new(),
-                &HashSet::new()
-            ));
-        }
-    }
-
-    #[test]
-    fn save_script_writes_and_rejects_paths() {
-        let mut state = AppState::scratch(Default::default(), Vec::new());
-        // A bare name writes a .sls file.
-        let ok = save_script_tool(
-            &mut state,
-            &json!({ "filename": "demo", "commands": ["fetch 4hhb", "color hetero"] }),
-        );
-        assert!(!ok.is_error, "expected success: {}", ok.content);
-        assert!(ok.content.contains("demo.sls"));
-        // A path with directories is rejected.
-        let bad = save_script_tool(
-            &mut state,
-            &json!({ "filename": "../evil", "commands": [] }),
-        );
-        assert!(bad.is_error);
-    }
-
-    #[test]
-    fn clamp_truncates_large_output() {
-        let big = "x".repeat(MAX_RESULT_CHARS + 50);
-        let clamped = clamp_result(&big);
-        assert!(clamped.ends_with("… (truncated)"));
-        assert!(clamped.chars().count() < big.chars().count());
-    }
-}
+mod tests;

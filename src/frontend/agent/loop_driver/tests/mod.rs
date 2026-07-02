@@ -27,8 +27,10 @@ fn fake_qm_job(
         label: "qm optimize".to_string(),
         task_run_id: 0,
         job: AgentHeavyJob::Qm(RunningQmJob {
-            cancel: Arc::new(AtomicBool::new(false)),
+            cancel: crate::wire::JobCancelHandle::from_flag(Arc::new(AtomicBool::new(false))),
             receiver: sender,
+            latest_stage: None,
+            cancel_requested: false,
         }),
     }
 }

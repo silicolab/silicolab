@@ -48,14 +48,23 @@ pub(crate) fn render_assistant_panel(
         .iter()
         .map(|item| item.preview().to_string())
         .collect();
-    // Background jobs running for the active conversation. Tagged jobs from other
-    // conversations stay hidden.
-    let running_jobs: Vec<(u64, String, u64)> = state
+    // Background jobs running for the active conversation. Build this from the
+    // unified snapshot, then filter by the conversation-owned agent ids.
+    let active_agent_ids: std::collections::HashSet<u64> = state
         .jobs
         .agent_jobs
         .iter()
         .filter(|job| job.conversation == active_id)
-        .map(|job| (job.id, job.label.clone(), job.task_run_id))
+        .map(|job| job.id)
+        .collect();
+    let running_jobs: Vec<crate::frontend::jobs::LiveJobSnapshot> = state
+        .jobs
+        .list_live_snapshots(state.active_task_run)
+        .into_iter()
+        .filter(|job| match job.id {
+            crate::frontend::jobs::JobControlId::Agent(id) => active_agent_ids.contains(&id),
+            _ => false,
+        })
         .collect();
 
     let panel_rect = ui.available_rect_before_wrap();

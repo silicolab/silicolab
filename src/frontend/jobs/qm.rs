@@ -1,12 +1,16 @@
-use std::sync::{Arc, atomic::AtomicBool, mpsc::Receiver};
+use std::sync::mpsc::Receiver;
 
 use crate::engines::qm::{QmJob, QmOutcome};
-use crate::wire::{Engine, EngineOutcome, EngineRequest, Executor, JobUpdate, run_job};
+use crate::wire::{
+    Engine, EngineOutcome, EngineRequest, Executor, JobCancelHandle, JobUpdate, run_job,
+};
 
 /// A background quantum-chemistry (hartree) job the UI is polling.
 pub struct RunningQmJob {
-    pub cancel: Arc<AtomicBool>,
+    pub cancel: JobCancelHandle,
     pub receiver: Receiver<QmWorkerMessage>,
+    pub latest_stage: Option<String>,
+    pub cancel_requested: bool,
 }
 
 pub enum QmWorkerMessage {
@@ -20,15 +24,19 @@ pub enum QmWorkerMessage {
 /// then a `Finished` outcome or `Failed` error. Caller stores the handle in
 /// [`JobManager`].
 pub fn spawn_qm_job(job: QmJob, threads: Option<usize>) -> RunningQmJob {
+    let executor = if cfg!(test) {
+        Executor::InProcess
+    } else {
+        Executor::LocalSubprocess
+    };
     let running = run_job(
         EngineRequest::with_cores(Engine::Qm(job), threads),
-        Executor::InProcess,
+        executor,
     );
-    // The QM job rides the shared run handle; adapt its updates to the message the
-    // task UI already polls. An in-process job cancels through the shared flag.
-    let cancel = running
-        .cancel_flag()
-        .expect("an in-process job cancels via the cooperative flag");
+    // Production runs QM in a subprocess so Cancel can kill an opaque hartree
+    // calculation without requiring in-process preemption hooks. Tests keep the
+    // in-process path because Rust's test harness is not the self-exec worker.
+    let cancel = running.cancel_handle();
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         while let Ok(update) = running.updates().recv() {
@@ -48,5 +56,10 @@ pub fn spawn_qm_job(job: QmJob, threads: Option<usize>) -> RunningQmJob {
         }
     });
 
-    RunningQmJob { cancel, receiver }
+    RunningQmJob {
+        cancel,
+        receiver,
+        latest_stage: None,
+        cancel_requested: false,
+    }
 }

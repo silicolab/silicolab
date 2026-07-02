@@ -96,6 +96,14 @@ fn entry_structure(state: &mut AppState, entry_id: u64) -> Option<Structure> {
 
 pub(crate) fn cancel_pending_docking_request(state: &mut AppState) {
     bind_active_panel_task(state, TaskPanelKind::DockingPrompt);
+    if state.jobs.docking_running() {
+        let _ = crate::frontend::jobs::cancel_controlled_job(
+            state,
+            &crate::frontend::jobs::JobControlId::Local(
+                crate::frontend::jobs::LocalJobSlot::Docking,
+            ),
+        );
+    }
     state.ui.pending_docking = None;
     state.set_message("docking canceled".to_string());
     complete_active_task(state, TaskKind::RunDocking, TaskStatus::Failed);
