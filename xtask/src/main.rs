@@ -1,8 +1,9 @@
 use std::{
     collections::BTreeSet,
-    env, fs, io,
+    env, fs,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Command, Output},
+    time::{Duration, Instant},
 };
 
 fn main() {
@@ -28,30 +29,44 @@ fn run() -> Result<(), String> {
 
 fn pr_check() -> Result<(), String> {
     let repo_root = repo_root()?;
+    let started_at = Instant::now();
 
-    run_cargo(
+    println!("PR checks");
+
+    run_cargo_step(
         &repo_root,
-        "Format",
-        &["fmt", "--all", "--check"],
-        Stdio::inherit(),
+        1,
+        5,
+        "fmt",
+        &["fmt", "--all", "--check", "--quiet"],
     )?;
-    run_cargo(
+    run_cargo_step(
         &repo_root,
-        "Clippy",
-        &["clippy", "--workspace", "--all-targets", "--all-features"],
-        Stdio::inherit(),
+        2,
+        5,
+        "clippy",
+        &[
+            "clippy",
+            "--workspace",
+            "--all-targets",
+            "--all-features",
+            "--quiet",
+        ],
     )?;
-    assert_worker_pure_rust(&repo_root)?;
-    assert_rust_file_sizes(&repo_root)?;
-    run_cargo(
+    assert_worker_pure_rust(&repo_root, 3, 5)?;
+    assert_rust_file_sizes(&repo_root, 4, 5)?;
+    run_cargo_step(
         &repo_root,
-        "Test",
-        &["test", "--workspace", "--all-features"],
-        Stdio::inherit(),
+        5,
+        5,
+        "test",
+        &["test", "--workspace", "--all-features", "--quiet"],
     )?;
 
-    println!();
-    println!("PR checks passed.");
+    println!(
+        "ok PR checks passed ({})",
+        format_duration(started_at.elapsed())
+    );
     Ok(())
 }
 
@@ -62,31 +77,33 @@ fn repo_root() -> Result<PathBuf, String> {
         .ok_or_else(|| "could not resolve repository root".to_owned())
 }
 
-fn run_cargo(repo_root: &Path, name: &str, args: &[&str], stdout: Stdio) -> Result<(), String> {
-    println!();
-    println!("==> {name}");
+fn run_cargo_step(
+    repo_root: &Path,
+    index: usize,
+    total: usize,
+    name: &str,
+    args: &[&str],
+) -> Result<(), String> {
+    let started_at = Instant::now();
+    print_step(index, total, name);
+    let output = cargo_output(repo_root, args)?;
 
-    let status = Command::new("cargo")
-        .args(args)
-        .current_dir(repo_root)
-        .env("CARGO_TERM_COLOR", "always")
-        .env("RUSTFLAGS", "-D warnings")
-        .env("CARGO_PROFILE_DEV_DEBUG", "line-tables-only")
-        .stdout(stdout)
-        .stderr(Stdio::inherit())
-        .status()
-        .map_err(|error| format!("failed to run cargo {}: {error}", args.join(" ")))?;
-
-    if status.success() {
-        Ok(())
-    } else {
-        Err(format!("{name} failed with {status}."))
+    if !output.status.success() {
+        print_command_failure("cargo", args, &output);
+        return Err(format!("{name} failed with {}.", output.status));
     }
+
+    println!("ok ({})", format_duration(started_at.elapsed()));
+    Ok(())
 }
 
-fn assert_worker_pure_rust(repo_root: &Path) -> Result<(), String> {
-    println!();
-    println!("==> Worker is pure Rust");
+fn print_step(index: usize, total: usize, name: &str) {
+    print!("[{index}/{total}] {name} ... ");
+}
+
+fn assert_worker_pure_rust(repo_root: &Path, index: usize, total: usize) -> Result<(), String> {
+    let started_at = Instant::now();
+    print_step(index, total, "worker dependency purity");
 
     let output = cargo_output(
         repo_root,
@@ -105,10 +122,24 @@ fn assert_worker_pure_rust(repo_root: &Path) -> Result<(), String> {
         ],
     )?;
 
-    io::copy(&mut output.stderr.as_slice(), &mut io::stderr())
-        .map_err(|error| format!("failed to print cargo tree diagnostics: {error}"))?;
-
     if !output.status.success() {
+        print_command_failure(
+            "cargo",
+            &[
+                "tree",
+                "--color",
+                "never",
+                "-p",
+                "silicolab-compute",
+                "--target",
+                "x86_64-unknown-linux-musl",
+                "-e",
+                "normal,build",
+                "--prefix",
+                "none",
+            ],
+            &output,
+        );
         return Err(format!(
             "worker dependency check failed with {}.",
             output.status
@@ -117,9 +148,6 @@ fn assert_worker_pure_rust(repo_root: &Path) -> Result<(), String> {
 
     let tree = String::from_utf8_lossy(&output.stdout);
     let tree_lines: BTreeSet<_> = tree.lines().collect();
-    for line in &tree_lines {
-        println!("{line}");
-    }
 
     let native_dependencies: Vec<_> = tree_lines
         .iter()
@@ -132,8 +160,14 @@ fn assert_worker_pure_rust(repo_root: &Path) -> Result<(), String> {
         .collect();
 
     if native_dependencies.is_empty() {
+        println!(
+            "ok ({} deps, {})",
+            tree_lines.len(),
+            format_duration(started_at.elapsed())
+        );
         Ok(())
     } else {
+        println!("failed");
         for dependency in native_dependencies {
             eprintln!("{dependency}");
         }
@@ -144,7 +178,7 @@ fn assert_worker_pure_rust(repo_root: &Path) -> Result<(), String> {
     }
 }
 
-fn cargo_output(repo_root: &Path, args: &[&str]) -> Result<std::process::Output, String> {
+fn cargo_output(repo_root: &Path, args: &[&str]) -> Result<Output, String> {
     Command::new("cargo")
         .args(args)
         .current_dir(repo_root)
@@ -155,9 +189,9 @@ fn cargo_output(repo_root: &Path, args: &[&str]) -> Result<std::process::Output,
         .map_err(|error| format!("failed to run cargo {}: {error}", args.join(" ")))
 }
 
-fn assert_rust_file_sizes(repo_root: &Path) -> Result<(), String> {
-    println!();
-    println!("==> Rust file size");
+fn assert_rust_file_sizes(repo_root: &Path, index: usize, total: usize) -> Result<(), String> {
+    let started_at = Instant::now();
+    print_step(index, total, "rust file size");
 
     let output = Command::new("git")
         .args(["ls-files", "--", "*.rs"])
@@ -165,10 +199,8 @@ fn assert_rust_file_sizes(repo_root: &Path) -> Result<(), String> {
         .output()
         .map_err(|error| format!("failed to list tracked Rust files: {error}"))?;
 
-    io::copy(&mut output.stderr.as_slice(), &mut io::stderr())
-        .map_err(|error| format!("failed to print git diagnostics: {error}"))?;
-
     if !output.status.success() {
+        print_command_failure("git", &["ls-files", "--", "*.rs"], &output);
         return Err(format!(
             "failed to list tracked Rust files with {}.",
             output.status
@@ -177,12 +209,18 @@ fn assert_rust_file_sizes(repo_root: &Path) -> Result<(), String> {
 
     let files = String::from_utf8(output.stdout)
         .map_err(|error| format!("git produced non-UTF-8 file output: {error}"))?;
-    let oversized_files = oversized_rust_files(repo_root, files.lines())?;
+    let rust_files: Vec<_> = files.lines().collect();
+    let oversized_files = oversized_rust_files(repo_root, rust_files.iter().copied())?;
 
     if oversized_files.is_empty() {
-        println!("All Rust source files are within the 800 physical-line limit.");
+        println!(
+            "ok ({} files, {})",
+            rust_files.len(),
+            format_duration(started_at.elapsed())
+        );
         Ok(())
     } else {
+        println!("failed");
         for (path, line_count) in oversized_files {
             eprintln!("{path} has {line_count} physical lines (limit 800).");
         }
@@ -213,5 +251,34 @@ fn physical_line_count(contents: &[u8]) -> usize {
         newline_count
     } else {
         newline_count + usize::from(!contents.is_empty())
+    }
+}
+
+fn print_command_failure(program: &str, args: &[&str], output: &Output) {
+    println!("failed");
+    eprintln!("command: {program} {}", args.join(" "));
+    print_stream("stdout", &output.stdout);
+    print_stream("stderr", &output.stderr);
+}
+
+fn print_stream(name: &str, bytes: &[u8]) {
+    let text = String::from_utf8_lossy(bytes);
+    if text.trim().is_empty() {
+        return;
+    }
+
+    eprintln!("--- {name} ---");
+    eprint!("{text}");
+    if !text.ends_with('\n') {
+        eprintln!();
+    }
+}
+
+fn format_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs_f64();
+    if seconds < 10.0 {
+        format!("{seconds:.1}s")
+    } else {
+        format!("{seconds:.0}s")
     }
 }
