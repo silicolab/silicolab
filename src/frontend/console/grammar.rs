@@ -617,6 +617,26 @@ pub(crate) fn command_risk(command: &str) -> RiskLevel {
     }
 }
 
+/// Whether a raw `.sls` line would be accepted by the console — either a bare
+/// script-path shortcut or a line that parses under the grammar. Used to reject
+/// skill templates that reference a non-existent command or flag at load time
+/// (`command_risk` returns `ReadOnly` on a parse failure, so it can't be used to
+/// detect one).
+///
+/// Caveat: the catch-all verbs (`qm`, `md`, `disorder`) take their tail via
+/// `trailing_var_arg`, so an unknown flag on those verbs still parses here and
+/// only fails when the engine runs the line. This filter guarantees the verb
+/// exists and the line is structurally valid — not that every flag is.
+pub(crate) fn command_parses(command: &str) -> bool {
+    if super::looks_like_script_path(command) {
+        return true;
+    }
+    let Ok(words) = super::shell_words(command) else {
+        return false;
+    };
+    root_command().try_get_matches_from(&words).is_ok()
+}
+
 fn render_clap_error(err: clap::Error) -> Result<String> {
     use clap::error::ErrorKind;
     match err.kind() {
@@ -671,4 +691,22 @@ pub(crate) fn parse_command(words: &[String]) -> std::result::Result<Command, St
     Root::from_arg_matches(&matches)
         .map(|root| root.command)
         .map_err(|err| err.to_string())
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    #[test]
+    fn command_parses_accepts_valid_and_rejects_unknown_verbs() {
+        assert!(command_parses("representation cartoon"));
+        assert!(command_parses("dock --receptor active --ligand 0"));
+        assert!(!command_parses("notacommand --wat"));
+        assert!(!command_parses("frobnicate --foo bar")); // unknown verb -> parse error
+
+        // Catch-all verbs (qm/md/disorder) use trailing_var_arg, so they accept
+        // any tail; command_parses only rejects unknown verbs / structurally-
+        // invalid lines, not unknown flags on these verbs.
+        assert!(command_parses("qm --this-flag-does-not-exist")); // qm's trailing_var_arg accepts any tail
+    }
 }

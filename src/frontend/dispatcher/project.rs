@@ -79,6 +79,9 @@ pub(crate) fn reset_transient_state(state: &mut AppState) {
     // project doesn't leave stale (and unreachable) task tabs docked. Fixed-view
     // placement is untouched.
     state.ui.layout.dock.clear_task_tabs();
+    // A workspace change alters which project skills apply; drop the agent's
+    // skills cache so the next turn reloads them for the new `project_root`.
+    state.ui.agent.invalidate_skills();
 }
 
 pub(crate) fn replace_workspace_from_project(

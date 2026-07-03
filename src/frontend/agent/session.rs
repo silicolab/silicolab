@@ -122,7 +122,7 @@ pub struct AssistantConversation {
     /// `tool_result` blocks gathered so far in the current batch; flushed into a
     /// single neutral `Tool` message when the batch completes.
     pub collected_results: Vec<ContentBlock>,
-    /// Command verbs (the top-level name, or `save_script`) the user chose to
+    /// Command verbs (the top-level name, or `save_skill`) the user chose to
     /// auto-allow for the rest of this conversation. Checked before the approval
     /// gate; never overrides the `Destructive` floor.
     pub allowed_verbs: HashSet<String>,
@@ -250,6 +250,12 @@ impl AssistantConversation {
 pub struct AgentSession {
     pub conversations: Vec<AssistantConversation>,
     pub active_conversation: AssistantConversationId,
+    /// Skills available to the agent (built-in + user + project). Loaded lazily
+    /// on the first turn and reloaded after authoring (`save_skill`) or a
+    /// workspace change — project skills are project-scoped, so switching or
+    /// closing a project invalidates this cache (see `invalidate_skills`).
+    pub skills: Vec<crate::skills::Skill>,
+    pub skills_loaded: bool,
     next_conversation_id: u64,
     next_conversation_number: u64,
     pub renaming_conversation: Option<AssistantConversationId>,
@@ -276,6 +282,8 @@ impl Default for AgentSession {
                 "Chat 1".to_string(),
             )],
             active_conversation,
+            skills: Vec::new(),
+            skills_loaded: false,
             next_conversation_id: 2,
             next_conversation_number: 2,
             renaming_conversation: None,
@@ -302,6 +310,27 @@ impl DerefMut for AgentSession {
 }
 
 impl AgentSession {
+    /// Load skills on first use (built-in + user + project). Idempotent.
+    pub fn ensure_skills_loaded(&mut self, project_root: Option<std::path::PathBuf>) {
+        if !self.skills_loaded {
+            self.skills = crate::frontend::agent::skills_bridge::load_agent_skills(project_root);
+            self.skills_loaded = true;
+        }
+    }
+
+    /// Force a reload (e.g. after `save_skill` writes a new file).
+    pub fn reload_skills(&mut self, project_root: Option<std::path::PathBuf>) {
+        self.skills = crate::frontend::agent::skills_bridge::load_agent_skills(project_root);
+        self.skills_loaded = true;
+    }
+
+    /// Drop the loaded-skills cache so the next turn reloads them. Called on
+    /// workspace changes (project open/close/switch): project skills are
+    /// project-scoped, and the reload picks up the new `project_root`.
+    pub fn invalidate_skills(&mut self) {
+        self.skills_loaded = false;
+    }
+
     pub fn active(&self) -> &AssistantConversation {
         self.conversations
             .iter()
@@ -490,6 +519,19 @@ mod tests {
         assert_eq!(session.history.len(), 1);
         assert_eq!(session.transcript.len(), 1);
         assert_eq!(session.input, "draft");
+    }
+
+    #[test]
+    fn invalidate_skills_clears_loaded_flag_so_next_turn_reloads() {
+        let mut session = AgentSession {
+            skills_loaded: true,
+            ..Default::default()
+        };
+        session.invalidate_skills();
+        assert!(
+            !session.skills_loaded,
+            "invalidate_skills must clear the cache so ensure_skills_loaded reloads"
+        );
     }
 
     #[test]
