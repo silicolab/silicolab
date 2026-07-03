@@ -66,7 +66,7 @@ pub fn gated_pending(state: &AppState) -> Vec<ToolCall> {
         .collect()
 }
 
-/// In `Plan` mode the doer tools (`run_command`, `save_script`) never execute —
+/// In `Plan` mode the doer tools (`run_command`, `save_skill`) never execute —
 /// each is recorded as a not-run proposal. Read-only perception (`inspect`,
 /// `recommend_method`) still runs, since it changes nothing and the model needs
 /// to see the workspace to propose a grounded plan.
@@ -74,7 +74,7 @@ fn propose_in_plan_mode(state: &mut AppState, ctx: &egui::Context) {
     while let Some(call) = state.ui.agent.pending_calls.pop_front() {
         if matches!(
             call.name.as_str(),
-            "run_command" | "save_script" | "cancel_job"
+            "run_command" | "save_skill" | "cancel_job"
         ) {
             push_tool_call_entry(state, &call);
             let summary = format!(

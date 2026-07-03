@@ -51,7 +51,8 @@ in the console). One command per call.
 - `inspect` returns a read-only view of the current workspace.
 - `list_jobs` returns local, assistant, and remote jobs from the unified job control plane.
 - `cancel_job` requests cancellation for a job id returned by `list_jobs`.
-- `save_script` saves a reusable `.sls` workflow of commands to the project.
+- `save_skill` saves a reusable, discoverable skill (a named set of `.sls` command steps) so a \
+workflow can be found again via `recommend_method` and replayed with placeholders filled in.
 
 Working style:
 - Call `inspect` before acting when you are unsure of the current state — never guess \
@@ -97,11 +98,11 @@ The full command catalog and a method-selection guide follow.";
 /// the always-on method-selection table. Holds no volatile per-turn state (that
 /// flows through `inspect`), so it caches; the KB table is built from compiled-in
 /// data and is byte-stable across turns.
-fn system_prompt() -> String {
+fn system_prompt(skills: &[crate::skills::Skill]) -> String {
     format!(
         "{PERSONA}\n\n{}\n\n{}",
         crate::frontend::console::command_catalog(),
-        crate::engines::methods::kb_table()
+        crate::skills::skills_manifest(skills)
     )
 }
 
@@ -142,12 +143,12 @@ fn describe_call(call: &crate::io::llm::types::ToolCall) -> String {
             .and_then(|value| value.as_str())
             .map(|task| format!("recommend_method {task}"))
             .unwrap_or_else(|| "recommend_method".to_string()),
-        "save_script" => call
+        "save_skill" => call
             .input
-            .get("filename")
+            .get("name")
             .and_then(|value| value.as_str())
-            .map(|filename| format!("save_script {filename}"))
-            .unwrap_or_else(|| "save_script".to_string()),
+            .map(|name| format!("save_skill {name}"))
+            .unwrap_or_else(|| "save_skill".to_string()),
         other => other.to_string(),
     }
 }

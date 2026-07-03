@@ -19,5 +19,6 @@ pub mod io;
 pub mod launch;
 pub mod md;
 pub mod payload;
+pub mod skills;
 pub mod wire;
 pub mod workflows;

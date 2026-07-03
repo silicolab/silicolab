@@ -9,11 +9,16 @@ fn call(command: &str) -> ToolCall {
     }
 }
 
-fn save_script_call() -> ToolCall {
+fn save_skill_call() -> ToolCall {
     ToolCall {
         id: "s".to_string(),
-        name: "save_script".to_string(),
-        input: json!({ "filename": "wf", "commands": ["open x.pdb"] }),
+        name: "save_skill".to_string(),
+        input: json!({
+            "name": "demo-skill",
+            "description": "A demo skill for tests.",
+            "triggers": ["demo"],
+            "commands": ["representation cartoon"]
+        }),
     }
 }
 
@@ -50,7 +55,7 @@ fn risk_classification_matches_the_grammar() {
         risk_of_call(&call("save image out.png")),
         RiskLevel::FileWrite
     );
-    assert_eq!(risk_of_call(&save_script_call()), RiskLevel::FileWrite);
+    assert_eq!(risk_of_call(&save_skill_call()), RiskLevel::FileWrite);
     assert_eq!(risk_of_call(&call("md build")), RiskLevel::Expensive);
     assert_eq!(
         risk_of_call(&call("qm energy --method r2scan-3c")),
@@ -116,7 +121,7 @@ fn autosafe_runs_edits_but_gates_writes_compute_and_destructive() {
     assert!(gated("qm energy"));
     assert!(gated("delete chain A"));
     assert!(needs_confirmation(
-        &save_script_call(),
+        &save_skill_call(),
         ApprovalMode::AutoSafe,
         &HashSet::new(),
         &HashSet::new(),
@@ -207,21 +212,249 @@ fn perception_tools_are_never_gated() {
     }
 }
 
-#[test]
-fn save_script_writes_and_rejects_paths() {
+/// Point `state.workspace` at a temp-dir project so `save_skill_tool` writes
+/// under a disposable `skills/` directory instead of the real `~/.silicolab`.
+fn state_with_temp_project(tag: &str) -> (AppState, std::path::PathBuf) {
+    let root = std::env::temp_dir().join(format!(
+        "sl-save-skill-test-{tag}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::create_dir_all(&root).unwrap();
     let mut state = AppState::scratch(Default::default(), Vec::new());
-    let ok = save_script_tool(
+    state.workspace = crate::backend::project::WorkspaceSession::Project(
+        crate::backend::project::ProjectSession::from_root(root.clone(), "test".to_string()),
+    );
+    (state, root)
+}
+
+/// A workspace change (project open/close/switch) routes through
+/// `reset_transient_state`, which must invalidate the agent's skills cache so
+/// the next turn reloads project-scoped skills for the new root. Without this,
+/// opening a project mid-session leaves its `skills/` undiscovered.
+#[test]
+fn reset_transient_state_invalidates_skills_cache() {
+    let (mut state, root) = state_with_temp_project("skills-invalidate");
+    state.ui.agent.skills_loaded = true;
+    crate::frontend::dispatcher::reset_transient_state(&mut state);
+    assert!(
+        !state.ui.agent.skills_loaded,
+        "workspace change must invalidate the skills cache"
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn save_skill_writes_valid_and_rejects_invalid() {
+    let (mut state, root) = state_with_temp_project("valid-invalid");
+
+    // Valid skill writes and reports success.
+    let ok = save_skill_tool(
         &mut state,
-        &json!({ "filename": "demo", "commands": ["fetch 4hhb", "color hetero"] }),
+        &json!({
+            "name": "demo-skill",
+            "description": "Set a cartoon representation.",
+            "triggers": ["demo", "cartoon"],
+            "commands": ["representation cartoon"]
+        }),
+    );
+    assert!(!ok.is_error, "valid skill should save: {}", ok.content);
+    let written = root.join("skills").join("demo-skill").join("SKILL.md");
+    assert!(written.is_file(), "expected {} to exist", written.display());
+
+    // The written file round-trips through the parser/validator.
+    let text = std::fs::read_to_string(&written).unwrap();
+    let parsed = crate::skills::parse_skill_md(&text, crate::skills::SkillSource::User)
+        .expect("written SKILL.md parses");
+    crate::skills::validate_skill(&parsed).expect("written skill validates");
+    assert_eq!(parsed.name, "demo-skill");
+    // Saved skills default to lookup-only so they don't inflate the always-on
+    // manifest; they surface through recommend_method / triggers instead.
+    assert!(
+        !parsed.in_table,
+        "saved skills must default to in_table: false"
+    );
+
+    // Invalid: bad name (not kebab-case) is rejected, nothing panics, and no
+    // file is written for it.
+    let bad = save_skill_tool(
+        &mut state,
+        &json!({
+            "name": "Bad Name",
+            "description": "x",
+            "triggers": ["demo"],
+            "commands": ["representation cartoon"]
+        }),
+    );
+    assert!(bad.is_error, "non-kebab name must be rejected");
+    assert!(!root.join("skills").join("Bad Name").exists());
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Regression for the path-traversal finding: `render_skill_md` used to emit
+/// the `name:` line unquoted, so a value like `good-name #/../../evil` was
+/// truncated by YAML's comment rule to `good-name` when read back — passing
+/// `validate_skill` — while the write path was built from the RAW,
+/// unvalidated input, so `dir = base.join(name)` resolved the `../../` and
+/// escaped the skills tree. `name:` is now quoted via `yaml_scalar` (so the
+/// full raw string round-trips and a non-kebab name is correctly rejected),
+/// and the write path is built from the validated `skill.name`, never the
+/// raw input. Every listed name must be rejected with nothing written
+/// anywhere, in or out of the temp skills tree.
+#[test]
+fn save_skill_rejects_path_traversal_names_and_writes_nothing() {
+    let (mut state, root) = state_with_temp_project("traversal");
+
+    for traversal_name in [
+        "good-name #/../../evil",
+        "../../evil",
+        "Bad Name",
+        "../evil",
+    ] {
+        let result = save_skill_tool(
+            &mut state,
+            &json!({
+                "name": traversal_name,
+                "description": "Attempted path traversal via yaml comment truncation.",
+                "triggers": ["evil"],
+                "commands": ["representation cartoon"]
+            }),
+        );
+        assert!(
+            result.is_error,
+            "traversal-y name `{traversal_name}` must be rejected: {}",
+            result.content
+        );
+
+        // Nothing escaped the temp project root.
+        let outside = root.parent().unwrap().join("evil");
+        assert!(
+            !outside.exists(),
+            "`{traversal_name}` must not write outside the skills tree"
+        );
+    }
+
+    // Nothing was written under the skills dir at all — every attempt failed
+    // validation before any filesystem side effect.
+    let skills_dir = root.join("skills");
+    if skills_dir.exists() {
+        let entries: Vec<_> = std::fs::read_dir(&skills_dir).unwrap().collect();
+        assert!(
+            entries.is_empty(),
+            "skills dir must have no stray entries from rejected names"
+        );
+    }
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+/// Regression for the `params`/`{placeholder}` finding: the tool description
+/// tells the model to declare placeholders in `params`, but the input schema
+/// had no such property, so `params` was always empty and `validate_skill`
+/// rejected any command referencing a `{placeholder}`. `save_skill` now reads
+/// `params` from the tool input and `render_skill_md` emits a `params:`
+/// block; this must round-trip through `parse_skill_md`/`validate_skill`.
+#[test]
+fn save_skill_with_declared_params_round_trips_placeholder_command() {
+    let (mut state, root) = state_with_temp_project("params");
+
+    let ok = save_skill_tool(
+        &mut state,
+        &json!({
+            "name": "dock-with-params",
+            "description": "Dock a ligand into a receptor using run-time placeholders.",
+            "triggers": ["dock", "ligand"],
+            "commands": ["dock --receptor {receptor} --ligand {ligand}"],
+            "params": [
+                { "name": "receptor", "required": true },
+                { "name": "ligand", "required": true }
+            ]
+        }),
+    );
+    assert!(
+        !ok.is_error,
+        "a skill with declared params for its placeholders should validate and save: {}",
+        ok.content
+    );
+
+    let written = root
+        .join("skills")
+        .join("dock-with-params")
+        .join("SKILL.md");
+    assert!(written.is_file(), "expected {} to exist", written.display());
+
+    let text = std::fs::read_to_string(&written).unwrap();
+    let parsed = crate::skills::parse_skill_md(&text, crate::skills::SkillSource::User)
+        .expect("written SKILL.md parses");
+    crate::skills::validate_skill(&parsed).expect("written skill validates");
+
+    assert_eq!(parsed.params.len(), 2);
+    assert!(
+        parsed
+            .params
+            .iter()
+            .any(|p| p.name == "receptor" && p.required)
+    );
+    assert!(
+        parsed
+            .params
+            .iter()
+            .any(|p| p.name == "ligand" && p.required)
+    );
+    assert_eq!(
+        parsed.command,
+        vec!["dock --receptor {receptor} --ligand {ligand}"]
+    );
+
+    std::fs::remove_dir_all(&root).ok();
+}
+
+#[test]
+fn saved_skill_is_discoverable_via_recommend_method() {
+    let (mut state, root) = state_with_temp_project("recommend");
+
+    let ok = save_skill_tool(
+        &mut state,
+        &json!({
+            "name": "quantum-zzyzx-workflow",
+            "description": "A very specific made-up workflow for the test.",
+            "triggers": ["zzyzx"],
+            "commands": ["representation cartoon"]
+        }),
     );
     assert!(!ok.is_error, "expected success: {}", ok.content);
-    assert!(ok.content.contains("demo.sls"));
 
-    let bad = save_script_tool(
-        &mut state,
-        &json!({ "filename": "../evil", "commands": [] }),
+    // save_skill_tool must have reloaded the session's skills.
+    assert!(
+        state
+            .ui
+            .agent
+            .skills
+            .iter()
+            .any(|s| s.name == "quantum-zzyzx-workflow"),
+        "reload_skills should pick up the newly saved skill"
     );
-    assert!(bad.is_error);
+
+    let out = execute_tool(
+        &mut state,
+        &ToolCall {
+            id: "r".into(),
+            name: "recommend_method".into(),
+            input: json!({ "task": "zzyzx" }),
+        },
+    );
+    assert!(!out.is_error);
+    assert!(
+        out.content.contains("quantum-zzyzx-workflow"),
+        "recommend_method should surface the saved skill: {}",
+        out.content
+    );
+
+    std::fs::remove_dir_all(&root).ok();
 }
 
 #[test]
