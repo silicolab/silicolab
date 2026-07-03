@@ -36,7 +36,7 @@ pub fn load_agent_skills(project_root: Option<PathBuf>) -> Vec<Skill> {
 /// land on an enum-constrained slot.
 fn commands_parse(skill: &Skill) -> bool {
     for line in &skill.command {
-        let substituted = substitute_placeholders(line);
+        let substituted = skills::substitute_placeholders(line, "0");
         let has_placeholder = substituted != *line;
         if !has_placeholder && !command_parses(&substituted) {
             eprintln!(
@@ -49,44 +49,9 @@ fn commands_parse(skill: &Skill) -> bool {
     true
 }
 
-/// Replace every `{name}` placeholder with `0` so placeholder-free lines can be
-/// parse-checked, and so numeric-position templates (e.g. `translate {dx} {dy}
-/// {dz}` → `translate 0 0 0`) still parse-check cleanly. `0` is not a universal
-/// stand-in — see [`commands_parse`] — so lines that still contain a
-/// placeholder after substitution are not rejected on parse failure.
-fn substitute_placeholders(line: &str) -> String {
-    let mut out = String::with_capacity(line.len());
-    let bytes = line.as_bytes();
-    let mut index = 0;
-    while index < bytes.len() {
-        if bytes[index] == b'{'
-            && let Some(close) = line[index + 1..].find('}')
-        {
-            out.push('0');
-            index = index + 1 + close + 1;
-            continue;
-        }
-        out.push(bytes[index] as char);
-        index += 1;
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn substitutes_placeholders_with_zero() {
-        assert_eq!(
-            substitute_placeholders("dock --ligand {ligand}"),
-            "dock --ligand 0"
-        );
-        assert_eq!(
-            substitute_placeholders("no placeholders"),
-            "no placeholders"
-        );
-    }
 
     #[test]
     fn builtin_skills_all_parse() {
@@ -137,6 +102,26 @@ mod tests {
         assert!(
             !skills.iter().any(|s| s.name == "frobnicate-thing"),
             "a placeholder-free line with an unknown verb must be dropped"
+        );
+    }
+
+    #[test]
+    fn filters_placeholder_free_utf8_lines_intact() {
+        // Regression: the old byte-cast substitution mangled multi-byte UTF-8
+        // into mojibake, so `substituted != *line` misread any non-ASCII
+        // placeholder-free line as templated and the grammar check never ran.
+        let mut skills = vec![test_skill("frobnicate-cafe", &["frobnicate café"], &[])];
+        skills.retain(commands_parse);
+        assert!(
+            skills.is_empty(),
+            "a non-ASCII placeholder-free line with an unknown verb must be dropped"
+        );
+
+        let mut skills = vec![test_skill("open-cafe", &["open café.pdb"], &[])];
+        skills.retain(commands_parse);
+        assert!(
+            skills.iter().any(|s| s.name == "open-cafe"),
+            "a valid non-ASCII line must survive the filter"
         );
     }
 

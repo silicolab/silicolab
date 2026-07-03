@@ -219,8 +219,12 @@ fn is_placeholder(token: &str) -> bool {
     token.starts_with('{') && token.ends_with('}') && token.len() >= 2
 }
 
-/// Extract the `{name}` placeholder names referenced in a command line.
-fn placeholders(line: &str) -> Vec<String> {
+/// Byte spans (brace-inclusive) of every `{…}` group in a command line — the
+/// one scanner behind [`placeholders`] and [`substitute_placeholders`], so
+/// extraction and substitution cannot drift apart. Scanning bytes is safe:
+/// `{` and `}` are ASCII, so they never match inside a multi-byte char, and
+/// every span boundary lands on a char boundary.
+fn placeholder_spans(line: &str) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     let bytes = line.as_bytes();
     let mut index = 0;
@@ -228,15 +232,40 @@ fn placeholders(line: &str) -> Vec<String> {
         if bytes[index] == b'{'
             && let Some(close) = line[index + 1..].find('}')
         {
-            let name = &line[index + 1..index + 1 + close];
-            if !name.is_empty() {
-                out.push(name.to_string());
-            }
-            index = index + 1 + close + 1;
+            let end = index + 1 + close + 1;
+            out.push((index, end));
+            index = end;
             continue;
         }
         index += 1;
     }
+    out
+}
+
+/// Extract the `{name}` placeholder names referenced in a command line.
+/// An empty `{}` group is not a placeholder (there is no name to declare),
+/// though [`substitute_placeholders`] still replaces it.
+fn placeholders(line: &str) -> Vec<String> {
+    placeholder_spans(line)
+        .into_iter()
+        .filter_map(|(start, end)| {
+            let name = &line[start + 1..end - 1];
+            (!name.is_empty()).then(|| name.to_string())
+        })
+        .collect()
+}
+
+/// Replace every `{…}` group in a command line with `value`, copying the
+/// surrounding text through verbatim (multi-byte UTF-8 included).
+pub fn substitute_placeholders(line: &str, value: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut cursor = 0;
+    for (start, end) in placeholder_spans(line) {
+        out.push_str(&line[cursor..start]);
+        out.push_str(value);
+        cursor = end;
+    }
+    out.push_str(&line[cursor..]);
     out
 }
 

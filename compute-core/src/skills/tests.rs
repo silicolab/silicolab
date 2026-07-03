@@ -368,3 +368,25 @@ fn manifest_clamps_a_single_pathological_entry() {
         "clamped entry must point at recommend_method; got:\n{manifest}"
     );
 }
+
+#[test]
+fn substitute_placeholders_replaces_groups_and_keeps_utf8_intact() {
+    assert_eq!(
+        substitute_placeholders("dock --ligand {ligand}", "0"),
+        "dock --ligand 0"
+    );
+    assert_eq!(
+        substitute_placeholders("translate {dx} {dy} {dz}", "0"),
+        "translate 0 0 0"
+    );
+    // Regression: a byte-cast copy turned "café" into "cafÃ©", making a
+    // placeholder-free line compare unequal to its substituted form.
+    assert_eq!(
+        substitute_placeholders("open café.pdb", "0"),
+        "open café.pdb"
+    );
+    assert_eq!(
+        substitute_placeholders("label {text} — café", "0"),
+        "label 0 — café"
+    );
+}
