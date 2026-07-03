@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::backend::tasks::TaskRun;
 
@@ -50,6 +50,58 @@ impl<'a> RunManifest<'a> {
             engine: task.engine_label.as_deref(),
         }
     }
+}
+
+/// File name of the machine-readable series data saved beside a QM run's
+/// `output.txt`.
+pub const SERIES_FILE: &str = "series.json";
+
+/// Numeric results of one QM run, exactly as surfaced by the engine
+/// (`{"version":1,"scf_trace":[...],"opt_trace":[...],"frequencies":[...]}`).
+/// The chart pipeline's on-disk source of truth: raw vectors, not chart specs,
+/// so chart styling can evolve without invalidating saved runs. The schema is
+/// versioned and additive; missing arrays read as empty.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct QmSeries {
+    pub version: u32,
+    #[serde(default)]
+    pub scf_trace: Vec<f64>,
+    #[serde(default)]
+    pub opt_trace: Vec<f64>,
+    #[serde(default)]
+    pub frequencies: Vec<f64>,
+}
+
+impl QmSeries {
+    pub fn from_outcome(outcome: &crate::engines::qm::QmOutcome) -> Self {
+        Self {
+            version: 1,
+            scf_trace: outcome.scf_trace.clone(),
+            opt_trace: outcome.opt_trace.clone(),
+            frequencies: outcome.frequencies.clone(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.scf_trace.is_empty() && self.opt_trace.is_empty() && self.frequencies.is_empty()
+    }
+}
+
+pub fn save_qm_series_file(run_dir: &Path, series: &QmSeries) -> Result<PathBuf> {
+    let path = run_dir.join(SERIES_FILE);
+    let json = serde_json::to_string_pretty(series).context("serialize QM series")?;
+    fs::write(&path, json).with_context(|| format!("write {}", path.display()))?;
+    Ok(path)
+}
+
+pub fn load_qm_series_file(path: &Path) -> Result<QmSeries> {
+    let text = fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    let series: QmSeries =
+        serde_json::from_str(&text).with_context(|| format!("parse {}", path.display()))?;
+    if series.version != 1 {
+        bail!("unsupported series.json version {}", series.version);
+    }
+    Ok(series)
 }
 
 /// Runaway guard for run-directory numbering (far beyond any realistic number of
@@ -176,5 +228,50 @@ mod tests {
         let fallback = ensure_run_dir(&base, "///").unwrap();
         assert_eq!(fallback.file_name().unwrap().to_str().unwrap(), "run");
         let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn qm_series_round_trips_and_rejects_future_versions() {
+        let base = temp_base("series");
+        fs::create_dir_all(&base).unwrap();
+        let series = QmSeries {
+            version: 1,
+            scf_trace: vec![-74.1, -74.9],
+            opt_trace: vec![-74.9],
+            frequencies: vec![4401.2],
+        };
+        let path = save_qm_series_file(&base, &series).unwrap();
+        assert_eq!(path.file_name().unwrap(), SERIES_FILE);
+        assert_eq!(load_qm_series_file(&path).unwrap(), series);
+        fs::write(&path, r#"{"version":2}"#).unwrap();
+        assert!(load_qm_series_file(&path).is_err());
+        let _ = fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn qm_series_missing_arrays_default_to_empty() {
+        let series: QmSeries = serde_json::from_str(r#"{"version":1}"#).unwrap();
+        assert!(series.scf_trace.is_empty());
+        assert!(series.opt_trace.is_empty());
+        assert!(series.frequencies.is_empty());
+    }
+
+    #[test]
+    fn qm_series_from_outcome_copies_the_traces() {
+        let outcome = crate::engines::qm::QmOutcome {
+            energy_hartree: -74.96,
+            converged: true,
+            optimized_structure: None,
+            summary: String::new(),
+            scf_trace: vec![-74.1, -74.96],
+            opt_trace: vec![-74.96],
+            frequencies: Vec::new(),
+        };
+        let series = QmSeries::from_outcome(&outcome);
+        assert_eq!(series.version, 1);
+        assert_eq!(series.scf_trace, outcome.scf_trace);
+        assert_eq!(series.opt_trace, outcome.opt_trace);
+        assert!(!series.is_empty());
+        assert!(QmSeries::default().is_empty());
     }
 }

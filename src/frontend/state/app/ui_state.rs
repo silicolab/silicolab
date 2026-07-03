@@ -135,6 +135,19 @@ pub struct UiState {
     /// purpose: any tool with textual output (QM reports, future engines)
     /// shows it here rather than adding its own window.
     pub text_viewer: Option<TextViewer>,
+    /// Chart loaded in the Plot panel; `None` shows the panel's empty state.
+    pub chart: Option<crate::frontend::state::ChartState>,
+    /// Per-entry "does this run have series.json" memo, filled lazily on first
+    /// row render and invalidated when a QM run finishes — entry rows must
+    /// never stat the disk per frame. Entry ids restart per project, so this is
+    /// cleared on a project switch (`reset_chart_caches`), not per entry.
+    pub chart_availability: std::collections::BTreeMap<u64, bool>,
+    /// Memoized primary-dataset thumbnails for completed task panels, keyed by
+    /// task-run id (`None` = no plottable data). Evicted when the task's run
+    /// finishes so re-runs reload; task-run ids restart per project, so the whole
+    /// map is cleared on a project switch (`reset_chart_caches`).
+    pub task_chart_thumbnails:
+        std::collections::BTreeMap<u64, Option<crate::plot::spec::ChartSpec>>,
     /// Progress of a one-click in-place self-update (the download/replace
     /// triggered from the update badge), distinct from `available_update`
     /// which only records that a newer release *exists*.
@@ -235,6 +248,9 @@ impl Default for UiState {
             trajectory: None,
             available_update: None,
             text_viewer: None,
+            chart: None,
+            chart_availability: std::collections::BTreeMap::new(),
+            task_chart_thumbnails: std::collections::BTreeMap::new(),
             self_update: SelfUpdateStatus::default(),
             agent: crate::frontend::agent::AgentSession::default(),
             markdown_cache: egui_commonmark::CommonMarkCache::default(),

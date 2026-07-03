@@ -71,3 +71,11 @@ this section:
 > LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
+
+## Liberation Sans (embedded font)
+
+`assets/fonts/LiberationSans-Regular.ttf` (Liberation Fonts 2.1.5,
+https://github.com/liberationfonts/liberation-fonts) is compiled into the
+binary and embedded in exported charts (SVG text, PDF font subsets). Licensed
+under the SIL Open Font License, Version 1.1; the full license text is vendored
+at `assets/fonts/LiberationSans-LICENSE`.

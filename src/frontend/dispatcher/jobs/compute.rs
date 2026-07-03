@@ -46,6 +46,50 @@ fn save_qm_output(state: &mut AppState, summary: &str) -> Option<PathBuf> {
     }
 }
 
+/// Persist the machine-readable series data beside the output report so charts
+/// can be rebuilt after restart. Mirrors [`save_qm_output`]: failures are
+/// logged to the Output tab and swallowed. Outcomes with no plottable data
+/// (pre-trace workers) write nothing.
+pub(crate) fn save_qm_series(state: &mut AppState, outcome: &crate::engines::qm::QmOutcome) {
+    let series = crate::backend::runs::QmSeries::from_outcome(outcome);
+    if series.is_empty() {
+        return;
+    }
+    let Some(task_run_id) = state.active_task_run else {
+        return;
+    };
+    let Some(kind) = state.tasks.task_run(task_run_id).map(|task| task.kind) else {
+        return;
+    };
+    if !matches!(
+        kind,
+        TaskKind::RunQmEnergy
+            | TaskKind::RunQmOptimize
+            | TaskKind::RunQmFrequencies
+            | TaskKind::RunQmTransitionState
+    ) {
+        return;
+    }
+    let run_dir = match ensure_active_task_run_dir(state, kind, None) {
+        Ok(run_dir) => run_dir,
+        Err(error) => {
+            state
+                .output_log
+                .push(format!("failed to create QM run directory: {error}"));
+            return;
+        }
+    };
+    match crate::backend::runs::save_qm_series_file(&run_dir, &series) {
+        Ok(path) => state
+            .output_log
+            .push(format!("QM series saved to {}", path.display())),
+        Err(error) => state
+            .output_log
+            .push(format!("failed to save QM series: {error}")),
+    }
+    state.ui.task_chart_thumbnails.remove(&task_run_id);
+}
+
 pub(crate) fn poll_engine_job(state: &mut AppState, ctx: &egui::Context) {
     let Some(mut running) = state.jobs.take_engine() else {
         return;
@@ -159,6 +203,14 @@ pub(crate) fn poll_optimization_job(state: &mut AppState, ctx: &egui::Context) {
                 *state.structure_mut() = structure;
                 state.mark_structure_changed();
                 running.latest_report = Some(report);
+                if running.energy_trace.is_empty() {
+                    running
+                        .energy_trace
+                        .push([0.0, f64::from(report.initial_energy)]);
+                }
+                running
+                    .energy_trace
+                    .push([report.steps as f64, f64::from(report.final_energy)]);
                 saw_progress = true;
                 state.set_source_path(None);
                 state.set_message(format!(
@@ -251,6 +303,7 @@ pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
                 // new entry is added, so the run's source entry is the input
                 // structure, not the optimized result.
                 let output_path = save_qm_output(state, &outcome.summary);
+                save_qm_series(state, &outcome);
                 // A QM run is a heavy calculation; its optimized geometry is
                 // surfaced as a new entry (the original structure is preserved),
                 // matching the convention for entry-producing tasks.
@@ -261,6 +314,7 @@ pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
                         record_task_result_entry(state, task_run_id, entry_id);
                     }
                     set_qm_run_origin(state, entry_id, output_path);
+                    state.ui.chart_availability.remove(&entry_id);
                     changed = true;
                 }
                 state.set_message(format!(

@@ -415,6 +415,21 @@ pub enum AppAction {
     /// Open the saved QM output report of the given QM-produced entry in a
     /// viewer window (triggered by clicking the entry's "QM" badge).
     ShowQmOutput(u64),
+    /// Load a run's saved series data into the Plot panel and reveal it. The
+    /// target is an entry (chart button on a QM-produced entry row) or a task
+    /// run (completed-task panels; single-point runs produce no entry).
+    OpenChart(ChartTarget),
+    /// Switch the Plot panel to another dataset of the loaded run.
+    SelectChartDataset(usize),
+    /// Rename an axis of the Plot panel's active dataset.
+    SetChartAxisLabel {
+        axis: ChartAxis,
+        label: String,
+    },
+    /// Export the Plot panel's active dataset using the dialog's draft
+    /// choices: asks for a save path (rfd), writes the file, and persists the
+    /// choices as the new defaults.
+    ExportChart,
     /// Resize the primary (left) sidebar by a signed delta (drag direction
     /// already applied). The right sidebar and bottom panel resize via
     /// `ResizeArea`.
@@ -508,6 +523,19 @@ impl Notification {
         });
         self
     }
+}
+
+/// What a chart-open request points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartTarget {
+    Entry(u64),
+    TaskRun(u64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChartAxis {
+    X,
+    Y,
 }
 
 /// A visibility change applied to the Style panel's current scope.

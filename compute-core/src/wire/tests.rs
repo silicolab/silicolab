@@ -195,6 +195,9 @@ fn engine_outcome_round_trips_with_optimized_structure() {
         converged: true,
         optimized_structure: Some(structure),
         summary: "relaxed".to_string(),
+        scf_trace: vec![-0.9, -1.0],
+        opt_trace: Vec::new(),
+        frequencies: Vec::new(),
     });
     let json = serde_json::to_vec(&outcome).unwrap();
     let EngineOutcome::Qm(back) = serde_json::from_slice(&json).unwrap() else {
@@ -206,6 +209,7 @@ fn engine_outcome_round_trips_with_optimized_structure() {
     assert_eq!(relaxed.atoms.len(), 2);
     assert!((relaxed.atoms[1].position.z - 0.71).abs() < 1e-6);
     assert!(back.converged);
+    assert_eq!(back.scf_trace, vec![-0.9, -1.0]);
 }
 
 #[test]
@@ -605,4 +609,20 @@ fn validate_gromacs_rejects_an_empty_structure() {
         max_duration: Duration::from_secs(60),
     })));
     assert!(validate_request(&request).is_err());
+}
+
+/// Outcomes written by pre-trace workers must still parse — the new fields
+/// default to empty (same contract as `QmRequest::ts`).
+#[test]
+fn qm_outcome_without_trace_fields_deserializes() {
+    let json = r#"{
+        "energy_hartree": -1.0,
+        "converged": true,
+        "optimized_structure": null,
+        "summary": "E = -1.0 Eh"
+    }"#;
+    let outcome: QmOutcome = serde_json::from_str(json).expect("legacy outcome parses");
+    assert!(outcome.scf_trace.is_empty());
+    assert!(outcome.opt_trace.is_empty());
+    assert!(outcome.frequencies.is_empty());
 }

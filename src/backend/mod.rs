@@ -1,4 +1,5 @@
 pub mod assistant_config;
+pub mod chart_export;
 pub mod config;
 pub mod entries;
 pub mod force_fields;

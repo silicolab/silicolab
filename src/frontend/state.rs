@@ -7,6 +7,7 @@
 
 mod app;
 mod atom_style;
+mod chart;
 mod disorder_prompts;
 mod dock;
 mod docking_prompts;
@@ -19,6 +20,7 @@ mod qm_prompts;
 
 pub use app::*;
 pub use atom_style::*;
+pub use chart::*;
 pub use disorder_prompts::*;
 pub use dock::*;
 pub use docking_prompts::*;

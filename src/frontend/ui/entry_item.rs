@@ -68,9 +68,10 @@ pub(crate) fn render_entry_list_item(
 
         let text_rect = rect.shrink2(egui::vec2(6.0, 0.0));
 
-        // A small chip marks entries produced by a run ("MD" or "QM"). Lay it
-        // out first so the name reserves room. The QM chip is clickable: it
-        // opens the run's saved output report.
+        // A small chip marks entries produced by a run ("MD" or "QM"). Lay
+        // them out first so the name reserves room. The QM chip is clickable
+        // (opens the saved output report); QM runs with saved series data get
+        // a second, chart chip.
         let chip_label = state.entries.entry(entry_id).and_then(|entry| {
             if entry.origin.is_md_run() {
                 Some("MD")
@@ -81,7 +82,9 @@ pub(crate) fn render_entry_list_item(
             }
         });
         let is_qm = chip_label == Some("QM");
-        let chip = chip_label.map(|label| {
+        let chart_available =
+            is_qm && crate::frontend::dispatcher::entry_chart_available(state, entry_id);
+        let layout_chip = |ui: &egui::Ui, label: &str| {
             let galley = ui.painter().fonts_mut(|fonts| {
                 fonts.layout_no_wrap(
                     label.to_string(),
@@ -92,8 +95,12 @@ pub(crate) fn render_entry_list_item(
             });
             let size = egui::vec2(galley.size().x + 8.0, galley.size().y + 3.0);
             (galley, size)
-        });
-        let name_reserve = chip.as_ref().map_or(0.0, |(_, size)| size.x + 6.0);
+        };
+        let chip = chip_label.map(|label| layout_chip(ui, label));
+        let chart_chip =
+            chart_available.then(|| layout_chip(ui, egui_phosphor::regular::CHART_LINE));
+        let name_reserve = chip.as_ref().map_or(0.0, |(_, size)| size.x + 6.0)
+            + chart_chip.as_ref().map_or(0.0, |(_, size)| size.x + 4.0);
 
         let mut job = egui::text::LayoutJob::single_section(
             name.to_string(),
@@ -116,14 +123,16 @@ pub(crate) fn render_entry_list_item(
         );
         ui.painter().galley(galley_pos, galley, text_color);
 
+        let mut chip_right = text_rect.right();
         if let Some((chip_galley, chip_size)) = chip {
             let chip_rect = egui::Rect::from_min_size(
                 egui::pos2(
-                    text_rect.right() - chip_size.x,
+                    chip_right - chip_size.x,
                     text_rect.center().y - chip_size.y / 2.0,
                 ),
                 chip_size,
             );
+            chip_right = chip_rect.left() - 4.0;
             ui.painter().rect_filled(
                 chip_rect,
                 f32::from(crate::frontend::theme::radius::CHIP),
@@ -148,6 +157,37 @@ pub(crate) fn render_entry_list_item(
                 if chip_response.clicked() {
                     actions.push(AppAction::ShowQmOutput(entry_id));
                 }
+            }
+        }
+        if let Some((chart_galley, chart_size)) = chart_chip {
+            let chart_rect = egui::Rect::from_min_size(
+                egui::pos2(
+                    chip_right - chart_size.x,
+                    text_rect.center().y - chart_size.y / 2.0,
+                ),
+                chart_size,
+            );
+            ui.painter().rect_filled(
+                chart_rect,
+                f32::from(crate::frontend::theme::radius::CHIP),
+                pal.blue_overlay(45),
+            );
+            let chart_pos = egui::pos2(
+                chart_rect.center().x - chart_galley.size().x / 2.0,
+                chart_rect.center().y - chart_galley.size().y / 2.0,
+            );
+            ui.painter().galley(chart_pos, chart_galley, pal.accent);
+            let chart_response = ui
+                .interact(
+                    chart_rect,
+                    ui.id().with(("chart-chip", entry_id)),
+                    Sense::click(),
+                )
+                .on_hover_text("View chart");
+            if chart_response.clicked() {
+                actions.push(AppAction::OpenChart(
+                    crate::frontend::actions::ChartTarget::Entry(entry_id),
+                ));
             }
         }
 
