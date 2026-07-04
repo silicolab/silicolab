@@ -542,4 +542,18 @@ pub struct QmOutcome {
     pub optimized_structure: Option<Structure>,
     /// Pre-formatted, human-readable report of every result.
     pub summary: String,
+    /// SCF total energy (Eh) per iteration. For moving jobs hartree keeps only
+    /// the final geometry's SCF, so this is the final-step convergence history
+    /// there. `#[serde(default)]`: outcomes cross process boundaries as
+    /// `outcome.json`, and pre-trace workers omit the field (like
+    /// [`QmRequest::ts`]).
+    #[serde(default)]
+    pub scf_trace: Vec<f64>,
+    /// Total energy (Eh) per optimizer step for Optimize / TransitionState
+    /// runs; empty otherwise.
+    #[serde(default)]
+    pub opt_trace: Vec<f64>,
+    /// Harmonic wavenumbers (cm⁻¹) for Frequencies runs; empty otherwise.
+    #[serde(default)]
+    pub frequencies: Vec<f64>,
 }

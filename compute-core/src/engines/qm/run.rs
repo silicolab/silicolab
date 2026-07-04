@@ -100,10 +100,38 @@ pub fn run_qm(
 
     let summary = format_summary(&method, &resolved, kind, &structure, &result);
 
+    // The summary formatter deliberately trims the per-iteration tables; these
+    // vectors carry them whole for the chart pipeline.
+    let scf_trace: Vec<f64> = result.scf.history.iter().map(|step| step.energy).collect();
+    let opt_trace: Vec<f64> = match kind {
+        QmKind::Optimize => result
+            .optimized_geometry
+            .as_ref()
+            .map(|opt| opt.history.iter().map(|step| step.energy).collect())
+            .unwrap_or_default(),
+        QmKind::TransitionState => result
+            .transition_state
+            .as_ref()
+            .map(|ts| ts.history.iter().map(|step| step.energy).collect())
+            .unwrap_or_default(),
+        QmKind::SinglePoint | QmKind::Frequencies => Vec::new(),
+    };
+    let frequencies: Vec<f64> = match kind {
+        QmKind::Frequencies => result
+            .frequencies
+            .as_ref()
+            .map(|data| data.frequencies.frequencies_cm1.clone())
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+
     Ok(QmOutcome {
         energy_hartree,
         converged,
         optimized_structure,
         summary,
+        scf_trace,
+        opt_trace,
+        frequencies,
     })
 }

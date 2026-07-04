@@ -171,6 +171,32 @@ pub(crate) fn render_optimization_task_panel(
         });
     } else if state.jobs.optimization_running() {
         ui.label("Optimization is running.");
+        let trace = state
+            .jobs
+            .optimizer
+            .as_ref()
+            .map(|running| running.energy_trace.clone())
+            .unwrap_or_default();
+        if trace.len() > 1 {
+            let spec = crate::plot::spec::ChartSpec {
+                title: String::new(),
+                x: crate::plot::spec::AxisSpec::new("Step", ""),
+                y: crate::plot::spec::AxisSpec::new("Energy", ""),
+                series: vec![crate::plot::spec::Series {
+                    name: "Energy".to_string(),
+                    points: trace,
+                    mark: crate::plot::spec::Mark::Line,
+                }],
+            };
+            crate::frontend::ui::plot_view::render_chart(
+                ui,
+                &spec,
+                "opt-live-trace",
+                110.0,
+                false,
+                false,
+            );
+        }
         if ui
             .button(format!("{}  Show Output", egui_phosphor::regular::TERMINAL))
             .clicked()

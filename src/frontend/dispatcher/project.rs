@@ -84,6 +84,19 @@ pub(crate) fn reset_transient_state(state: &mut AppState) {
     state.ui.agent.invalidate_skills();
 }
 
+/// Drop the Plot panel chart and the two chart memos on a project switch.
+/// These are keyed by entry / task-run ids, but the backend restarts those id
+/// spaces per project, so a reopened project would otherwise render project A's
+/// cached thumbnail for its task id 1 (or a stale `false` availability would
+/// suppress the chart chip forever). Deliberately NOT folded into
+/// `reset_transient_state`, which also fires on plain entry activation where the
+/// open chart and both memos must survive within the same project.
+pub(crate) fn reset_chart_caches(state: &mut AppState) {
+    state.ui.chart = None;
+    state.ui.chart_availability.clear();
+    state.ui.task_chart_thumbnails.clear();
+}
+
 pub(crate) fn replace_workspace_from_project(
     state: &mut AppState,
     project: ProjectSession,
@@ -109,6 +122,7 @@ pub(crate) fn replace_workspace_from_project(
         state.ui.entry_list.selected_entry_ids.insert(id);
     }
     reset_transient_state(state);
+    reset_chart_caches(state);
     state.load_viewport_for_active_entry();
     let set_current_dir_error = std::env::set_current_dir(&project.root).err();
     if let Err(error) =
@@ -214,6 +228,7 @@ pub(crate) fn close_project(state: &mut AppState) {
         state.set_message("Closed project; opened Scratch");
     }
     reset_transient_state(state);
+    reset_chart_caches(state);
     state.clear_history();
 }
 
@@ -342,5 +357,26 @@ pub(crate) fn delete_entry(state: &mut AppState, entry_id: u64) {
 pub(crate) fn delete_entries(state: &mut AppState, ids: Vec<u64>) {
     for id in ids {
         delete_entry(state, id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::frontend::state::ChartState;
+
+    #[test]
+    fn reset_chart_caches_clears_chart_and_both_memos() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        state.ui.chart = Some(ChartState::new("project-a run".to_string()));
+        state.ui.chart_availability.insert(1, true);
+        state.ui.chart_availability.insert(2, false);
+        state.ui.task_chart_thumbnails.insert(1, None);
+
+        reset_chart_caches(&mut state);
+
+        assert!(state.ui.chart.is_none());
+        assert!(state.ui.chart_availability.is_empty());
+        assert!(state.ui.task_chart_thumbnails.is_empty());
     }
 }

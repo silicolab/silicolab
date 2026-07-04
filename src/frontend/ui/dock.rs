@@ -1,10 +1,10 @@
 use super::panel_bodies::{
-    render_assistant_panel, render_console_panel, render_output_panel, render_sequence_panel,
-    render_task_monitor_panel, weak_panel_hairline,
+    render_assistant_panel, render_console_panel, render_output_panel, render_plot_panel,
+    render_sequence_panel, render_task_monitor_panel, weak_panel_hairline,
 };
 use super::secondary_sidebar::*;
 use super::*;
-use crate::backend::tasks::{TaskPanelKind, TaskRun};
+use crate::backend::tasks::{TaskKind, TaskPanelKind, TaskRun, TaskStatus};
 use crate::frontend::state::{DockArea, DockModel, DockTab, StaticView};
 use crate::frontend::theme::Palette;
 
@@ -176,6 +176,7 @@ pub(super) fn render_dock_area(
         Some(DockTab::Static(StaticView::TaskMonitor)) => {
             render_task_monitor_panel(state, ui, actions)
         }
+        Some(DockTab::Static(StaticView::Plot)) => render_plot_panel(state, ui, actions),
         // Task bodies own variable-height content, so they scroll (matching the
         // historical side panel); the fixed-view bodies manage their own height
         // and are rendered directly in either area.
@@ -549,6 +550,35 @@ fn render_task_body(
         .color(pal.text_tertiary),
     );
     ui.separator();
+
+    // Completed QM runs embed a small chart preview with a click-through to
+    // the Plot panel. Single-point/frequencies runs create no entry, so this
+    // is their chart affordance.
+    if task.status == TaskStatus::Completed
+        && matches!(
+            task.kind,
+            TaskKind::RunQmEnergy
+                | TaskKind::RunQmOptimize
+                | TaskKind::RunQmFrequencies
+                | TaskKind::RunQmTransitionState
+        )
+        && let Some(spec) = crate::frontend::dispatcher::task_chart_thumbnail(state, task_run_id)
+    {
+        super::plot_view::render_chart(
+            ui,
+            &spec,
+            ("task-chart-thumb", task_run_id),
+            110.0,
+            false,
+            false,
+        );
+        if ui.button("Open in Plot panel").clicked() {
+            actions.push(AppAction::OpenChart(
+                crate::frontend::actions::ChartTarget::TaskRun(task_run_id),
+            ));
+        }
+        ui.separator();
+    }
 
     if state.tasks.active_panel != Some(task_run_id) {
         ui.label(

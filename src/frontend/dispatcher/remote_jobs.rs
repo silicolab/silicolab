@@ -370,6 +370,14 @@ fn apply_remote_qm_outcome(
     let output_path = std::fs::write(run_dir.join(QM_OUTPUT_FILE), text)
         .ok()
         .map(|()| run_dir.join(QM_OUTPUT_FILE));
+    let series = crate::backend::runs::QmSeries::from_outcome(&outcome);
+    if !series.is_empty()
+        && let Err(error) = crate::backend::runs::save_qm_series_file(&run_dir, &series)
+    {
+        state
+            .output_log
+            .push(format!("failed to save QM series: {error}"));
+    }
 
     let belongs_here = outcome_belongs_to_current_workspace(state, row);
     let task_id = state
@@ -384,9 +392,11 @@ fn apply_remote_qm_outcome(
             record_task_result_entry(state, task_id, entry_id);
         }
         set_qm_run_origin(state, entry_id, output_path);
+        state.ui.chart_availability.remove(&entry_id);
     }
     if let Some(task_id) = task_id {
         mark_task_status(state, task_id, TaskStatus::Completed);
+        state.ui.task_chart_thumbnails.remove(&task_id);
     }
     state.set_message(format!(
         "Remote QM complete: energy {:.6} Eh{}",

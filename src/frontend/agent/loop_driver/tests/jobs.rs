@@ -68,6 +68,9 @@ fn finished_job_posts_notice_and_clears_the_registry() {
         converged: true,
         optimized_structure: None,
         summary: "E = -1.0 Ha".into(),
+        scf_trace: Vec::new(),
+        opt_trace: Vec::new(),
+        frequencies: Vec::new(),
     })))
     .unwrap();
     drop(tx);
@@ -181,6 +184,9 @@ fn job_finishing_in_inactive_conversation_routes_to_its_origin() {
         converged: true,
         optimized_structure: None,
         summary: "E = -1.0 Ha".into(),
+        scf_trace: Vec::new(),
+        opt_trace: Vec::new(),
+        frequencies: Vec::new(),
     })))
     .unwrap();
     drop(tx);

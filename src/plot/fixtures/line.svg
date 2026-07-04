@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="3.3in" height="2.5in" viewBox="0 0 237.60 180.00">
+<rect x="0" y="0" width="237.60" height="180.00" fill="#ffffff"/>
+<clipPath id="plot-area"><rect x="38.56" y="18.00" width="193.04" height="131.00"/></clipPath>
+<text x="135.08" y="14.00" font-family="Liberation Sans" font-size="10.00" fill="#1a1a1a" text-anchor="middle">SCF convergence</text>
+<line x1="38.56" y1="124.21" x2="231.60" y2="124.21" stroke="#d2d2d2" stroke-width="0.4"/>
+<line x1="38.56" y1="93.86" x2="231.60" y2="93.86" stroke="#d2d2d2" stroke-width="0.4"/>
+<line x1="38.56" y1="63.52" x2="231.60" y2="63.52" stroke="#d2d2d2" stroke-width="0.4"/>
+<line x1="38.56" y1="33.17" x2="231.60" y2="33.17" stroke="#d2d2d2" stroke-width="0.4"/>
+<g clip-path="url(#plot-area)">
+<polyline points="38.56,18.00 77.16,112.07 115.77,140.90 154.38,148.18 192.99,148.94 231.60,149.00" fill="none" stroke="#0072b2" stroke-width="1"/>
+<polyline points="38.56,149.00 231.60,149.00" fill="none" stroke="#d55e00" stroke-width="1"/>
+</g>
+<rect x="38.56" y="18.00" width="193.04" height="131.00" fill="none" stroke="#1a1a1a" stroke-width="0.75"/>
+<line x1="38.56" y1="149.00" x2="38.56" y2="152.00" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="38.56" y="161.00" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="middle">1</text>
+<line x1="77.16" y1="149.00" x2="77.16" y2="152.00" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="77.16" y="161.00" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="middle">2</text>
+<line x1="115.77" y1="149.00" x2="115.77" y2="152.00" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="115.77" y="161.00" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="middle">3</text>
+<line x1="154.38" y1="149.00" x2="154.38" y2="152.00" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="154.38" y="161.00" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="middle">4</text>
+<line x1="192.99" y1="149.00" x2="192.99" y2="152.00" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="192.99" y="161.00" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="middle">5</text>
+<line x1="231.60" y1="149.00" x2="231.60" y2="152.00" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="231.60" y="161.00" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="middle">6</text>
+<line x1="35.56" y1="124.21" x2="38.56" y2="124.21" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="33.56" y="126.66" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="end">-74.8</text>
+<line x1="35.56" y1="93.86" x2="38.56" y2="93.86" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="33.56" y="96.31" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="end">-74.6</text>
+<line x1="35.56" y1="63.52" x2="38.56" y2="63.52" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="33.56" y="65.97" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="end">-74.4</text>
+<line x1="35.56" y1="33.17" x2="38.56" y2="33.17" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="33.56" y="35.62" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="end">-74.2</text>
+<text x="135.08" y="176.00" font-family="Liberation Sans" font-size="8.00" fill="#1a1a1a" text-anchor="middle">Iteration</text>
+<text x="12.00" y="83.50" font-family="Liberation Sans" font-size="8.00" fill="#1a1a1a" text-anchor="middle" transform="rotate(-90 12.00 83.50)">Energy (Eh)</text>
+<line x1="174.25" y1="23.55" x2="184.25" y2="23.55" stroke="#0072b2" stroke-width="1"/>
+<text x="225.60" y="26.00" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="end">SCF energy</text>
+<line x1="179.30" y1="34.75" x2="189.30" y2="34.75" stroke="#d55e00" stroke-width="1"/>
+<text x="225.60" y="37.20" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="end">Reference</text>
+</svg>

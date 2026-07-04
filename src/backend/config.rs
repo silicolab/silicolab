@@ -257,6 +257,9 @@ pub struct AppConfig {
     /// [`show_utilization_bars`](Self::show_utilization_bars) is on.
     #[serde(default)]
     pub monitor_refresh: MonitorRefresh,
+    /// `#[serde(default)]` so older settings.json still parses.
+    #[serde(default)]
+    pub chart_export: ChartExportPrefs,
 }
 
 /// Persisted state of one dock area (the bottom panel or the right sidebar). The
@@ -294,6 +297,7 @@ impl Default for DockLayoutConfig {
                     "sequence".to_string(),
                     "task_monitor".to_string(),
                     "output".to_string(),
+                    "plot".to_string(),
                 ],
                 active: Some("console".to_string()),
                 collapsed: false,
@@ -312,6 +316,8 @@ impl Default for DockLayoutConfig {
         }
     }
 }
+
+pub use crate::backend::chart_export::ChartExportPrefs;
 
 fn default_glass() -> bool {
     false
@@ -383,6 +389,7 @@ impl Default for AppConfig {
             compute_core_count: default_compute_core_count(),
             show_utilization_bars: false,
             monitor_refresh: MonitorRefresh::default(),
+            chart_export: ChartExportPrefs::default(),
         }
     }
 }
