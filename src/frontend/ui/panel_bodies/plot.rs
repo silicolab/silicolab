@@ -15,19 +15,22 @@ pub(crate) fn render_plot_panel(
     ui.add_space(8.0);
     // Clone the small display state up front so the chart render below can
     // borrow `ui` freely and the bounds write-back can re-borrow `state`.
-    let Some((source_name, titles, active, error, spec)) = state.ui.chart.as_ref().map(|chart| {
-        (
-            chart.source_name.clone(),
-            chart
-                .datasets
-                .iter()
-                .map(|dataset| dataset.title.clone())
-                .collect::<Vec<_>>(),
-            chart.active,
-            chart.error.clone(),
-            chart.active_dataset().cloned(),
-        )
-    }) else {
+    let Some((source_name, titles, active, error, spec, reset_view)) =
+        state.ui.chart.as_ref().map(|chart| {
+            (
+                chart.source_name.clone(),
+                chart
+                    .datasets
+                    .iter()
+                    .map(|dataset| dataset.title.clone())
+                    .collect::<Vec<_>>(),
+                chart.active,
+                chart.error.clone(),
+                chart.active_dataset().cloned(),
+                chart.reset_view,
+            )
+        })
+    else {
         ui.label(
             RichText::new(
                 "No chart loaded. Open one from a QM entry's chart button or a completed task panel.",
@@ -54,9 +57,11 @@ pub(crate) fn render_plot_panel(
         let chart_width = (ui.available_width() - controls_width - 12.0).max(120.0);
         ui.vertical(|ui| {
             ui.set_width(chart_width);
-            let bounds = plot_view::render_chart(ui, &spec, "plot-panel", chart_height, true);
+            let bounds =
+                plot_view::render_chart(ui, &spec, "plot-panel", chart_height, true, reset_view);
             if let Some(chart) = state.ui.chart.as_mut() {
                 chart.view_bounds = Some(bounds);
+                chart.reset_view = false;
             }
         });
         ui.vertical(|ui| {

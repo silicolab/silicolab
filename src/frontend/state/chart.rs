@@ -13,6 +13,10 @@ pub struct ChartState {
     pub error: Option<String>,
     /// Plot bounds of the last rendered frame, for "current view" exports.
     pub view_bounds: Option<[[f64; 2]; 2]>,
+    /// One-shot: clear egui_plot's remembered pan/zoom on the next frame. The
+    /// panel reuses one plot id, so without this a chart opened after another
+    /// inherits the previous chart's bounds.
+    pub reset_view: bool,
     pub export_open: bool,
     pub export_draft: ChartExportDraft,
 }
@@ -25,6 +29,7 @@ impl ChartState {
             active: 0,
             error: None,
             view_bounds: None,
+            reset_view: true,
             export_open: false,
             export_draft: ChartExportDraft::default(),
         }

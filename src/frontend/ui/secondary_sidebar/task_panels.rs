@@ -188,7 +188,14 @@ pub(crate) fn render_optimization_task_panel(
                     mark: crate::plot::spec::Mark::Line,
                 }],
             };
-            crate::frontend::ui::plot_view::render_chart(ui, &spec, "opt-live-trace", 110.0, false);
+            crate::frontend::ui::plot_view::render_chart(
+                ui,
+                &spec,
+                "opt-live-trace",
+                110.0,
+                false,
+                false,
+            );
         }
         if ui
             .button(format!("{}  Show Output", egui_phosphor::regular::TERMINAL))

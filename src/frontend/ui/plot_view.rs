@@ -20,12 +20,15 @@ fn series_color(pal: &Palette, index: usize) -> egui::Color32 {
 /// Render `spec` with egui_plot and return the plotted bounds as
 /// `[[x_min, y_min], [x_max, y_max]]` (feeds "current view" exports).
 /// Non-interactive mode is for embedded thumbnails / live traces.
+/// `reset` discards the pan/zoom memory egui keeps per plot id — pass it on
+/// the first frame after the plotted data changes.
 pub(crate) fn render_chart(
     ui: &mut egui::Ui,
     spec: &ChartSpec,
     id_salt: impl std::hash::Hash,
     height: f32,
     interactive: bool,
+    reset: bool,
 ) -> [[f64; 2]; 2] {
     let pal = theme::palette(ui);
     let mut plot = Plot::new(id_salt)
@@ -45,6 +48,9 @@ pub(crate) fn render_chart(
         });
     if spec.series.len() > 1 {
         plot = plot.legend(Legend::default());
+    }
+    if reset {
+        plot = plot.reset();
     }
     let response = plot.show(ui, |plot_ui| {
         for (index, series) in spec.series.iter().enumerate() {

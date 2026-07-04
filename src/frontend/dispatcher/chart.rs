@@ -106,6 +106,7 @@ pub(crate) fn select_chart_dataset(state: &mut AppState, index: usize) {
     {
         chart.active = index;
         chart.view_bounds = None;
+        chart.reset_view = true;
     }
 }
 
@@ -372,10 +373,14 @@ mod tests {
                 series: Vec::new(),
             },
         ];
+        // The panel clears the one-shot reset after the first frame; switching
+        // datasets must raise it again so stale pan/zoom doesn't apply.
+        chart.reset_view = false;
         state.ui.chart = Some(chart);
 
         select_chart_dataset(&mut state, 1);
         assert_eq!(state.ui.chart.as_ref().unwrap().active, 1);
+        assert!(state.ui.chart.as_ref().unwrap().reset_view);
         select_chart_dataset(&mut state, 99);
         assert_eq!(
             state.ui.chart.as_ref().unwrap().active,

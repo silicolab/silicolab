@@ -38,10 +38,21 @@ fn parse_tree(svg: &str) -> Result<usvg::Tree> {
 const MIN_DPI: u32 = 72;
 const MAX_DPI: u32 = 1200;
 
+/// Ceiling on rasterized pixels. The dialog allows size and DPI combinations
+/// (20 in at 1200 dpi = 24000 px a side) whose Pixmap plus RGBA copy would
+/// exceed 4 GiB; 100 MP keeps the peak near 800 MB and still admits every
+/// journal preset at 1200 dpi.
+const MAX_PIXELS: u64 = 100_000_000;
+
 fn png_bytes(tree: &usvg::Tree, preset: &JournalPreset, dpi: u32) -> Result<Vec<u8>> {
     let dpi = dpi.clamp(MIN_DPI, MAX_DPI);
     let px_w = (preset.width_in * f64::from(dpi)).round() as u32;
     let px_h = (preset.height_in * f64::from(dpi)).round() as u32;
+    if u64::from(px_w) * u64::from(px_h) > MAX_PIXELS {
+        return Err(anyhow!(
+            "PNG size {px_w}x{px_h} px is too large to rasterize; reduce the size or DPI"
+        ));
+    }
     let mut pixmap = resvg::tiny_skia::Pixmap::new(px_w, px_h)
         .ok_or_else(|| anyhow!("invalid raster size {px_w}x{px_h}"))?;
     // usvg parsed physical units at its default 96 dpi, so the tree size is
@@ -149,6 +160,26 @@ mod tests {
             let reader = decoder.read_info().unwrap();
             assert_eq!((reader.info().width, reader.info().height), expect);
         }
+    }
+
+    #[test]
+    fn png_oversized_raster_errors_instead_of_allocating() {
+        // The dialog's extremes (20 in × 20 in at 1200 dpi) would be a
+        // 24000×24000 Pixmap — refuse before allocation.
+        let preset = PresetChoice::Custom {
+            width_in: 20.0,
+            height_in: 20.0,
+        }
+        .preset();
+        let error = export_bytes(
+            &spec(),
+            &preset,
+            &ExportStyle::default(),
+            ExportFormat::Png,
+            1200,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("too large"), "{error}");
     }
 
     #[test]

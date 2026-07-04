@@ -564,7 +564,14 @@ fn render_task_body(
         )
         && let Some(spec) = crate::frontend::dispatcher::task_chart_thumbnail(state, task_run_id)
     {
-        super::plot_view::render_chart(ui, &spec, ("task-chart-thumb", task_run_id), 110.0, false);
+        super::plot_view::render_chart(
+            ui,
+            &spec,
+            ("task-chart-thumb", task_run_id),
+            110.0,
+            false,
+            false,
+        );
         if ui.button("Open in Plot panel").clicked() {
             actions.push(AppAction::OpenChart(
                 crate::frontend::actions::ChartTarget::TaskRun(task_run_id),
