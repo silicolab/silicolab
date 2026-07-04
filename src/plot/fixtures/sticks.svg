@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="7in" height="4.2in" viewBox="0 0 504.00 302.40">
+<rect x="0" y="0" width="504.00" height="302.40" fill="#ffffff"/>
+<clipPath id="plot-area"><rect x="32.33" y="18.00" width="465.67" height="253.40"/></clipPath>
+<text x="265.17" y="14.00" font-family="Liberation Sans" font-size="10.00" fill="#1a1a1a" text-anchor="middle">IR spectrum</text>
+<line x1="32.33" y1="271.40" x2="498.00" y2="271.40" stroke="#d2d2d2" stroke-width="0.4"/>
+<line x1="32.33" y1="215.09" x2="498.00" y2="215.09" stroke="#d2d2d2" stroke-width="0.4"/>
+<line x1="32.33" y1="158.78" x2="498.00" y2="158.78" stroke="#d2d2d2" stroke-width="0.4"/>
+<line x1="32.33" y1="102.47" x2="498.00" y2="102.47" stroke="#d2d2d2" stroke-width="0.4"/>
+<line x1="32.33" y1="46.16" x2="498.00" y2="46.16" stroke="#d2d2d2" stroke-width="0.4"/>
+<g clip-path="url(#plot-area)">
+<line x1="498.00" y1="271.40" x2="498.00" y2="215.09" stroke="#0072b2" stroke-width="0.9"/>
+<line x1="323.37" y1="271.40" x2="323.37" y2="18.00" stroke="#0072b2" stroke-width="0.9"/>
+<line x1="32.33" y1="271.40" x2="32.33" y2="130.62" stroke="#0072b2" stroke-width="0.9"/>
+</g>
+<rect x="32.33" y="18.00" width="465.67" height="253.40" fill="none" stroke="#1a1a1a" stroke-width="0.75"/>
+<line x1="431.48" y1="271.40" x2="431.48" y2="274.40" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="431.48" y="283.40" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="middle">1000</text>
+<line x1="348.32" y1="271.40" x2="348.32" y2="274.40" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="348.32" y="283.40" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="middle">1500</text>
+<line x1="265.17" y1="271.40" x2="265.17" y2="274.40" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="265.17" y="283.40" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="middle">2000</text>
+<line x1="182.01" y1="271.40" x2="182.01" y2="274.40" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="182.01" y="283.40" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="middle">2500</text>
+<line x1="98.86" y1="271.40" x2="98.86" y2="274.40" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="98.86" y="283.40" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="middle">3000</text>
+<line x1="29.33" y1="271.40" x2="32.33" y2="271.40" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="27.33" y="273.85" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="end">0</text>
+<line x1="29.33" y1="215.09" x2="32.33" y2="215.09" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="27.33" y="217.54" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="end">0.2</text>
+<line x1="29.33" y1="158.78" x2="32.33" y2="158.78" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="27.33" y="161.23" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="end">0.4</text>
+<line x1="29.33" y1="102.47" x2="32.33" y2="102.47" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="27.33" y="104.92" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="end">0.6</text>
+<line x1="29.33" y1="46.16" x2="32.33" y2="46.16" stroke="#1a1a1a" stroke-width="0.75"/>
+<text x="27.33" y="48.61" font-family="Liberation Sans" font-size="7.00" fill="#1a1a1a" text-anchor="end">0.8</text>
+<text x="265.17" y="298.40" font-family="Liberation Sans" font-size="8.00" fill="#1a1a1a" text-anchor="middle">Wavenumber (cm⁻¹)</text>
+<text x="12.00" y="144.70" font-family="Liberation Sans" font-size="8.00" fill="#1a1a1a" text-anchor="middle" transform="rotate(-90 12.00 144.70)">Intensity</text>
+</svg>

@@ -1,5 +1,6 @@
 pub mod backend;
 pub mod frontend;
+pub mod plot;
 
 // The compute stack (domain types, IO, engines, workflows, the host descriptor,
 // and the serializable payload/wire bridge) lives in `compute-core`. Re-export it

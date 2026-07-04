@@ -426,3 +426,63 @@ fn dispersion_reported_in_summary() {
         outcome.summary
     );
 }
+
+/// SinglePoint surfaces the run's SCF energies per iteration; the moving-job
+/// and frequency vectors stay empty (spec's QmKind table).
+#[test]
+fn single_point_surfaces_scf_trace() {
+    let outcome = run_qm(
+        request(h2(), QmMethod::Rhf, "sto-3g", QmKind::SinglePoint),
+        no_cancel(),
+        |_| {},
+    )
+    .expect("RHF/STO-3G on H2 should succeed");
+    assert!(!outcome.scf_trace.is_empty());
+    let last = *outcome.scf_trace.last().unwrap();
+    assert!(
+        (last - outcome.energy_hartree).abs() < 1e-6,
+        "trace should end at the converged energy: {last} vs {}",
+        outcome.energy_hartree
+    );
+    assert!(outcome.opt_trace.is_empty());
+    assert!(outcome.frequencies.is_empty());
+}
+
+/// Optimize surfaces the energy per optimizer step plus the final geometry's
+/// SCF history (hartree keeps only the last step's SCF).
+#[test]
+fn optimize_h2_surfaces_energy_traces() {
+    let outcome = run_qm(
+        request(h2(), QmMethod::Rhf, "sto-3g", QmKind::Optimize),
+        no_cancel(),
+        |_| {},
+    )
+    .expect("RHF/STO-3G H2 optimization should succeed");
+    assert!(!outcome.opt_trace.is_empty());
+    assert!(
+        outcome.opt_trace.last().unwrap() <= &(outcome.opt_trace[0] + 1e-6),
+        "relaxation should not raise the energy: {:?}",
+        outcome.opt_trace
+    );
+    assert!(!outcome.scf_trace.is_empty());
+    assert!(outcome.frequencies.is_empty());
+}
+
+#[test]
+fn frequencies_h2_surfaces_wavenumbers() {
+    let outcome = run_qm(
+        request(h2(), QmMethod::Rhf, "sto-3g", QmKind::Frequencies),
+        no_cancel(),
+        |_| {},
+    )
+    .expect("RHF/STO-3G H2 frequencies should succeed");
+    assert!(!outcome.frequencies.is_empty());
+    let max = outcome.frequencies.iter().cloned().fold(f64::MIN, f64::max);
+    assert!(
+        max > 1000.0,
+        "H2 stretch should appear: {:?}",
+        outcome.frequencies
+    );
+    assert!(!outcome.scf_trace.is_empty());
+    assert!(outcome.opt_trace.is_empty());
+}

@@ -34,15 +34,32 @@ egui-phosphor = "0.12.0"
 egui_commonmark = { version = "0.23", default-features = false, features = [
     "pulldown_cmark",
 ] }
+egui_plot = "0.35"
 flate2 = "1"
 hartree = "0.2.1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 nalgebra = "0.35.0"
+# Chart export: one shared usvg tree feeds resvg (PNG) and svg2pdf (PDF).
+# resvg/usvg are pinned to 0.45.1 to satisfy svg2pdf 0.13's ^0.45 requirement
+# with a single copy of the SVG stack. Both resvg and svg2pdf are built with
+# default-features = false to drop resvg's raster-image codecs (only text
+# rendering is needed); svg2pdf's default features would otherwise re-enable
+# them via Cargo feature unification.
+resvg = { version = "0.45.1", default-features = false, features = ["text"] }
+svg2pdf = { version = "0.13", default-features = false, features = ["text"] }
+usvg = "0.45.1"
+# Encodes the export pixmap directly so the pHYs physical-DPI chunk can be
+# written (image's encoder does not expose it). Same version image 0.25
+# already locks.
+png = "0.18"
 rfd = "0.17"
 rusqlite = { version = "0.40.0", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sysinfo = { version = "0.33", default-features = false, features = ["system"] }
+# Measures the bundled export font so the SVG emitter can size chart margins.
+# Same version the egui font stack already resolves.
+ttf-parser = "0.25"
 ureq = "3.3.0"
 uuid = { version = "1", features = ["v4"] }
 raw-window-handle = "0.6"

@@ -137,11 +137,11 @@ fn insert_tab_dedups_across_areas_and_focuses() {
 
 #[test]
 fn move_tab_reorders_within_area_with_index_adjustment() {
-    // Bottom default order: Console, Sequence, TaskMonitor, Output.
+    // Bottom default order: Console, Sequence, TaskMonitor, Output, Plot.
     let mut dock = DockModel::default();
     let console = DockTab::Static(StaticView::Console);
     // Move Console (index 0) toward index 2: after removing it the list is
-    // [Sequence, TaskMonitor, Output], so the requested index adjusts to 1.
+    // [Sequence, TaskMonitor, Output, Plot], so the requested index adjusts to 1.
     dock.move_tab(console, DockArea::Bottom, Some(2));
     assert_eq!(
         dock.bottom.tabs,
@@ -150,6 +150,7 @@ fn move_tab_reorders_within_area_with_index_adjustment() {
             console,
             DockTab::Static(StaticView::TaskMonitor),
             DockTab::Static(StaticView::Output),
+            DockTab::Static(StaticView::Plot),
         ]
     );
 }

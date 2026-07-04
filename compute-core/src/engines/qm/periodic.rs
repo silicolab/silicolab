@@ -257,6 +257,10 @@ pub fn run_periodic_qm(
         converged,
         optimized_structure: None,
         summary,
+        // PeriodicScfResult keeps no per-iteration history; default the traces.
+        scf_trace: Vec::new(),
+        opt_trace: Vec::new(),
+        frequencies: Vec::new(),
     })
 }
 
@@ -588,6 +592,9 @@ mod tests {
             outcome.energy_hartree
         );
         assert!(outcome.optimized_structure.is_none());
+        assert!(outcome.scf_trace.is_empty());
+        assert!(outcome.opt_trace.is_empty());
+        assert!(outcome.frequencies.is_empty());
         assert!(outcome.summary.contains("periodic GPW"));
         assert!(outcome.summary.contains("energy decomposition"));
     }

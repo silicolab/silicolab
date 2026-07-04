@@ -52,6 +52,7 @@ pub enum StaticView {
     Sequence,
     Assistant,
     TaskMonitor,
+    Plot,
 }
 
 impl StaticView {
@@ -65,6 +66,7 @@ impl StaticView {
             Self::Assistant,
             Self::TaskMonitor,
             Self::Output,
+            Self::Plot,
         ]
     }
 
@@ -75,6 +77,7 @@ impl StaticView {
             Self::Assistant => "Assistant",
             Self::TaskMonitor => "Task Monitor",
             Self::Output => "Output",
+            Self::Plot => "Plot",
         }
     }
 
@@ -88,6 +91,7 @@ impl StaticView {
             Self::Assistant => "assistant",
             Self::TaskMonitor => "task_monitor",
             Self::Output => "output",
+            Self::Plot => "plot",
         }
     }
 
@@ -98,6 +102,7 @@ impl StaticView {
             "assistant" => Self::Assistant,
             "task_monitor" => Self::TaskMonitor,
             "output" => Self::Output,
+            "plot" => Self::Plot,
             _ => return None,
         })
     }
@@ -176,6 +181,7 @@ impl Default for DockModel {
                     DockTab::Static(StaticView::Sequence),
                     DockTab::Static(StaticView::TaskMonitor),
                     DockTab::Static(StaticView::Output),
+                    DockTab::Static(StaticView::Plot),
                 ],
                 active: Some(DockTab::Static(StaticView::Console)),
                 collapsed: false,
@@ -501,6 +507,39 @@ mod tests {
                 .bottom
                 .tabs
                 .contains(&DockTab::Static(StaticView::TaskMonitor))
+        );
+    }
+
+    #[test]
+    fn from_config_restores_missing_plot() {
+        let config = DockLayoutConfig {
+            bottom: DockAreaLayout {
+                tabs: vec!["console".into()],
+                active: Some("console".into()),
+                collapsed: false,
+            },
+            right: DockAreaLayout {
+                tabs: vec!["assistant".into()],
+                active: Some("assistant".into()),
+                collapsed: false,
+            },
+            right_width: 320.0,
+            bottom_height: 240.0,
+        };
+        let model = DockModel::from_config(&config);
+        assert!(
+            model
+                .bottom
+                .tabs
+                .contains(&DockTab::Static(StaticView::Plot))
+        );
+    }
+
+    #[test]
+    fn plot_token_round_trips() {
+        assert_eq!(
+            StaticView::from_token(StaticView::Plot.token()),
+            Some(StaticView::Plot)
         );
     }
 

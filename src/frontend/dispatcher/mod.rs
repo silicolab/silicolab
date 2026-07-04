@@ -53,6 +53,7 @@ use crate::{
 };
 
 mod builders;
+mod chart;
 mod disorder;
 mod dock;
 mod docking;
@@ -70,6 +71,7 @@ mod sketch;
 mod tasks;
 
 pub(crate) use builders::*;
+pub(crate) use chart::*;
 pub(crate) use disorder::*;
 pub(crate) use dock::*;
 pub(crate) use docking::*;
@@ -401,6 +403,10 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SetTrajectoryFrame(frame) => set_trajectory_frame(state, frame),
         AppAction::StopTrajectory => stop_trajectory(state),
         AppAction::ShowQmOutput(entry_id) => show_qm_output(state, entry_id),
+        AppAction::OpenChart(target) => open_chart(state, target, ctx),
+        AppAction::SelectChartDataset(index) => select_chart_dataset(state, index),
+        AppAction::SetChartAxisLabel { axis, label } => set_chart_axis_label(state, axis, label),
+        AppAction::ExportChart => export_chart(state),
         AppAction::ResizeSidebar(delta) => resize_sidebar(state, delta, ctx),
         AppAction::ResetSidebar => reset_sidebar(state, ctx),
         AppAction::ResizeArea(area, delta) => resize_area(state, area, delta, ctx),

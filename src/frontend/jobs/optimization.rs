@@ -15,6 +15,9 @@ pub struct RunningOptimization {
     pub cancel: Arc<AtomicBool>,
     pub receiver: Receiver<OptimizationWorkerMessage>,
     pub latest_report: Option<OptimizationReport>,
+    /// Live `[step, energy]` trace accumulated from progress reports; feeds
+    /// the task panel's chart while the job runs and dies with the handle.
+    pub energy_trace: Vec<[f64; 2]>,
 }
 
 pub enum OptimizationWorkerMessage {
@@ -64,6 +67,7 @@ pub fn spawn_optimization_job(
         cancel,
         receiver,
         latest_report: None,
+        energy_trace: Vec::new(),
     })
 }
 
