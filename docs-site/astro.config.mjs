@@ -28,6 +28,13 @@ export default defineConfig({
           autogenerate: { directory: 'getting-started' },
         },
       ],
+      logo: {
+        light: './src/assets/wordmark-light.svg',
+        dark: './src/assets/wordmark-dark.svg',
+        replacesTitle: true,
+      },
+      favicon: '/favicon.png',
+      customCss: ['./src/styles/custom.css'],
     }),
   ],
 });

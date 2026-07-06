@@ -1,0 +1,20 @@
+/* Brand accent — #7B5CFF, the "Lab" purple from the wordmark. Starlight derives
+   UI states from the low/base/high triple, per theme. */
+:root {
+  --sl-color-accent-low: #291f5e;
+  --sl-color-accent: #7b5cff;
+  --sl-color-accent-high: #c8bcff;
+}
+:root[data-theme='light'] {
+  --sl-color-accent-low: #e7e1ff;
+  --sl-color-accent: #6644f2;
+  --sl-color-accent-high: #34247a;
+}
+
+/* Comfortable CJK reading: looser leading for dense Han glyphs. */
+[lang^='zh'] .sl-markdown-content {
+  line-height: 1.8;
+}
+[lang^='zh'] .sl-markdown-content :is(h1, h2, h3, h4) {
+  line-height: 1.4;
+}
