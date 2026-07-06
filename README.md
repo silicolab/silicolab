@@ -56,8 +56,8 @@ Pass a script path to run it headless from the command line:
 silicolab workflow.sls
 ```
 
-The same scripts also run interactively in the GUI console. Scripting
-documentation is in progress.
+The same scripts also run interactively in the GUI console. The full user
+manual (English and 中文) lives at <https://silicolab.github.io/silicolab/>.
 
 ## External Dependencies
 
