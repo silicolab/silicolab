@@ -13,9 +13,9 @@ Run SilicoLab with no arguments to open the graphical interface:
 silicolab
 ```
 
-From the GUI you can view and edit 3D structures, sketch molecules in 2D,
+From the GUI you can view and edit 3D structures; sketch molecules in 2D;
 run geometry optimizations, quantum chemistry calculations, and molecular
-dynamics simulations, and plot the results.
+dynamics simulations; and plot the results.
 
 ## Run a script headless
 
@@ -31,5 +31,5 @@ workflow you automate on the command line behaves identically inside the app.
 ## Next steps
 
 Read [Installation](/getting-started/installation/) if you have not set up
-SilicoLab yet. Guides for each feature area and step-by-step tutorials are
-being added to this manual section by section.
+SilicoLab yet. Guides and step-by-step tutorials for each feature area are
+being added to this manual, section by section.
