@@ -16,9 +16,15 @@ export default defineConfig({
           href: 'https://github.com/silicolab/silicolab',
         },
       ],
+      defaultLocale: 'root',
+      locales: {
+        root: { label: 'English', lang: 'en' },
+        zh: { label: '简体中文', lang: 'zh-CN' },
+      },
       sidebar: [
         {
           label: 'Getting Started',
+          translations: { 'zh-CN': '快速开始' },
           autogenerate: { directory: 'getting-started' },
         },
       ],
