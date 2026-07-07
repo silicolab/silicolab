@@ -1,0 +1,39 @@
+---
+title: SilicoLab
+description: Computational environment for chemistry, biology & materials research.
+template: splash
+hero:
+  tagline: Computational environment for chemistry, biology & materials research.
+  image:
+    file: ../../assets/main-window.png
+    alt: SilicoLab main window showing a molecular structure in the 3D viewer
+  actions:
+    - text: Get started
+      link: /silicolab/getting-started/installation/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/silicolab/silicolab
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+<CardGrid stagger>
+  <Card title="Visualize and edit structures" icon="seti:3d">
+    Interactive 3D visualization and editing of molecular and crystal
+    structures, plus a 2D molecule sketcher with SMILES import and export.
+  </Card>
+  <Card title="Run real calculations" icon="rocket">
+    Force-field geometry optimization, quantum chemistry, and guided
+    molecular dynamics powered by GROMACS.
+  </Card>
+  <Card title="Build reticular materials" icon="puzzle">
+    Assemble COFs and MOFs from building blocks with the reticular
+    structure builder.
+  </Card>
+  <Card title="Automate everything" icon="setting">
+    One scripting language for the GUI console and the headless CLI —
+    the same script runs in both.
+  </Card>
+</CardGrid>
