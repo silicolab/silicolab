@@ -1,5 +1,7 @@
 name: Docs
 
+# Mirrors ci.yml's shape: `Docs complete` is a single always-reporting gate the
+# branch ruleset can require without deadlocking PRs that don't touch the docs.
 on:
   push:
     branches: [main]
@@ -7,17 +9,15 @@ on:
       - 'docs-site/**'
       - '.github/workflows/docs.yml'
       # canonical sources copied in by docs-site/scripts/sync-assets.mjs
-      - 'assets/brand/**'
+      - 'branding/**'
       - 'docs/images/main-window.png'
       - 'assets/icon/hicolor/256x256/apps/silicolab.png'
   pull_request:
     branches: [main]
-    paths:
-      - 'docs-site/**'
-      - '.github/workflows/docs.yml'
-      - 'assets/brand/**'
-      - 'docs/images/main-window.png'
-      - 'assets/icon/hicolor/256x256/apps/silicolab.png'
+    # No paths filter: the workflow must run on every PR so the required
+    # `Docs complete` context always reports (a path-skipped workflow never
+    # reports its context and would block the PR forever). The changes job
+    # below decides whether to actually build.
 
 permissions:
   contents: read
@@ -27,7 +27,40 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  changes:
+    name: Detect docs changes
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      docs: ${{ steps.filter.outputs.docs }}
+    steps:
+      - id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+        run: |
+          # Push events are already path-filtered by `on.push.paths`, so build.
+          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
+            echo "docs=true" | tee -a "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate -q '.[].filename') || files=""
+          echo "Changed files:"
+          printf '%s\n' "$files"
+          # Build when a PR touches the site or a canonical source it syncs in.
+          docs='(^docs-site/|^branding/|^\.github/workflows/docs\.yml$|^docs/images/main-window\.png$|^assets/icon/hicolor/256x256/apps/silicolab\.png$)'
+          if [ -z "$files" ] || printf '%s\n' "$files" | grep -qE "$docs"; then
+            echo "docs=true" | tee -a "$GITHUB_OUTPUT"
+          else
+            echo "docs=false" | tee -a "$GITHUB_OUTPUT"
+          fi
+
   build:
+    name: Build
+    needs: changes
+    if: needs.changes.outputs.docs == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -38,6 +71,8 @@ jobs:
           cache-dependency-path: docs-site/package-lock.json
       - run: npm ci
         working-directory: docs-site
+      # Runs the Starlight link validator (astro.config.mjs): a broken internal
+      # link fails the build.
       - run: npm run build
         working-directory: docs-site
       - uses: actions/upload-pages-artifact@v3
@@ -58,3 +93,20 @@ jobs:
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
+
+  # The single required status check for docs, mirroring `CI complete`. Always
+  # reports: a PR that doesn't touch docs skips the build, and a skipped job is
+  # not a failure, so this still goes green and never blocks the PR.
+  docs-complete:
+    name: Docs complete
+    if: always()
+    needs: [changes, build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require the build to have succeeded or been skipped
+        run: |
+          if ${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}; then
+            echo "::error::the docs build failed or was cancelled"
+            exit 1
+          fi
+          echo "Docs build succeeded or was skipped."

@@ -8,8 +8,8 @@ const docsSite = dirname(dirname(fileURLToPath(import.meta.url)));
 const repo = dirname(docsSite);
 
 const assets = [
-  ['assets/brand/wordmark-light.svg', 'src/assets/wordmark-light.svg'],
-  ['assets/brand/wordmark-dark.svg', 'src/assets/wordmark-dark.svg'],
+  ['branding/wordmark-light.svg', 'src/assets/wordmark-light.svg'],
+  ['branding/wordmark-dark.svg', 'src/assets/wordmark-dark.svg'],
   ['docs/images/main-window.png', 'src/assets/main-window.png'],
   ['assets/icon/hicolor/256x256/apps/silicolab.png', 'public/favicon.png'],
 ];
