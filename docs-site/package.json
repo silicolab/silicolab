@@ -3,6 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "sync-assets": "node scripts/sync-assets.mjs",
+    "predev": "npm run sync-assets",
+    "prebuild": "npm run sync-assets",
     "dev": "astro dev",
     "build": "astro build",
     "preview": "astro preview"

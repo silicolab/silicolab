@@ -3,10 +3,21 @@ name: Docs
 on:
   push:
     branches: [main]
-    paths: ['docs-site/**', '.github/workflows/docs.yml']
+    paths:
+      - 'docs-site/**'
+      - '.github/workflows/docs.yml'
+      # canonical sources copied in by docs-site/scripts/sync-assets.mjs
+      - 'assets/brand/**'
+      - 'docs/images/main-window.png'
+      - 'assets/icon/hicolor/256x256/apps/silicolab.png'
   pull_request:
     branches: [main]
-    paths: ['docs-site/**', '.github/workflows/docs.yml']
+    paths:
+      - 'docs-site/**'
+      - '.github/workflows/docs.yml'
+      - 'assets/brand/**'
+      - 'docs/images/main-window.png'
+      - 'assets/icon/hicolor/256x256/apps/silicolab.png'
 
 permissions:
   contents: read
