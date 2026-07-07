@@ -51,7 +51,7 @@ jobs:
           printf '%s\n' "$files"
           # Build when a PR touches the site or a canonical source it syncs in.
           docs='(^docs-site/|^branding/|^\.github/workflows/docs\.yml$|^docs/images/main-window\.png$|^assets/icon/hicolor/256x256/apps/silicolab\.png$)'
-          if printf '%s\n' "$files" | grep -qE "$docs"; then
+          if [ -z "$files" ] || printf '%s\n' "$files" | grep -qE "$docs"; then
             echo "docs=true" | tee -a "$GITHUB_OUTPUT"
           else
             echo "docs=false" | tee -a "$GITHUB_OUTPUT"
