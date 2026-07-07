@@ -57,10 +57,12 @@ jobs:
           files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate -q '.[].filename') || files=""
           echo "Changed files:"
           printf '%s\n' "$files"
-          # Inert = markdown anywhere, plus root .rules/.gitignore/LICENSE; these
-          # can't affect fmt/clippy/test. Everything else (Cargo.*, build.rs, the
-          # workflows) runs the suite. Fail safe to running if the list is empty.
-          inert='(\.md$|^\.rules$|^\.gitignore$|^LICENSE(-[A-Za-z0-9]+)?$)'
+          # A PR touching only inert files (markdown, the docs/, docs-site/ and
+          # branding/ trees, the docs workflow, root .rules/.gitignore/LICENSE)
+          # can't affect fmt/clippy/test, so skip the Rust suite. assets/ stays
+          # non-inert: Rust embeds its fonts/icons and builds the Windows icon
+          # from it. Fail safe to running.
+          inert='(\.md$|^docs(-site)?/|^branding/|^\.github/workflows/docs\.yml$|^\.rules$|^\.gitignore$|^LICENSE(-[A-Za-z0-9]+)?$)'
           if [ -z "$files" ] || printf '%s\n' "$files" | grep -qvE "$inert"; then
             code=true
           else

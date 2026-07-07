@@ -19,12 +19,12 @@ use super::host;
 
 // Canonical UBL structures, cleaned to a single heavy-atom protein chain (waters,
 // ions, hydrogens, and CRYST1/CONECT stripped) and ending in the resolved
-// C-terminal diGly. Provenance is recorded in assets/ubl/README plus each file's
+// C-terminal diGly. Provenance is recorded in the sibling README plus each file's
 // TITLE: ubiquitin 1UBQ chain A, SUMO1 2N1V model 1 chain A (mature form), NEDD8
 // 1NDD chain B (the conformer that resolves the Gly-Gly tail with its OXT).
-const UBIQUITIN_PDB: &str = include_str!("../../../../assets/ubl/ubiquitin.pdb");
-const SUMO1_PDB: &str = include_str!("../../../../assets/ubl/sumo1.pdb");
-const NEDD8_PDB: &str = include_str!("../../../../assets/ubl/nedd8.pdb");
+const UBIQUITIN_PDB: &str = include_str!("../../../assets/ubl/ubiquitin.pdb");
+const SUMO1_PDB: &str = include_str!("../../../assets/ubl/sumo1.pdb");
+const NEDD8_PDB: &str = include_str!("../../../assets/ubl/nedd8.pdb");
 
 /// Short label for a UBL kind, used in titles and error context.
 fn ubl_label(kind: UblKind) -> &'static str {
