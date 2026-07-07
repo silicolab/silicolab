@@ -30,6 +30,6 @@ workflow you automate on the command line behaves identically inside the app.
 
 ## Next steps
 
-Read [Installation](/getting-started/installation/) if you have not set up
+Read [Installation](../installation/) if you have not set up
 SilicoLab yet. Guides and step-by-step tutorials for each feature area are
 being added to this manual, section by section.

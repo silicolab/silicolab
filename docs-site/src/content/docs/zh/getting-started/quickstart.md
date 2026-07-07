@@ -29,5 +29,5 @@ silicolab workflow.sls
 
 ## 下一步
 
-如果尚未安装，请先阅读[安装](/zh/getting-started/installation/)。
+如果尚未安装，请先阅读[安装](../installation/)。
 各功能模块的使用指南与逐步教程正在按章节陆续加入本手册。
