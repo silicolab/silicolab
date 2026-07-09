@@ -67,6 +67,31 @@ pub fn parse_mol2(input: &str) -> Result<Structure> {
     }
 }
 
+/// Split a multi-molecule MOL2 file into one structure per `@<TRIPOS>MOLECULE`
+/// record. A single-molecule file yields exactly one.
+pub fn parse_mol2_records(input: &str) -> Result<Vec<Structure>> {
+    let lines = input.lines().collect::<Vec<_>>();
+    let starts = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, line)| line.trim_start().starts_with("@<TRIPOS>MOLECULE"))
+        .map(|(index, _)| index)
+        .collect::<Vec<_>>();
+
+    if starts.is_empty() {
+        bail!("MOL2 input contains no @<TRIPOS>MOLECULE record");
+    }
+
+    starts
+        .iter()
+        .enumerate()
+        .map(|(position, &start)| {
+            let end = starts.get(position + 1).copied().unwrap_or(lines.len());
+            parse_mol2(&format!("{}\n", lines[start..end].join("\n")))
+        })
+        .collect()
+}
+
 pub fn to_mol2(structure: &Structure) -> String {
     let title = if structure.title.trim().is_empty() {
         "MOL2 structure"

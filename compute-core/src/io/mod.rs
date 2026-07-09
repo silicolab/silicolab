@@ -7,6 +7,7 @@ pub mod sdfrust_bridge;
 #[cfg(feature = "network")]
 pub mod self_update;
 pub mod structure_codec;
+pub mod structure_export;
 pub mod structure_format;
 pub mod structure_io;
 pub mod structure_paths;

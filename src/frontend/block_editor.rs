@@ -6,7 +6,7 @@ use eframe::egui::{self, Grid};
 use crate::{
     domain::Structure,
     frontend::widgets::{atom_index_combo, combo_box, default_substitution_site},
-    io::formats::psf::{PsfReticular, PsfSubstitutionSite, to_psf},
+    io::formats::slf::{SlfReticular, SlfSubstitutionSite, to_slf},
 };
 
 pub struct BuildingBlockEditor {
@@ -208,7 +208,7 @@ impl BuildingBlockEditor {
         else {
             anyhow::bail!("save canceled");
         };
-        let reticular = PsfReticular {
+        let reticular = SlfReticular {
             class: self.class.metadata_value().to_string(),
             label: Some(self.label.clone()),
             substitution_sites: self
@@ -218,13 +218,13 @@ impl BuildingBlockEditor {
                     site.leaving_atom < structure.atoms.len()
                         && site.binding_atom < structure.atoms.len()
                 })
-                .map(|site| PsfSubstitutionSite {
+                .map(|site| SlfSubstitutionSite {
                     leaving_atom: site.leaving_atom,
                     binding_atom: site.binding_atom,
                 })
                 .collect(),
         };
-        let source = to_psf(structure, Some(&reticular));
+        let source = to_slf(structure, Some(&reticular));
         std::fs::write(&path, &source)?;
 
         Ok((path, source))

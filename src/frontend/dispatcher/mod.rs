@@ -57,6 +57,7 @@ mod chart;
 mod disorder;
 mod dock;
 mod docking;
+mod export;
 mod files;
 mod gromacs;
 mod heavy_render;
@@ -75,6 +76,7 @@ pub(crate) use chart::*;
 pub(crate) use disorder::*;
 pub(crate) use dock::*;
 pub(crate) use docking::*;
+pub(crate) use export::*;
 pub(crate) use files::*;
 pub(crate) use gromacs::*;
 pub(crate) use heavy_render::*;
@@ -115,8 +117,9 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::OpenPdbFetchDialog => open_pdb_fetch_dialog(state),
         AppAction::FetchPdb => fetch_pdb(state),
         AppAction::CancelPdbFetch => state.ui.pending_pdb_fetch = None,
-        AppAction::Save => save(state),
-        AppAction::SaveAs => save_as(state),
+        AppAction::OpenExportDialog { entry_id } => open_export_dialog(state, entry_id),
+        AppAction::RunExport => run_export(state),
+        AppAction::CancelExport => cancel_export(state),
         AppAction::Undo => undo(state),
         AppAction::Redo => redo(state),
         AppAction::EditStructure => edit_structure(state),

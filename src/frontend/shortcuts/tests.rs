@@ -45,12 +45,30 @@ fn matches_specific_shortcut() {
     let bindings = registry();
     let binding = resolve_binding(
         &bindings,
-        shortcut_input(egui::Key::S, mod_key(true, false, false), false),
+        shortcut_input(egui::Key::E, mod_key(true, true, false), false),
         &state,
     )
     .expect("shortcut matches");
 
-    assert_eq!(binding.id, "file.save");
+    assert_eq!(binding.id, "file.export");
+}
+
+/// Ctrl+S must never be inert: a Scratch workspace has no project to save, and
+/// `save_project` turns that into the create-project dialog rather than a no-op.
+#[test]
+fn save_shortcut_resolves_without_a_project() {
+    let state = state_with_entry();
+    assert!(!state.workspace.is_project(), "fixture must be scratch");
+    let bindings = registry();
+
+    let binding = resolve_binding(
+        &bindings,
+        shortcut_input(egui::Key::S, mod_key(true, false, false), false),
+        &state,
+    )
+    .expect("Ctrl+S matches in a scratch workspace");
+
+    assert_eq!(binding.id, "file.save_project");
 }
 
 #[test]
@@ -100,7 +118,7 @@ fn guard_blocks_entry_shortcuts_without_active_entry() {
     let bindings = registry();
     let binding = resolve_binding(
         &bindings,
-        shortcut_input(egui::Key::S, mod_key(true, false, false), false),
+        shortcut_input(egui::Key::Num1, egui::Modifiers::ALT, false),
         &state,
     );
 
@@ -113,12 +131,12 @@ fn exact_modifiers_prevent_shift_conflict() {
     let bindings = registry();
     let binding = resolve_binding(
         &bindings,
-        shortcut_input(egui::Key::S, mod_key(true, true, false), false),
+        shortcut_input(egui::Key::O, mod_key(true, true, false), false),
         &state,
     )
     .expect("shifted shortcut matches");
 
-    assert_eq!(binding.id, "file.save_as");
+    assert_eq!(binding.id, "file.open_file");
 }
 
 #[test]

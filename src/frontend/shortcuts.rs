@@ -25,7 +25,6 @@ pub(crate) enum ShortcutGuard {
     HasActiveEntry,
     HasSelection,
     HistoryNavigation,
-    ProjectWorkspace,
     PrimarySidebarVisible,
     TrajectoryLoaded,
     ActiveMdEntryWithTrajectory,
@@ -80,12 +79,6 @@ impl ShortcutModifiers {
     const MOD_SHIFT: Self = Self {
         command: true,
         shift: true,
-        ..Self::NONE
-    };
-
-    const MOD_ALT: Self = Self {
-        command: true,
-        alt: true,
         ..Self::NONE
     };
 }
@@ -258,7 +251,6 @@ fn guard_allows(guard: ShortcutGuard, state: &AppState) -> bool {
         ShortcutGuard::HasActiveEntry => state.has_active_entry(),
         ShortcutGuard::HasSelection => state.has_active_entry() && !state.ui.selection.is_empty(),
         ShortcutGuard::HistoryNavigation => state.history_navigation_enabled(),
-        ShortcutGuard::ProjectWorkspace => state.workspace.is_project(),
         ShortcutGuard::PrimarySidebarVisible => state.ui.layout.show_primary_sidebar,
         ShortcutGuard::TrajectoryLoaded => state.ui.trajectory.is_some(),
         ShortcutGuard::ActiveMdEntryWithTrajectory => active_md_entry_with_trajectory(state),

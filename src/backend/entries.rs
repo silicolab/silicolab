@@ -117,6 +117,9 @@ pub struct EntryRecord {
     pub structure: Structure,
     pub revision: u64,
     pub source_path: Option<PathBuf>,
+    /// Where this entry was last exported, and so where a no-dialog re-export
+    /// writes. Only an absolute path is a target the user chose; the relative
+    /// default (`edited.xyz`) means "never exported, ask first".
     pub save_path: PathBuf,
     pub compound_id: Option<i64>,
     /// Whether `structure` holds the real geometry. When a project is opened,

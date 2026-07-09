@@ -9,12 +9,14 @@ use crate::frontend::state::AppState;
 
 mod args;
 mod editing;
+mod export;
 mod grammar;
 mod loading;
 mod render;
 
 pub(crate) use args::*;
 pub(crate) use editing::*;
+pub(crate) use export::*;
 pub(crate) use grammar::*;
 pub(crate) use loading::*;
 pub(crate) use render::*;
@@ -286,6 +288,11 @@ pub fn command_catalog() -> String {
         "  delete chain <A,B,...>      Delete the listed chains.",
         "  save image <path.png>       Render the viewport to a PNG (may overwrite).",
         "  save view <path.sls>        Save the current view as a replayable script (may overwrite).",
+        "  export <path> [--scope active|selected|all] [--format cif|xyz|mol2|pdb|pdbqt]",
+        "                              Write structures out (may overwrite). A path with a structure",
+        "                              extension writes one file; any other path is a folder that gets",
+        "                              one file per structure. Only .xyz and .mol2 can hold several",
+        "                              structures in one file; the others refuse and need a folder.",
         "",
         "Simulation (compute — minutes/GPU; runs in the background):",
         "  md build                    Box + capture topology for the active structure.",

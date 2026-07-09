@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use nalgebra::{Point3, Vector3};
 
 use super::recipe::{ComponentSource, NetworkId};
-use crate::io::formats::psf::{PsfDocument, PsfReticular, parse_psf_document};
+use crate::io::formats::slf::{SlfDocument, SlfReticular, parse_slf_document};
 
 #[derive(Debug, Clone)]
 pub struct ComponentTemplate {
@@ -67,7 +67,7 @@ impl BuiltinComponent {
     }
 
     pub fn template(&self) -> ComponentTemplate {
-        parse_component_psf(self.data)
+        parse_component_slf(self.data)
     }
 }
 
@@ -209,7 +209,7 @@ pub fn component_template(
         ComponentSource::BuiltinCore(idx) => CORE_COMPONENTS[idx].template(),
         ComponentSource::BuiltinLinker(idx) => LINKER_COMPONENTS[idx].template(),
         ComponentSource::BuiltinFunctionalGroup(idx) => FUNCTIONAL_GROUP_COMPONENTS[idx].template(),
-        ComponentSource::Custom(index) => parse_component_psf(&custom_components[index]),
+        ComponentSource::Custom(index) => parse_component_slf(&custom_components[index]),
     }
 }
 
@@ -220,7 +220,7 @@ pub fn component_label(source: ComponentSource, custom_components: &[String]) ->
         ComponentSource::BuiltinFunctionalGroup(idx) => {
             FUNCTIONAL_GROUP_COMPONENTS[idx].label.to_string()
         }
-        ComponentSource::Custom(index) => parse_component_psf(&custom_components[index]).label,
+        ComponentSource::Custom(index) => parse_component_slf(&custom_components[index]).label,
     }
 }
 
@@ -244,7 +244,7 @@ fn custom_component_options(
         .iter()
         .enumerate()
         .filter_map(|(index, source)| {
-            let component = parse_component_psf(source);
+            let component = parse_component_slf(source);
             (component.class == class
                 && connectivity.is_none_or(|required| component.connectivity == required))
             .then_some(ComponentSource::Custom(index))
@@ -252,16 +252,16 @@ fn custom_component_options(
         .collect()
 }
 
-fn parse_component_psf(input: &str) -> ComponentTemplate {
-    let document = parse_psf_document(input).expect("embedded PSF component must parse");
+fn parse_component_slf(input: &str) -> ComponentTemplate {
+    let document = parse_slf_document(input).expect("embedded SLF component must parse");
     let reticular = document
         .reticular
         .clone()
-        .expect("embedded PSF component must include reticular metadata");
-    parse_psf_component(document, reticular)
+        .expect("embedded SLF component must include reticular metadata");
+    parse_slf_component(document, reticular)
 }
 
-fn parse_psf_component(document: PsfDocument, reticular: PsfReticular) -> ComponentTemplate {
+fn parse_slf_component(document: SlfDocument, reticular: SlfReticular) -> ComponentTemplate {
     let class = match reticular.class.as_str() {
         "core" => ComponentClass::Core,
         "linker" => ComponentClass::Linker,
@@ -324,7 +324,7 @@ mod tests {
     use super::{CORE_COMPONENTS, ComponentClass, FUNCTIONAL_GROUP_COMPONENTS, LINKER_COMPONENTS};
 
     #[test]
-    fn builtin_psf_metadata_is_valid() {
+    fn builtin_slf_metadata_is_valid() {
         for component in CORE_COMPONENTS {
             validate_builtin_component(
                 component.label,
@@ -357,8 +357,8 @@ mod tests {
         expected_class: ComponentClass,
         expected_connectivity: usize,
     ) {
-        let document = crate::io::formats::psf::parse_psf_document(data)
-            .unwrap_or_else(|error| panic!("{label}: invalid PSF: {error}"));
+        let document = crate::io::formats::slf::parse_slf_document(data)
+            .unwrap_or_else(|error| panic!("{label}: invalid SLF: {error}"));
         let reticular = document
             .reticular
             .as_ref()
@@ -418,13 +418,13 @@ mod tests {
                     (bond.a == site.leaving_atom && bond.b == site.binding_atom)
                         || (bond.a == site.binding_atom && bond.b == site.leaving_atom)
                 }),
-                "{label}: substitution site {} -> {} is not backed by a PSF bond",
+                "{label}: substitution site {} -> {} is not backed by a SLF bond",
                 site.leaving_atom + 1,
                 site.binding_atom + 1
             );
         }
 
-        let template = super::parse_component_psf(data);
+        let template = super::parse_component_slf(data);
         assert_eq!(
             template.class, expected_class,
             "{label}: parsed template class mismatch"

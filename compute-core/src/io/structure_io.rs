@@ -1,13 +1,10 @@
 use std::{fs, path::Path};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 
 use crate::domain::Structure;
 
-use super::{
-    structure_codec::{parse_structure, serialize_structure},
-    structure_paths,
-};
+use super::{structure_codec::parse_structure, structure_paths};
 
 pub use super::{
     structure_format::StructureFormat,
@@ -51,6 +48,21 @@ pub fn load_structures(path: &Path) -> Result<ParsedStructures> {
     let format = structure_paths::format_from_path(path)
         .ok_or_else(|| anyhow::anyhow!(structure_paths::unsupported_read_message(path)))?;
 
+    // XYZ and MOL2 files routinely carry several records; parsing only the first
+    // would silently drop the rest of a file this app can itself write.
+    if matches!(format, StructureFormat::Xyz | StructureFormat::Mol2) {
+        let structures = match format {
+            StructureFormat::Xyz => crate::io::formats::xyz::parse_xyz_records(&source),
+            _ => crate::io::formats::mol2::parse_mol2_records(&source),
+        }
+        .with_context(|| format!("failed to parse {} input", format.label()))?;
+        return Ok(ParsedStructures {
+            title: None,
+            identifier: None,
+            structures,
+        });
+    }
+
     if format == StructureFormat::Pdb {
         let document = crate::io::formats::pdb::parse_pdb_document(&source)
             .with_context(|| format!("failed to parse {} input", format.label()))?;
@@ -76,18 +88,6 @@ pub fn load_structures(path: &Path) -> Result<ParsedStructures> {
         identifier: None,
         structures: vec![structure],
     })
-}
-
-pub fn save_structure(structure: &Structure, path: &Path) -> Result<()> {
-    let format = structure_paths::format_from_path(path)
-        .ok_or_else(|| anyhow::anyhow!(structure_paths::unsupported_write_message(path)))?;
-    if !format.supports_write() {
-        bail!("{} export is not supported", format.label());
-    }
-
-    let contents = serialize_structure(format, structure)?;
-
-    fs::write(path, contents).with_context(|| format!("failed to write {}", path.display()))
 }
 
 #[cfg(test)]
