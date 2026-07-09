@@ -107,6 +107,8 @@ pub struct UiState {
     pub pending_docking: Option<DockingPrompt>,
     pub pending_ptm: Option<PendingPtm>,
     pub pending_pdb_fetch: Option<String>,
+    /// The open Export dialog's draft, or `None` when it is closed.
+    pub pending_export: Option<crate::frontend::state::ExportPrompt>,
     /// The single active non-modal notification (a message plus optional action
     /// buttons), or `None`. Posting a new one replaces any current one.
     pub notification: Option<crate::frontend::actions::Notification>,
@@ -240,6 +242,7 @@ impl Default for UiState {
             pending_docking: None,
             pending_ptm: None,
             pending_pdb_fetch: None,
+            pending_export: None,
             notification: None,
             pending_heavy_gate: None,
             heavy_render_decided: std::collections::BTreeSet::new(),

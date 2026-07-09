@@ -2,7 +2,7 @@ use anyhow::{Result, bail};
 
 use crate::domain::Structure;
 
-use super::structure_format::StructureFormat;
+use super::structure_format::{MultiStructureFile, StructureFormat};
 
 pub trait StructureCodec {
     fn parse(&self, source: &str) -> Result<Structure>;
@@ -17,12 +17,36 @@ pub fn serialize_structure(format: StructureFormat, structure: &Structure) -> Re
     codec_for(format).serialize(structure)
 }
 
+/// Serialize several structures into the contents of one file. Only formats
+/// whose records concatenate accept more than one; the rest must be written one
+/// structure per file (see [`StructureFormat::single_structure_reason`]).
+pub fn serialize_structures(format: StructureFormat, structures: &[&Structure]) -> Result<String> {
+    match structures {
+        [] => bail!("no structures to serialize"),
+        [only] => serialize_structure(format, only),
+        many => {
+            if format.multi_structure_file() != MultiStructureFile::Concatenated {
+                bail!(
+                    "{} cannot hold {} structures in one file",
+                    format.label(),
+                    many.len()
+                );
+            }
+            let mut output = String::new();
+            for structure in many {
+                output.push_str(&serialize_structure(format, structure)?);
+            }
+            Ok(output)
+        }
+    }
+}
+
 fn codec_for(format: StructureFormat) -> &'static dyn StructureCodec {
     match format {
         StructureFormat::Xyz => &XyzCodec,
         StructureFormat::Cif => &CifCodec,
         StructureFormat::Mol2 => &Mol2Codec,
-        StructureFormat::Psf => &PsfCodec,
+        StructureFormat::Slf => &SlfCodec,
         StructureFormat::Gro => &GroCodec,
         StructureFormat::Pdb => &PdbCodec,
         StructureFormat::Pdbqt => &PdbqtCodec,
@@ -32,7 +56,7 @@ fn codec_for(format: StructureFormat) -> &'static dyn StructureCodec {
 struct XyzCodec;
 struct CifCodec;
 struct Mol2Codec;
-struct PsfCodec;
+struct SlfCodec;
 struct GroCodec;
 struct PdbCodec;
 struct PdbqtCodec;
@@ -67,13 +91,15 @@ impl StructureCodec for Mol2Codec {
     }
 }
 
-impl StructureCodec for PsfCodec {
+impl StructureCodec for SlfCodec {
     fn parse(&self, source: &str) -> Result<Structure> {
-        crate::io::formats::psf::parse_psf(source)
+        crate::io::formats::slf::parse_slf(source)
     }
 
     fn serialize(&self, _structure: &Structure) -> Result<String> {
-        bail!("PSF export is not supported");
+        // Writing SLF means writing a building block, which needs the reticular
+        // metadata only the block editor holds (`formats::slf::to_slf`).
+        bail!("SLF export is not supported");
     }
 }
 

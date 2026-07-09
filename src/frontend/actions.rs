@@ -10,8 +10,16 @@ pub enum AppAction {
     OpenPdbFetchDialog,
     FetchPdb,
     CancelPdbFetch,
-    Save,
-    SaveAs,
+    /// Open the Export dialog, which defaults to the entries selected in the
+    /// sidebar. `entry_id` is set when the action comes from an entry's context
+    /// menu: right-clicking outside the current selection exports just that
+    /// entry, as a file manager would.
+    OpenExportDialog {
+        entry_id: Option<u64>,
+    },
+    /// Write the export the open dialog describes, then close it.
+    RunExport,
+    CancelExport,
     Undo,
     Redo,
     EditStructure,

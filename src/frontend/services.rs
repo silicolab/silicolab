@@ -24,27 +24,6 @@ impl StructureService {
             .add_filter("Structure", structure_io::readable_extensions())
             .pick_file()
     }
-
-    pub fn save(structure: &Structure, path: &Path) -> Result<()> {
-        structure_io::save_structure(structure, path)
-    }
-
-    pub fn save_as_dialog(structure: &Structure, current_save_path: &Path) -> Option<PathBuf> {
-        let preferred_format =
-            structure_io::preferred_save_format(structure, Some(current_save_path));
-        let mut dialog = rfd::FileDialog::new()
-            .set_file_name(structure_io::suggested_save_stem(Some(current_save_path)));
-        for format in structure_io::writable_formats() {
-            dialog = dialog.add_filter(format.label(), &[format.extension()]);
-        }
-
-        let path = dialog.save_file()?;
-        Some(if path.extension().is_some() {
-            path
-        } else {
-            structure_io::path_with_format_extension(&path, preferred_format)
-        })
-    }
 }
 
 pub struct ReticularService;

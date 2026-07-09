@@ -19,7 +19,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Result, anyhow};
-use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand};
+use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use eframe::egui::Color32;
 
 use super::{
@@ -131,6 +131,9 @@ pub(crate) enum Command {
         #[command(subcommand)]
         target: SaveTarget,
     },
+
+    /// Write structures to a file or a folder.
+    Export(ExportArgs),
 
     // `md`/`qm`/`disorder` keep the verbatim pass-through: their hand-written
     // parsers are large, share the assistant's heavy-path request builders, and
@@ -437,6 +440,38 @@ pub(crate) enum SaveTarget {
     View { path: PathBuf },
 }
 
+#[derive(Debug, Args)]
+pub(crate) struct ExportArgs {
+    /// A file (`out.xyz`) to write into, or a folder to fill with one file per
+    /// structure. A path with no structure extension is taken as a folder.
+    pub(crate) path: PathBuf,
+    /// Which structures to write.
+    #[arg(long, value_enum, default_value_t = ExportScopeArg::Active)]
+    pub(crate) scope: ExportScopeArg,
+    /// Format for a folder export; ignored when `path` names a file.
+    #[arg(long, value_enum, default_value_t = ExportFormatArg::Cif)]
+    pub(crate) format: ExportFormatArg,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ExportScopeArg {
+    /// The entry in the active tab.
+    Active,
+    /// The entries selected in the sidebar.
+    Selected,
+    /// Every entry in the project.
+    All,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub(crate) enum ExportFormatArg {
+    Xyz,
+    Cif,
+    Mol2,
+    Pdb,
+    Pdbqt,
+}
+
 #[derive(Debug, Subcommand)]
 pub(crate) enum JobsAction {
     /// List running and tracked jobs.
@@ -511,7 +546,7 @@ impl Command {
             | Command::Methylate(_)
             | Command::Lipidate(_)
             | Command::Ubiquitinate(_) => Mutating,
-            Command::Save { .. } => FileWrite,
+            Command::Save { .. } | Command::Export(_) => FileWrite,
             Command::Md { .. }
             | Command::Disorder { .. }
             | Command::Dock(_)
@@ -557,6 +592,7 @@ impl Command {
             Command::Hydrogen { action } => super::hydrogen_command(state, action),
             Command::Delete { target } => super::delete_command(state, target),
             Command::Save { target } => super::save_command(state, context, target),
+            Command::Export(args) => super::export_command(state, context, args),
             Command::Md { args } => md_commands::md_command(state, &args),
             Command::Disorder { args } => disorder_commands::disorder_command(state, &args),
             Command::Qm { args } => qm_commands::qm_command(state, &args),

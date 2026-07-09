@@ -148,26 +148,13 @@ pub(crate) fn render_title_bar(
                     }
                     ui.separator();
                     if ui
-                        .add_enabled(
-                            has_active_entry,
-                            Button::new(crate::frontend::shortcuts::menu_text("file.save", "Save")),
-                        )
+                        .button(crate::frontend::shortcuts::menu_text(
+                            "file.export",
+                            "Export...",
+                        ))
                         .clicked()
                     {
-                        actions.push(AppAction::Save);
-                        ui.close();
-                    }
-                    if ui
-                        .add_enabled(
-                            has_active_entry,
-                            Button::new(crate::frontend::shortcuts::menu_text(
-                                "file.save_as",
-                                "Save As...",
-                            )),
-                        )
-                        .clicked()
-                    {
-                        actions.push(AppAction::SaveAs);
+                        actions.push(AppAction::OpenExportDialog { entry_id: None });
                         ui.close();
                     }
                     ui.separator();

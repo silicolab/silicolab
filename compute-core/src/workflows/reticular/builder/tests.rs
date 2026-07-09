@@ -218,7 +218,7 @@ fn supported_framework_combinations_form_connected_layers() {
 }
 
 #[test]
-fn custom_psf_components_can_build_frameworks() {
+fn custom_slf_components_can_build_frameworks() {
     let spec = ReticularBuildSpec {
         primary: ComponentSource::Custom(0),
         secondary: ComponentSource::BuiltinCore(1),
@@ -230,7 +230,7 @@ fn custom_psf_components_can_build_frameworks() {
         supercell: [1, 1, 1],
         ..ReticularBuildSpec::default()
     };
-    let structure = build_framework(&spec).expect("framework from custom psf");
+    let structure = build_framework(&spec).expect("framework from custom slf");
 
     assert_eq!(connected_components(&structure), 1);
     assert!(structure.atoms.len() > 10);

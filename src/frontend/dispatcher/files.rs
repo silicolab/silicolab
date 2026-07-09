@@ -84,35 +84,6 @@ pub(crate) fn format_open_results(
     }
 }
 
-pub(crate) fn save(state: &mut AppState) {
-    if !require_active_entry(state, "Save") {
-        return;
-    }
-    let save_path = state.save_path().clone();
-    match StructureService::save(state.structure(), &save_path) {
-        Ok(()) => {
-            state.set_source_path(Some(save_path.clone()));
-            state.set_message(format!("Saved structure to {}", save_path.display()));
-        }
-        Err(error) => {
-            state.set_message(format!("Failed to save {}: {error}", save_path.display()));
-        }
-    }
-}
-
-pub(crate) fn save_as(state: &mut AppState) {
-    if !require_active_entry(state, "Save As") {
-        return;
-    }
-    let current_save_path = state.save_path().clone();
-    let Some(path) = StructureService::save_as_dialog(state.structure(), &current_save_path) else {
-        state.set_message("Save As canceled".to_string());
-        return;
-    };
-    state.set_save_path(path);
-    save(state);
-}
-
 pub(crate) fn edit_structure(state: &mut AppState) {
     if !require_active_entry(state, "Edit Structure") {
         return;

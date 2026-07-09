@@ -599,3 +599,86 @@ fn activate_reports_unresolvable_references() {
         "error: {ambiguous}"
     );
 }
+
+/// The whole export chain end to end, through the real grammar and dispatcher:
+/// two entries that share a name land in a folder as two distinct files.
+#[test]
+fn export_to_a_folder_writes_one_deduplicated_file_per_structure() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let fixture = write_console_fixture("export_folder", CONSOLE_TEST_PDB);
+    execute_console_line(&mut state, &open_fixture_command(&fixture)).unwrap();
+    execute_console_line(&mut state, &open_fixture_command(&fixture)).unwrap();
+    let directory = export_test_dir("folder");
+
+    let message = execute_console_line(
+        &mut state,
+        &format!("export {} --scope all --format xyz", directory.display()),
+    )
+    .expect("folder export");
+
+    let mut written = fs::read_dir(&directory)
+        .expect("read export dir")
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+    written.sort();
+    fs::remove_dir_all(&directory).ok();
+
+    assert!(message.contains("2 structures"), "message: {message}");
+    assert_eq!(written.len(), 2, "got {written:?}");
+    assert_ne!(written[0], written[1], "names must not collide");
+}
+
+/// XYZ concatenates, so a combined file must parse back into every structure.
+#[test]
+fn export_to_one_xyz_file_round_trips_every_structure() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let fixture = write_console_fixture("export_combined", CONSOLE_TEST_PDB);
+    execute_console_line(&mut state, &open_fixture_command(&fixture)).unwrap();
+    execute_console_line(&mut state, &open_fixture_command(&fixture)).unwrap();
+    let directory = export_test_dir("combined");
+    let path = directory.join("combined.xyz");
+
+    execute_console_line(
+        &mut state,
+        &format!("export {} --scope all", path.display()),
+    )
+    .expect("combined export");
+
+    let parsed = crate::io::structure_io::load_structures(&path).expect("reopen combined file");
+    fs::remove_dir_all(&directory).ok();
+
+    assert_eq!(parsed.structures.len(), 2);
+}
+
+/// PDB `MODEL` records mean "conformers of one system", so merging unrelated
+/// structures is refused rather than silently written as a lie.
+#[test]
+fn export_of_several_structures_into_one_pdb_is_refused() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let fixture = write_console_fixture("export_refuse", CONSOLE_TEST_PDB);
+    execute_console_line(&mut state, &open_fixture_command(&fixture)).unwrap();
+    execute_console_line(&mut state, &open_fixture_command(&fixture)).unwrap();
+    let directory = export_test_dir("refuse");
+    let path = directory.join("combined.pdb");
+
+    let error = execute_console_line(
+        &mut state,
+        &format!("export {} --scope all", path.display()),
+    )
+    .expect_err("PDB must refuse a merge");
+    let existed = path.exists();
+    fs::remove_dir_all(&directory).ok();
+
+    assert!(error.to_string().contains("cannot hold"), "error: {error}");
+    assert!(!existed, "a refused export must not leave a file behind");
+}
+
+fn export_test_dir(name: &str) -> PathBuf {
+    let nonce = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .expect("system time")
+        .as_nanos();
+    let dir = std::env::temp_dir().join(format!("silicolab_export_{name}_{nonce}"));
+    fs::create_dir_all(&dir).expect("export dir");
+    dir
+}

@@ -9,17 +9,17 @@ use crate::{
     io::formats::mol2::{parse_mol2_document, to_mol2},
 };
 
-pub use document::PsfDocument;
-pub use reticular::{PsfReticular, PsfSubstitutionSite};
+pub use document::SlfDocument;
+pub use reticular::{SlfReticular, SlfSubstitutionSite};
 pub use sectioned::{
-    PsfExtensionBlock, PsfExtensionPayload, PsfKeyBlock, PsfKeyEntry, PsfSection,
-    PsfSectionedBlock, PsfTableBlock,
+    SlfExtensionBlock, SlfExtensionPayload, SlfKeyBlock, SlfKeyEntry, SlfSection,
+    SlfSectionedBlock, SlfTableBlock,
 };
 
 use reticular::{parse_reticular_block, serialize_reticular_block};
 use sectioned::parse_extension_block;
 
-pub fn to_psf(structure: &Structure, reticular: Option<&PsfReticular>) -> String {
+pub fn to_slf(structure: &Structure, reticular: Option<&SlfReticular>) -> String {
     let mut output = to_mol2(structure);
 
     if let Some(reticular) = reticular {
@@ -29,8 +29,8 @@ pub fn to_psf(structure: &Structure, reticular: Option<&PsfReticular>) -> String
     output
 }
 
-pub fn parse_psf(input: &str) -> Result<Structure> {
-    let document = parse_psf_document(input)?;
+pub fn parse_slf(input: &str) -> Result<Structure> {
+    let document = parse_slf_document(input)?;
     let atoms = document
         .atoms
         .iter()
@@ -58,7 +58,7 @@ pub fn parse_psf(input: &str) -> Result<Structure> {
     }
 }
 
-pub fn parse_psf_document(input: &str) -> Result<PsfDocument> {
+pub fn parse_slf_document(input: &str) -> Result<SlfDocument> {
     let base = parse_mol2_document(input)?;
 
     let mut extensions = Vec::new();
@@ -85,7 +85,7 @@ pub fn parse_psf_document(input: &str) -> Result<PsfDocument> {
         }
     }
 
-    let mut document = PsfDocument {
+    let mut document = SlfDocument {
         title: base.title,
         atoms: base.atoms,
         bonds: base.bonds,
@@ -106,8 +106,8 @@ mod tests {
     use crate::domain::BondType;
 
     use super::{
-        PsfExtensionPayload, PsfReticular, PsfSection, PsfSubstitutionSite, parse_psf,
-        parse_psf_document, to_psf,
+        SlfExtensionPayload, SlfReticular, SlfSection, SlfSubstitutionSite, parse_slf,
+        parse_slf_document, to_slf,
     };
 
     #[test]
@@ -136,7 +136,7 @@ atom_id occupancy b_factor
 1 0.50 13.37
 ";
 
-        let document = parse_psf_document(input).expect("document");
+        let document = parse_slf_document(input).expect("document");
         let reticular = document.reticular.expect("reticular");
         assert_eq!(reticular.class, "core");
         assert_eq!(reticular.label.as_deref(), Some("TEST"));
@@ -146,18 +146,18 @@ atom_id occupancy b_factor
         assert_eq!(document.extensions.len(), 2);
 
         match &document.extensions[1].payload {
-            PsfExtensionPayload::Sectioned(sectioned) => {
+            SlfExtensionPayload::Sectioned(sectioned) => {
                 let table = sectioned.first_table().expect("atom-site table");
                 assert_eq!(table.columns, vec!["atom_id", "occupancy", "b_factor"]);
                 assert_eq!(table.rows.len(), 1);
-                assert!(matches!(sectioned.sections[0], PsfSection::Table(_)));
+                assert!(matches!(sectioned.sections[0], SlfSection::Table(_)));
             }
         }
     }
 
     #[test]
-    fn reuses_mol2_crysin_parsing_for_psf_base_sections() {
-        let document = parse_psf_document(
+    fn reuses_mol2_crysin_parsing_for_slf_base_sections() {
+        let document = parse_slf_document(
             "\
 @<TRIPOS>MOLECULE
 cell
@@ -179,7 +179,7 @@ USER_CHARGES
 
     #[test]
     fn parses_structure_and_preserves_aromatic_bonds() {
-        let structure = parse_psf(
+        let structure = parse_slf(
             "\
 @<TRIPOS>MOLECULE
 benzene
@@ -202,7 +202,7 @@ USER_CHARGES
 
     #[test]
     fn writes_reticular_extension_block() {
-        let structure = parse_psf(
+        let structure = parse_slf(
             "\
 @<TRIPOS>MOLECULE
 test
@@ -217,12 +217,12 @@ USER_CHARGES
 ",
         )
         .expect("structure");
-        let output = to_psf(
+        let output = to_slf(
             &structure,
-            Some(&PsfReticular {
+            Some(&SlfReticular {
                 class: "core".to_string(),
                 label: Some("TEST".to_string()),
-                substitution_sites: vec![PsfSubstitutionSite {
+                substitution_sites: vec![SlfSubstitutionSite {
                     leaving_atom: 1,
                     binding_atom: 0,
                 }],
@@ -240,7 +240,7 @@ USER_CHARGES
 
     #[test]
     fn rejects_malformed_table_rows() {
-        let error = parse_psf_document(
+        let error = parse_slf_document(
             "\
 @<TRIPOS>MOLECULE
 bad
@@ -269,7 +269,7 @@ leaving_atom binding_atom
 
     #[test]
     fn rejects_non_sectioned_extension_blocks() {
-        let error = parse_psf_document(
+        let error = parse_slf_document(
             "\
 @<TRIPOS>MOLECULE
 bad

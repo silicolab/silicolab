@@ -54,6 +54,7 @@ pub enum MenuCommand {
 struct SyncCache {
     is_project: bool,
     has_entry: bool,
+    has_records: bool,
     can_undo: bool,
     can_redo: bool,
     primary_sidebar: bool,
@@ -78,8 +79,7 @@ pub struct MacMenu {
     recent_submenu: Submenu,
     recent_paths: Vec<PathBuf>,
     close_project: MenuItem,
-    save: MenuItem,
-    save_as: MenuItem,
+    export: MenuItem,
 
     // Edit
     undo: MenuItem,
@@ -157,17 +157,11 @@ impl MacMenu {
         // --- File ---
         let recent_submenu = Submenu::new("Recent Projects", false);
         let close_project = MenuItem::with_id("file.close_project", "Close Project", true, None);
-        let save = MenuItem::with_id(
-            "file.save",
-            "Save",
+        let export = MenuItem::with_id(
+            "file.export",
+            "Export…",
             true,
-            accel(Modifiers::META, Code::KeyS),
-        );
-        let save_as = MenuItem::with_id(
-            "file.save_as",
-            "Save As…",
-            true,
-            accel(Modifiers::META | Modifiers::SHIFT, Code::KeyS),
+            accel(Modifiers::META | Modifiers::SHIFT, Code::KeyE),
         );
         let file_menu = Submenu::new("File", true);
         file_menu
@@ -188,7 +182,7 @@ impl MacMenu {
                     "file.save_project",
                     "Save Project",
                     true,
-                    accel(Modifiers::META | Modifiers::ALT, Code::KeyS),
+                    accel(Modifiers::META, Code::KeyS),
                 ),
                 &close_project,
                 &PredefinedMenuItem::separator(),
@@ -204,8 +198,7 @@ impl MacMenu {
                 ),
                 &MenuItem::with_id("file.fetch_pdb", "Fetch from PDB ID…", true, None),
                 &PredefinedMenuItem::separator(),
-                &save,
-                &save_as,
+                &export,
             ])
             .expect("build file menu");
 
@@ -335,8 +328,7 @@ impl MacMenu {
             recent_submenu,
             recent_paths: Vec::new(),
             close_project,
-            save,
-            save_as,
+            export,
             undo,
             redo,
             edit_structure,
@@ -351,6 +343,7 @@ impl MacMenu {
             cache: SyncCache {
                 is_project: false,
                 has_entry: false,
+                has_records: false,
                 can_undo: false,
                 can_redo: false,
                 primary_sidebar: false,
@@ -386,8 +379,7 @@ impl MacMenu {
             "file.sketch_molecule" => MenuCommand::Action(AppAction::SketchMolecule),
             "file.open_file" => MenuCommand::Action(AppAction::OpenFile),
             "file.fetch_pdb" => MenuCommand::Action(AppAction::OpenPdbFetchDialog),
-            "file.save" => MenuCommand::Action(AppAction::Save),
-            "file.save_as" => MenuCommand::Action(AppAction::SaveAs),
+            "file.export" => MenuCommand::Action(AppAction::OpenExportDialog { entry_id: None }),
             "edit.undo" => MenuCommand::Action(AppAction::Undo),
             "edit.redo" => MenuCommand::Action(AppAction::Redo),
             "edit.structure" => MenuCommand::Action(AppAction::EditStructure),
@@ -437,10 +429,16 @@ impl MacMenu {
 
         let has_entry = state.has_active_entry();
         if has_entry != self.cache.has_entry {
-            self.save.set_enabled(has_entry);
-            self.save_as.set_enabled(has_entry);
             self.edit_structure.set_enabled(has_entry);
             self.cache.has_entry = has_entry;
+        }
+
+        // Export works on the sidebar selection, so it needs entries to exist —
+        // not an active tab.
+        let has_records = !state.entries.records.is_empty();
+        if has_records != self.cache.has_records {
+            self.export.set_enabled(has_records);
+            self.cache.has_records = has_records;
         }
 
         // Disable Undo/Redo while a text field is focused so their Cmd+Z /

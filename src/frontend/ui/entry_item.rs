@@ -260,6 +260,13 @@ pub(crate) fn render_entry_list_item(
                 state.ui.entry_list.rename_buffer = name.to_string();
                 ui.close();
             }
+            if ui.button("Export...").clicked() {
+                actions.push(AppAction::OpenExportDialog {
+                    entry_id: Some(entry_id),
+                });
+                ui.close();
+            }
+            ui.separator();
             if !group_id.is_empty() && ui.button("Remove from group").clicked() {
                 actions.push(AppAction::MoveEntryToGroup {
                     entry_id,

@@ -20,6 +20,7 @@ use crate::{
 mod about;
 mod dock;
 mod execution;
+mod export_modal;
 pub(crate) mod gauge;
 mod modal;
 mod notification;
@@ -462,6 +463,7 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
     render_structure_editor_window(state, actions, &ctx);
     crate::frontend::sketcher::render_sketcher_window(state, actions, &ctx);
     render_pdb_fetch_window(state, actions, &ctx);
+    export_modal::render_export_window(state, actions, &ctx);
     render_text_viewer_window(state, &ctx);
     settings_modal::show(state, &ctx, actions);
     about::show(state, &ctx, actions);

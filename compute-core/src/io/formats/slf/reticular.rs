@@ -1,36 +1,36 @@
 use anyhow::{Context, Result, anyhow};
 
 use super::sectioned::{
-    PsfExtensionBlock, PsfExtensionPayload, PsfTableBlock, required_column_index,
+    SlfExtensionBlock, SlfExtensionPayload, SlfTableBlock, required_column_index,
 };
 
 #[derive(Debug, Clone)]
-pub struct PsfReticular {
+pub struct SlfReticular {
     pub class: String,
     pub label: Option<String>,
-    pub substitution_sites: Vec<PsfSubstitutionSite>,
+    pub substitution_sites: Vec<SlfSubstitutionSite>,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct PsfSubstitutionSite {
+pub struct SlfSubstitutionSite {
     pub leaving_atom: usize,
     pub binding_atom: usize,
 }
 
-pub(crate) fn parse_reticular_block(block: &PsfExtensionBlock) -> Result<PsfReticular> {
-    let PsfExtensionPayload::Sectioned(sectioned) = &block.payload;
+pub(crate) fn parse_reticular_block(block: &SlfExtensionBlock) -> Result<SlfReticular> {
+    let SlfExtensionPayload::Sectioned(sectioned) = &block.payload;
     let table = sectioned
         .first_table()
         .ok_or_else(|| anyhow!("@<SILICOLAB>RETICULAR requires a #TABLE section"))?;
 
-    Ok(PsfReticular {
+    Ok(SlfReticular {
         class: sectioned.key_value("class").unwrap_or("core").to_string(),
         label: sectioned.key_value("label").map(str::to_string),
         substitution_sites: parse_reticular_sites_from_table(table)?,
     })
 }
 
-pub(crate) fn serialize_reticular_block(reticular: &PsfReticular) -> String {
+pub(crate) fn serialize_reticular_block(reticular: &SlfReticular) -> String {
     let mut output = String::new();
     output.push_str("@<SILICOLAB>RETICULAR\n");
     output.push_str("#KEY\n");
@@ -50,7 +50,7 @@ pub(crate) fn serialize_reticular_block(reticular: &PsfReticular) -> String {
     output
 }
 
-fn parse_reticular_sites_from_table(table: &PsfTableBlock) -> Result<Vec<PsfSubstitutionSite>> {
+fn parse_reticular_sites_from_table(table: &SlfTableBlock) -> Result<Vec<SlfSubstitutionSite>> {
     let leaving_atom_index = required_column_index(table, "leaving_atom")?;
     let binding_atom_index = required_column_index(table, "binding_atom")?;
     let mut substitution_sites = Vec::new();
@@ -63,7 +63,7 @@ fn parse_reticular_sites_from_table(table: &PsfTableBlock) -> Result<Vec<PsfSubs
             .parse::<usize>()
             .context("invalid reticular binding_atom")?;
 
-        substitution_sites.push(PsfSubstitutionSite {
+        substitution_sites.push(SlfSubstitutionSite {
             leaving_atom: leaving_atom - 1,
             binding_atom: binding_atom - 1,
         });

@@ -28,7 +28,7 @@ below are relative to a crate: `md/`, `engines/`, `io/`, `workflows/` live under
 | Multi-entry picker panel | `disorder` | `SetDisorderComponentEntry`, `with_disorder_prompt`, and the `ensure_panel_form` seeding. |
 | Inline edit task (no panel, acts on the active structure) | `add-hydrogens` / `recompute-bonds` | Executor runs the op and marks the task complete; no prompt state. |
 | New `.sls` command group | `frontend/qm_commands.rs` | Sub-dispatch + a `--flag` scanner; register the verb in `console.rs`. Defining it once makes it a CLI command too. |
-| New molecular file format | `io/formats/mol2.rs` (single) / `pdb.rs` (multi-model) | Plus 3 registry edits — see Traps. |
+| New molecular file format | `io/formats/cif.rs` (single) / `mol2.rs`, `pdb.rs` (multi-record) | Plus 3 registry edits — see Traps. Declare whether records concatenate in `StructureFormat::multi_structure_file`. |
 | New GUI interaction (no task) | an `AppAction` variant + arm in `dispatcher/mod.rs` + a handler in a `dispatcher/*.rs` | Widgets only emit actions; only `dispatch` mutates state. |
 | Expose a capability to the in-app assistant | — | Automatic via the `run_command` tool once a `.sls` verb exists. Only gate the verb in `agent/tools.rs::command_needs_confirmation`, and heavy-classify it in `agent/loop_driver/heavy.rs` if it is CPU-bound. |
 
