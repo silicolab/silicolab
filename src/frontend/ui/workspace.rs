@@ -438,7 +438,7 @@ fn render_scratch_workspace(state: &mut AppState, ui: &mut egui::Ui, actions: &m
                 for project in recent_projects {
                     let response = Frame::default()
                         .fill(pal.item_fill)
-                        .stroke(Stroke::new(1.0, pal.hairline))
+                        .stroke(Stroke::new(1.0_f32, pal.hairline))
                         .corner_radius(egui::CornerRadius::same(
                             crate::frontend::theme::radius::CARD,
                         ))
@@ -485,10 +485,10 @@ fn render_scratch_action_button(
             let visuals = &mut ui.style_mut().visuals.widgets;
             visuals.inactive.weak_bg_fill = pal.item_fill;
             visuals.inactive.bg_fill = pal.item_fill;
-            visuals.inactive.bg_stroke = Stroke::new(1.0, pal.hairline);
+            visuals.inactive.bg_stroke = Stroke::new(1.0_f32, pal.hairline);
             visuals.hovered.weak_bg_fill = pal.item_fill_hover;
             visuals.hovered.bg_fill = pal.item_fill_hover;
-            visuals.hovered.bg_stroke = Stroke::new(1.0, pal.hairline);
+            visuals.hovered.bg_stroke = Stroke::new(1.0_f32, pal.hairline);
             // 44px-tall call-to-action buttons take the large radius step
             // (Apple sizes radii with control height).
             let large = egui::CornerRadius::same(crate::frontend::theme::radius::LARGE);

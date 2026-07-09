@@ -521,7 +521,7 @@ fn paint_insertion_bar(
     ui.painter().vline(
         x,
         (strip_rect.top() + 4.0)..=(strip_rect.bottom() - 4.0),
-        Stroke::new(2.0, pal.accent),
+        Stroke::new(2.0_f32, pal.accent),
     );
 }
 
@@ -681,7 +681,7 @@ pub(super) fn render_dock_reveal_targets(
                     rect,
                     egui::CornerRadius::same(crate::frontend::theme::radius::CARD),
                     fill,
-                    Stroke::new(1.0, pal.accent),
+                    Stroke::new(1.0_f32, pal.accent),
                     egui::StrokeKind::Inside,
                 );
             });

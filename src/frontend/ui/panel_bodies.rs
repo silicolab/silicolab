@@ -47,7 +47,7 @@ pub(super) fn weak_panel_hairline(ui: &mut egui::Ui, alpha: u8) {
     ui.painter().hline(
         rect.left()..=rect.right(),
         rect.center().y,
-        Stroke::new(1.0, pal.neutral_overlay(alpha)),
+        Stroke::new(1.0_f32, pal.neutral_overlay(alpha)),
     );
 }
 

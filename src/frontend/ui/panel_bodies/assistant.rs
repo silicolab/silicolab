@@ -466,7 +466,7 @@ fn render_approval_card(
         let frame_inner_width = (panel_width - 20.0).max(48.0);
         Frame::default()
             .fill(blend(accent, pal.input_fill, 0.86))
-            .stroke(Stroke::new(1.0, blend(accent, pal.hairline, 0.4)))
+            .stroke(Stroke::new(1.0_f32, blend(accent, pal.hairline, 0.4)))
             .corner_radius(CornerRadius::same(radius::CARD))
             .inner_margin(Margin::symmetric(10, 8))
             .show(ui, |ui| {

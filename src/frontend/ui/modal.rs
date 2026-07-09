@@ -32,7 +32,7 @@ pub(super) fn window_frame(ctx: &egui::Context, inner_margin: egui::Margin) -> e
         .corner_radius(egui::CornerRadius::same(
             crate::frontend::theme::radius::MODAL,
         ))
-        .stroke(egui::Stroke::new(1.0, stroke_color))
+        .stroke(egui::Stroke::new(1.0_f32, stroke_color))
         .shadow(egui::Shadow {
             offset: [0, 8],
             blur: 24,
