@@ -53,6 +53,8 @@ pub struct AppState {
     workspace_structure: Structure,
     workspace_save_path: PathBuf,
     last_logged_message: String,
+    last_saved_entries_fingerprint: u64,
+    project_save_error: Option<String>,
     /// egui time (seconds) at which a coalesced autosave should flush, or `None`
     /// when no project change is pending. Set by the dispatcher after a
     /// persist-worthy action and drained on the UI thread once the debounce
@@ -115,6 +117,8 @@ impl AppState {
             workspace_structure: structure,
             workspace_save_path: save_path,
             last_logged_message: message,
+            last_saved_entries_fingerprint: 0,
+            project_save_error: None,
             autosave_deadline: None,
             layout_save_deadline: None,
         };
@@ -146,6 +150,7 @@ impl AppState {
         state
             .history
             .set_active_entry(state.entries.active_entry_id());
+        state.mark_project_saved();
         state
     }
 
@@ -328,6 +333,58 @@ impl AppState {
             group.name.hash(&mut hasher);
         }
         hasher.finish()
+    }
+
+    pub fn mark_project_saved(&mut self) {
+        self.last_saved_entries_fingerprint = self.entries_fingerprint();
+        self.project_save_error = None;
+    }
+
+    pub fn mark_project_save_failed(&mut self, error: impl Into<String>) {
+        self.project_save_error = Some(error.into());
+    }
+
+    pub fn project_save_error(&self) -> Option<&str> {
+        self.project_save_error.as_deref()
+    }
+
+    pub fn has_project_changes_to_save(&self) -> bool {
+        self.workspace.is_project()
+            && (self.autosave_deadline.is_some()
+                || self.entries_fingerprint() != self.last_saved_entries_fingerprint
+                || self.project_save_error.is_some())
+    }
+
+    pub fn has_unsaved_workspace_drafts(&self) -> bool {
+        self.ui.editor.is_some()
+            || self.ui.sketcher.is_some()
+            || self.ui.reticular_builder.is_some()
+            || self.ui.nanosheet_builder.is_some()
+            || self.ui.block_editor.is_some()
+            || self.ui.pending_optimization.is_some()
+            || self.ui.pending_qm.is_some()
+            || self.ui.pending_supercell.is_some()
+            || self.ui.pending_protein_prep.is_some()
+            || self.ui.pending_md_system.is_some()
+            || self.ui.pending_md_run.is_some()
+            || self.ui.pending_disorder.is_some()
+            || self.ui.pending_docking.is_some()
+            || self.ui.pending_ptm.is_some()
+            || self.ui.pending_pdb_fetch.is_some()
+            || self.ui.pending_export.is_some()
+    }
+
+    pub fn scratch_has_unsaved_content(&self) -> bool {
+        !self.workspace.is_project()
+            && (!self.entries.records.is_empty()
+                || !self.tasks.tasks.is_empty()
+                || self.has_unsaved_workspace_drafts())
+    }
+
+    pub fn needs_leave_confirmation(&self) -> bool {
+        self.scratch_has_unsaved_content()
+            || self.has_project_changes_to_save()
+            || self.has_unsaved_workspace_drafts()
     }
 
     /// Schedule a coalesced autosave to flush `delay_seconds` after `now_seconds`

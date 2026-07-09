@@ -5,6 +5,10 @@ pub enum AppAction {
     OpenRecentProject(std::path::PathBuf),
     CloseProject,
     SaveProject,
+    RequestLeave(LeaveIntent),
+    SaveAndLeave,
+    DiscardAndLeave,
+    CancelLeave,
     NewEmptyEntry,
     OpenFile,
     OpenPdbFetchDialog,
@@ -474,6 +478,56 @@ pub enum AppAction {
     /// Decline the heavy-structure suggestion for an entry and render it at full
     /// detail (no silent simplification).
     RenderHeavyEntryAtFull(u64),
+}
+
+/// A user request that leaves the current workspace or exits the app.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LeaveIntent {
+    Quit,
+    OpenProject,
+    OpenRecentProject(std::path::PathBuf),
+    CloseProject,
+}
+
+impl LeaveIntent {
+    pub fn action_label(&self) -> &'static str {
+        match self {
+            Self::Quit => "quit",
+            Self::OpenProject | Self::OpenRecentProject(_) => "open another project",
+            Self::CloseProject => "close this project",
+        }
+    }
+
+    pub fn save_button_label(&self) -> &'static str {
+        match self {
+            Self::Quit => "Save and Quit",
+            Self::OpenProject | Self::OpenRecentProject(_) => "Save and Open",
+            Self::CloseProject => "Save and Close",
+        }
+    }
+}
+
+/// State for the modal that guards leaving with unsaved project or scratch data.
+#[derive(Debug, Clone)]
+pub struct LeaveConfirmation {
+    pub intent: LeaveIntent,
+    pub save_error: Option<String>,
+}
+
+impl LeaveConfirmation {
+    pub fn new(intent: LeaveIntent) -> Self {
+        Self {
+            intent,
+            save_error: None,
+        }
+    }
+
+    pub fn save_failed(intent: LeaveIntent, error: impl Into<String>) -> Self {
+        Self {
+            intent,
+            save_error: Some(error.into()),
+        }
+    }
 }
 
 /// A non-modal notification surfaced over the workspace: a short message that,
