@@ -109,6 +109,15 @@ pub struct UiState {
     pub pending_pdb_fetch: Option<String>,
     /// The open Export dialog's draft, or `None` when it is closed.
     pub pending_export: Option<crate::frontend::state::ExportPrompt>,
+    /// Modal confirmation shown before leaving when the current workspace has
+    /// changes or scratch data that could be lost.
+    pub leave_confirmation: Option<crate::frontend::actions::LeaveConfirmation>,
+    /// Set after the user confirmed quitting. The next native close request is
+    /// allowed through instead of being intercepted into another confirmation.
+    pub allow_window_close: bool,
+    /// One-frame latch used to issue the actual window close after a canceled
+    /// native close request has completed.
+    pub request_window_close: bool,
     /// The single active non-modal notification (a message plus optional action
     /// buttons), or `None`. Posting a new one replaces any current one.
     pub notification: Option<crate::frontend::actions::Notification>,
@@ -243,6 +252,9 @@ impl Default for UiState {
             pending_ptm: None,
             pending_pdb_fetch: None,
             pending_export: None,
+            leave_confirmation: None,
+            allow_window_close: false,
+            request_window_close: false,
             notification: None,
             pending_heavy_gate: None,
             heavy_render_decided: std::collections::BTreeSet::new(),

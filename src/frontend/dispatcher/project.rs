@@ -1,4 +1,5 @@
 use super::*;
+use crate::frontend::actions::{LeaveConfirmation, LeaveIntent};
 
 /// Flush a coalesced autosave once its debounce window has elapsed. Called every
 /// frame from the app loop; a no-op when nothing is pending. While a save is
@@ -11,7 +12,7 @@ pub fn flush_pending_autosave(state: &mut AppState, ctx: &egui::Context) {
     let now = ctx.input(|input| input.time);
     if now >= deadline {
         // `persist_project` clears the deadline itself.
-        persist_project(state, false);
+        let _ = persist_project(state, false);
     } else {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64(deadline - now));
     }
@@ -20,26 +21,27 @@ pub fn flush_pending_autosave(state: &mut AppState, ctx: &egui::Context) {
 /// Clean-shutdown checkpoint for window close: persist the project (including
 /// undo history) and release the session lock so the next launch knows the
 /// session ended cleanly. Skips database compaction to keep exit responsive.
-pub fn shutdown(state: &mut AppState) {
+pub fn shutdown(state: &mut AppState) -> anyhow::Result<()> {
     // The workbench layout is a global preference (persisted even in a scratch
     // workspace), so flush any pending layout save before the project-only gate.
     if state.layout_save_deadline().is_some() {
         persist_layout(state);
     }
     if !state.workspace.is_project() {
-        return;
+        return Ok(());
     }
-    persist_project(state, true);
+    persist_project(state, true)?;
     if let Some(project) = state.workspace.project() {
         housekeeping::release_lock(project);
     }
+    Ok(())
 }
 
-pub(crate) fn persist_project(state: &mut AppState, persist_history: bool) {
+pub(crate) fn persist_project(state: &mut AppState, persist_history: bool) -> anyhow::Result<()> {
     // Any pending coalesced autosave is subsumed by this save.
     state.clear_autosave_deadline();
     let Some(project) = state.workspace.project() else {
-        return;
+        return Ok(());
     };
     // Save from borrowed references into the live state rather than cloning the
     // whole workspace: in an entry-heavy project (e.g. a 20-model NMR ensemble)
@@ -53,9 +55,17 @@ pub(crate) fn persist_project(state: &mut AppState, persist_history: bool) {
         view: &view,
         history: &state.history,
     };
-    let result = save_project_ref(project, &snapshot, persist_history);
-    if let Err(error) = result {
-        state.set_message(format!("Project save failed: {error}"));
+    match save_project_ref(project, &snapshot, persist_history) {
+        Ok(()) => {
+            state.mark_project_saved();
+            Ok(())
+        }
+        Err(error) => {
+            let message = error.to_string();
+            state.mark_project_save_failed(message.clone());
+            state.set_message(format!("Project save failed: {message}"));
+            Err(error)
+        }
     }
 }
 
@@ -124,6 +134,7 @@ pub(crate) fn replace_workspace_from_project(
     reset_transient_state(state);
     reset_chart_caches(state);
     state.load_viewport_for_active_entry();
+    state.mark_project_saved();
     let set_current_dir_error = std::env::set_current_dir(&project.root).err();
     if let Err(error) =
         remember_opened_project(&mut state.config, &mut state.recent_projects, &project)
@@ -185,29 +196,30 @@ pub(crate) fn create_project_action(state: &mut AppState) {
     }
 }
 
-pub(crate) fn open_project_action(state: &mut AppState) {
-    let Some(path) = rfd::FileDialog::new()
+fn pick_project_folder(state: &AppState) -> Option<PathBuf> {
+    rfd::FileDialog::new()
         .set_directory(&state.config.default_project_dir)
         .pick_folder()
-    else {
-        return;
-    };
-    open_project_path(state, path);
 }
 
-pub(crate) fn open_project_path(state: &mut AppState, path: PathBuf) {
-    persist_project(state, true);
+fn open_project_action_without_persist(state: &mut AppState) {
+    let Some(path) = pick_project_folder(state) else {
+        return;
+    };
+    open_project_path_without_persist(state, path);
+}
+
+fn open_project_path_without_persist(state: &mut AppState, path: PathBuf) {
     match open_project_dir(&path) {
         Ok((project, snapshot)) => replace_workspace_from_project(state, project, snapshot),
         Err(error) => state.set_message(error.to_string()),
     }
 }
 
-pub(crate) fn close_project(state: &mut AppState) {
-    persist_project(state, true);
+fn close_project_without_persist(state: &mut AppState, run_maintenance: bool) {
     // Compact the databases and release the lock now that we are leaving cleanly.
     if let Some(project) = state.workspace.project().cloned() {
-        if let Err(error) = housekeeping::run_maintenance(&project) {
+        if run_maintenance && let Err(error) = housekeeping::run_maintenance(&project) {
             state.set_message(format!("Project maintenance failed: {error}"));
         }
         housekeeping::release_lock(&project);
@@ -230,15 +242,117 @@ pub(crate) fn close_project(state: &mut AppState) {
     reset_transient_state(state);
     reset_chart_caches(state);
     state.clear_history();
+    state.mark_project_saved();
 }
 
 pub(crate) fn save_project(state: &mut AppState) {
     if state.workspace.is_project() {
-        persist_project(state, true);
-        state.set_message(format!("Saved project {}", state.workspace.label()));
+        if persist_project(state, true).is_ok() {
+            state.set_message(format!("Saved project {}", state.workspace.label()));
+        }
         return;
     }
     create_project_action(state);
+}
+
+pub(crate) fn request_leave(state: &mut AppState, intent: LeaveIntent, ctx: &egui::Context) {
+    if state.needs_leave_confirmation() {
+        let mut confirmation = LeaveConfirmation::new(intent);
+        if let Some(error) = state.project_save_error() {
+            confirmation.save_error = Some(error.to_string());
+        }
+        state.ui.leave_confirmation = Some(confirmation);
+        return;
+    }
+
+    if let Err(error) = execute_leave_intent(state, intent.clone(), ctx, true) {
+        state.ui.leave_confirmation =
+            Some(LeaveConfirmation::save_failed(intent, error.to_string()));
+    }
+}
+
+pub(crate) fn cancel_leave(state: &mut AppState) {
+    state.ui.leave_confirmation = None;
+}
+
+pub(crate) fn save_and_leave(state: &mut AppState, ctx: &egui::Context) {
+    let Some(confirmation) = state.ui.leave_confirmation.take() else {
+        return;
+    };
+    let intent = confirmation.intent;
+    if let Err(error) = execute_leave_intent(state, intent.clone(), ctx, true) {
+        state.ui.leave_confirmation =
+            Some(LeaveConfirmation::save_failed(intent, error.to_string()));
+    }
+}
+
+pub(crate) fn discard_and_leave(state: &mut AppState, ctx: &egui::Context) {
+    let Some(confirmation) = state.ui.leave_confirmation.take() else {
+        return;
+    };
+    let intent = confirmation.intent;
+    if let Err(error) = execute_leave_intent(state, intent.clone(), ctx, false) {
+        state.ui.leave_confirmation =
+            Some(LeaveConfirmation::save_failed(intent, error.to_string()));
+    }
+}
+
+fn execute_leave_intent(
+    state: &mut AppState,
+    intent: LeaveIntent,
+    ctx: &egui::Context,
+    save_current: bool,
+) -> anyhow::Result<()> {
+    if save_current && state.scratch_has_unsaved_content() {
+        create_project_action(state);
+        if state.scratch_has_unsaved_content() {
+            state.ui.leave_confirmation = Some(LeaveConfirmation::new(intent));
+            return Ok(());
+        }
+    }
+
+    match intent {
+        LeaveIntent::Quit => {
+            if save_current {
+                shutdown(state)?;
+            } else {
+                abandon_project_session(state);
+                if state.layout_save_deadline().is_some() {
+                    persist_layout(state);
+                }
+            }
+            state.ui.allow_window_close = true;
+            state.ui.request_window_close = true;
+            ctx.request_repaint();
+        }
+        LeaveIntent::OpenProject => {
+            if save_current {
+                persist_project(state, true)?;
+            }
+            open_project_action_without_persist(state);
+        }
+        LeaveIntent::OpenRecentProject(path) => {
+            if save_current {
+                persist_project(state, true)?;
+            }
+            open_project_path_without_persist(state, path);
+        }
+        LeaveIntent::CloseProject => {
+            if save_current {
+                persist_project(state, true)?;
+                close_project_without_persist(state, true);
+            } else {
+                close_project_without_persist(state, false);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn abandon_project_session(state: &mut AppState) {
+    if let Some(project) = state.workspace.project() {
+        housekeeping::release_lock(project);
+    }
 }
 
 pub(crate) fn load_active_entry(state: &mut AppState) {

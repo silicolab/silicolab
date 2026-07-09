@@ -10,7 +10,12 @@ use crate::{
         project::{WorkspaceSession, open_project, remember_opened_project},
     },
     domain::Structure,
-    frontend::{actions::AppAction, dispatcher, shortcuts, state::AppState, ui},
+    frontend::{
+        actions::{AppAction, LeaveIntent},
+        dispatcher, shortcuts,
+        state::AppState,
+        ui,
+    },
 };
 
 pub fn run(structure: Structure, source_path: Option<PathBuf>) -> Result<()> {
@@ -567,8 +572,19 @@ impl eframe::App for SilicoLabApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(viewport_title.clone()));
             self.last_viewport_title = viewport_title;
         }
-        if ctx.input(|input| input.viewport().close_requested()) {
-            dispatcher::shutdown(&mut self.state);
+        if self.state.ui.request_window_close {
+            self.state.ui.request_window_close = false;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+        if ctx.input(|input| input.viewport().close_requested())
+            && !self.state.ui.allow_window_close
+        {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            dispatcher::dispatch(
+                &mut self.state,
+                AppAction::RequestLeave(LeaveIntent::Quit),
+                &ctx,
+            );
         }
         self.open_dropped_files(&ctx);
         dispatcher::poll_jobs(&mut self.state, &ctx);

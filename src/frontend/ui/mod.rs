@@ -22,6 +22,7 @@ mod dock;
 mod execution;
 mod export_modal;
 pub(crate) mod gauge;
+mod leave_confirm;
 mod modal;
 mod notification;
 mod panel_bodies;
@@ -467,5 +468,6 @@ pub fn show_workbench(state: &mut AppState, ui: &mut egui::Ui, actions: &mut Vec
     render_text_viewer_window(state, &ctx);
     settings_modal::show(state, &ctx, actions);
     about::show(state, &ctx, actions);
+    leave_confirm::show(state, &ctx, actions);
     panel_bodies::render_monitor_popover(state, &ctx);
 }

@@ -25,7 +25,7 @@ use crate::{
         registry::{EngineId, EngineRegistry},
     },
     frontend::{
-        actions::AppAction,
+        actions::{AppAction, LeaveIntent},
         jobs::{
             EngineWorkerMessage, GromacsPipelineRequest, OptimizationWorkerMessage,
             QmWorkerMessage, engine_poll_frame, optimization_finished_message,
@@ -100,6 +100,10 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
             | AppAction::CreateProject
             | AppAction::CloseProject
             | AppAction::SaveProject
+            | AppAction::RequestLeave(_)
+            | AppAction::SaveAndLeave
+            | AppAction::DiscardAndLeave
+            | AppAction::CancelLeave
     );
     // Autosave only when the persisted entry state actually changes — an entry
     // added, removed, or edited. View-only changes (camera, render styles,
@@ -108,10 +112,16 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
     let fingerprint_before = (!manages_own_persistence).then(|| state.entries_fingerprint());
     match action {
         AppAction::CreateProject => create_project_action(state),
-        AppAction::OpenProject => open_project_action(state),
-        AppAction::OpenRecentProject(path) => open_project_path(state, path),
-        AppAction::CloseProject => close_project(state),
+        AppAction::OpenProject => request_leave(state, LeaveIntent::OpenProject, ctx),
+        AppAction::OpenRecentProject(path) => {
+            request_leave(state, LeaveIntent::OpenRecentProject(path), ctx)
+        }
+        AppAction::CloseProject => request_leave(state, LeaveIntent::CloseProject, ctx),
         AppAction::SaveProject => save_project(state),
+        AppAction::RequestLeave(intent) => request_leave(state, intent, ctx),
+        AppAction::SaveAndLeave => save_and_leave(state, ctx),
+        AppAction::DiscardAndLeave => discard_and_leave(state, ctx),
+        AppAction::CancelLeave => cancel_leave(state),
         AppAction::NewEmptyEntry => new_empty_entry(state),
         AppAction::OpenFile => open_file(state),
         AppAction::OpenPdbFetchDialog => open_pdb_fetch_dialog(state),
