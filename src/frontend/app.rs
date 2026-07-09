@@ -461,6 +461,12 @@ impl SilicoLabApp {
                         let _ =
                             remember_opened_project(&mut config, &mut recent_projects, &project);
                         let recovered_from_crash = housekeeping::acquire_lock(&project);
+                        if !snapshot.warnings.is_empty() {
+                            startup_message = Some(append_message(
+                                startup_message.take(),
+                                &snapshot.warnings.join(" — "),
+                            ));
+                        }
                         let mut state = AppState::new(
                             structure,
                             source_path,

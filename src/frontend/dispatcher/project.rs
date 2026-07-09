@@ -46,14 +46,16 @@ pub(crate) fn persist_project(state: &mut AppState, persist_history: bool) -> an
     // Save from borrowed references into the live state rather than cloning the
     // whole workspace: in an entry-heavy project (e.g. a 20-model NMR ensemble)
     // the clone dominated and made every interaction lag. `view` is the only
-    // small owned value the snapshot needs.
+    // small owned values the snapshot needs.
     let view = state.project_view_settings();
+    let assistant = state.ui.agent.project_snapshot();
     let snapshot = ProjectSnapshotRef {
         name: project.name.as_str(),
         entries: &state.entries,
         tasks: &state.tasks,
         view: &view,
         history: &state.history,
+        assistant: &assistant,
     };
     match save_project_ref(project, &snapshot, persist_history) {
         Ok(()) => {
@@ -112,6 +114,9 @@ pub(crate) fn replace_workspace_from_project(
     project: ProjectSession,
     snapshot: ProjectSnapshot,
 ) {
+    let assistant = snapshot.assistant.clone();
+    let warnings = snapshot.warnings.clone();
+    cancel_agent_runtime(state);
     // Release the lock on the project we are leaving, then take the new one.
     if let Some(previous) = state.workspace.project() {
         housekeeping::release_lock(previous);
@@ -127,6 +132,7 @@ pub(crate) fn replace_workspace_from_project(
     state.ui.project_viewport = snapshot.view.viewport;
     state.ui.viewport = state.ui.project_viewport.clone();
     state.ui.entry_viewports = snapshot.view.entry_viewports;
+    state.ui.agent = crate::frontend::agent::AgentSession::from_project_snapshot(assistant);
     state.ui.entry_list.selected_entry_ids.clear();
     if let Some(id) = state.entries.active_entry_id() {
         state.ui.entry_list.selected_entry_ids.insert(id);
@@ -156,6 +162,9 @@ pub(crate) fn replace_workspace_from_project(
             project.name
         ));
     }
+    if !warnings.is_empty() {
+        state.set_message(format!("{} — {}", state.message, warnings.join(" — ")));
+    }
 }
 
 pub(crate) fn create_project_action(state: &mut AppState) {
@@ -183,6 +192,8 @@ pub(crate) fn create_project_action(state: &mut AppState) {
             tasks: state.tasks.clone(),
             view: state.project_view_settings(),
             history: state.history.clone(),
+            assistant: state.ui.agent.project_snapshot(),
+            warnings: Vec::new(),
         });
         let snapshot = ProjectSnapshot {
             name: project.name.clone(),
@@ -217,6 +228,7 @@ fn open_project_path_without_persist(state: &mut AppState, path: PathBuf) {
 }
 
 fn close_project_without_persist(state: &mut AppState, run_maintenance: bool) {
+    cancel_agent_runtime(state);
     // Compact the databases and release the lock now that we are leaving cleanly.
     if let Some(project) = state.workspace.project().cloned() {
         if run_maintenance && let Err(error) = housekeeping::run_maintenance(&project) {
@@ -230,6 +242,7 @@ fn close_project_without_persist(state: &mut AppState, run_maintenance: bool) {
     state.ui.project_viewport = Default::default();
     state.ui.viewport = Default::default();
     state.ui.entry_viewports.clear();
+    state.ui.agent = crate::frontend::agent::AgentSession::default();
     state.config.closed_to_scratch = true;
     state.config.last_project_path = None;
     if let Err(error) = save_config(&state.config) {
@@ -243,6 +256,15 @@ fn close_project_without_persist(state: &mut AppState, run_maintenance: bool) {
     reset_chart_caches(state);
     state.clear_history();
     state.mark_project_saved();
+}
+
+fn cancel_agent_runtime(state: &mut AppState) {
+    if let Some(job) = state.jobs.agent.take() {
+        job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    for tracked in state.jobs.agent_jobs.drain(..) {
+        tracked.job.cancel();
+    }
 }
 
 pub(crate) fn save_project(state: &mut AppState) {

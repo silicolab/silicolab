@@ -44,6 +44,13 @@ pub fn load_project_snapshot(session: &ProjectSession) -> Result<ProjectSnapshot
     let view = load_project_view_settings(&project_db)?;
     let mut history = load_history(&project_db)?;
     history.set_active_entry(entries.active_entry_id());
+    let (assistant, warnings) = match load_assistant_state(&project_db) {
+        Ok(assistant) => (assistant, Vec::new()),
+        Err(error) => (
+            ProjectAssistantSnapshot::default(),
+            vec![format!("Assistant history could not be restored: {error}")],
+        ),
+    };
 
     Ok(ProjectSnapshot {
         name,
@@ -51,6 +58,8 @@ pub fn load_project_snapshot(session: &ProjectSession) -> Result<ProjectSnapshot
         tasks,
         view,
         history,
+        assistant,
+        warnings,
     })
 }
 
@@ -201,6 +210,7 @@ pub fn save_project_snapshot_ref(
         )?;
     }
     save_project_view_settings(&project_tx, snapshot.view)?;
+    save_assistant_state(&project_tx, snapshot.assistant)?;
 
     if persist_history {
         save_history(&project_tx, snapshot.history)?;

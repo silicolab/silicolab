@@ -54,6 +54,7 @@ pub struct AppState {
     workspace_save_path: PathBuf,
     last_logged_message: String,
     last_saved_entries_fingerprint: u64,
+    last_saved_assistant_fingerprint: u64,
     project_save_error: Option<String>,
     /// egui time (seconds) at which a coalesced autosave should flush, or `None`
     /// when no project change is pending. Set by the dispatcher after a
@@ -118,6 +119,7 @@ impl AppState {
             workspace_save_path: save_path,
             last_logged_message: message,
             last_saved_entries_fingerprint: 0,
+            last_saved_assistant_fingerprint: 0,
             project_save_error: None,
             autosave_deadline: None,
             layout_save_deadline: None,
@@ -141,6 +143,9 @@ impl AppState {
             state
                 .history
                 .set_active_entry(state.entries.active_entry_id());
+            state.ui.agent = crate::frontend::agent::AgentSession::from_project_snapshot(
+                snapshot.assistant.clone(),
+            );
         }
         state.load_viewport_for_active_entry();
         state.ui.entry_list.selected_entry_ids.clear();
@@ -337,6 +342,7 @@ impl AppState {
 
     pub fn mark_project_saved(&mut self) {
         self.last_saved_entries_fingerprint = self.entries_fingerprint();
+        self.last_saved_assistant_fingerprint = self.assistant_fingerprint();
         self.project_save_error = None;
     }
 
@@ -352,6 +358,7 @@ impl AppState {
         self.workspace.is_project()
             && (self.autosave_deadline.is_some()
                 || self.entries_fingerprint() != self.last_saved_entries_fingerprint
+                || self.assistant_fingerprint() != self.last_saved_assistant_fingerprint
                 || self.project_save_error.is_some())
     }
 
@@ -427,7 +434,13 @@ impl AppState {
             tasks: self.tasks.clone(),
             view: self.project_view_settings(),
             history: self.history.clone(),
+            assistant: self.ui.agent.project_snapshot(),
+            warnings: Vec::new(),
         })
+    }
+
+    pub fn assistant_fingerprint(&self) -> u64 {
+        self.ui.agent.project_snapshot().fingerprint()
     }
 
     /// Materialize an entry's geometry if it was lazily left unloaded when the

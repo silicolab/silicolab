@@ -211,9 +211,18 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     ensure_remote_jobs_loaded(state);
     poll_remote_submit(state, ctx);
     poll_remote_jobs_refresh(state, ctx);
+    let assistant_before = (state.workspace.is_project()
+        && (state.jobs.agent.is_some() || !state.jobs.agent_jobs.is_empty()))
+    .then(|| state.assistant_fingerprint());
     crate::frontend::agent::poll_agent_turn(state, ctx);
     crate::frontend::agent::poll_agent_jobs(state, ctx);
     crate::frontend::agent::poll_model_fetch(state, ctx);
+    if let Some(before) = assistant_before
+        && state.assistant_fingerprint() != before
+    {
+        let now = ctx.input(|input| input.time);
+        state.request_autosave(now, super::super::AUTOSAVE_DEBOUNCE_SECS);
+    }
 }
 
 /// Drain a finished Remote Hosts probe (passwordless check / GROMACS detect) and

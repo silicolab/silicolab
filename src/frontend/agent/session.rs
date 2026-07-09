@@ -9,6 +9,8 @@ use std::ops::{Deref, DerefMut};
 use crate::frontend::console::RiskLevel;
 use crate::io::llm::types::{ChatMessage, ContentBlock, ToolCall, Usage};
 
+mod persistence;
+
 /// Where the session is in the turn cycle.
 ///
 /// ```text
@@ -94,6 +96,10 @@ pub struct AssistantConversationId(u64);
 impl AssistantConversationId {
     pub fn new(raw: u64) -> Self {
         Self(raw)
+    }
+
+    pub fn raw(self) -> u64 {
+        self.0
     }
 }
 
@@ -567,6 +573,49 @@ mod tests {
         assert_eq!(session.input, "second draft");
         assert_eq!(session.session_usage.output, 11);
         assert_eq!(session.history.len(), 1);
+    }
+
+    #[test]
+    fn project_snapshot_restores_conversations_without_runtime_state() {
+        let mut session = AgentSession::default();
+        let first = session.active_conversation;
+        session.start_new_conversation();
+        session
+            .transcript
+            .push(TranscriptEntry::Assistant("second".to_string()));
+        let active = session.active_conversation;
+        session.switch_conversation(first);
+        session.history.push(ChatMessage::user_text("prepare 1ubq"));
+        session
+            .transcript
+            .push(TranscriptEntry::User("prepare 1ubq".to_string()));
+        session.input = "draft".to_string();
+        session.session_usage.input = 9;
+        session.phase = AgentPhase::AwaitingApproval;
+        session.pending_calls.push_back(ToolCall {
+            id: "call_1".to_string(),
+            name: "run_command".to_string(),
+            input: serde_json::json!({ "command": "fetch 1ubq" }),
+        });
+        session.active_conversation = active;
+
+        let snapshot = session.project_snapshot();
+        let restored = AgentSession::from_project_snapshot(snapshot);
+
+        assert_eq!(restored.active_conversation, active);
+        assert_eq!(restored.conversations.len(), 2);
+        let first_restored = restored
+            .conversations
+            .iter()
+            .find(|conversation| conversation.id == first)
+            .expect("first conversation restored");
+        assert_eq!(first_restored.input, "draft");
+        assert_eq!(first_restored.session_usage.input, 9);
+        assert!(first_restored.pending_calls.is_empty());
+        assert_eq!(first_restored.phase, AgentPhase::Done);
+        assert!(first_restored.transcript.iter().any(
+            |entry| matches!(entry, TranscriptEntry::Notice(text) if text.contains("interrupted"))
+        ));
     }
 
     #[test]

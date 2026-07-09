@@ -65,6 +65,13 @@ pub(crate) fn create_project_schema(db: &Connection) -> Result<()> {
             uncompressed_len integer not null,
             primary key (entry_id, stack, position)
         );
+        create table if not exists assistant_state (
+            id integer primary key check (id = 1),
+            format integer not null,
+            payload blob not null,
+            uncompressed_len integer not null,
+            updated_at_ms integer not null
+        );
         ",
     )?;
     ensure_task_run_columns(db)?;

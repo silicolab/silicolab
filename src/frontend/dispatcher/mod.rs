@@ -110,6 +110,8 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
     // selection, active tab) don't move this fingerprint and are saved at exit
     // instead, so navigating or restyling never schedules a save.
     let fingerprint_before = (!manages_own_persistence).then(|| state.entries_fingerprint());
+    let assistant_fingerprint_before = (!manages_own_persistence && state.workspace.is_project())
+        .then(|| state.assistant_fingerprint());
     match action {
         AppAction::CreateProject => create_project_action(state),
         AppAction::OpenProject => request_leave(state, LeaveIntent::OpenProject, ctx),
@@ -446,6 +448,12 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         // pauses (see `flush_pending_autosave`). The flush still skips
         // re-serializing the (large) undo/redo history; that is persisted only at
         // explicit checkpoints (save, open, close, shutdown).
+        let now = ctx.input(|input| input.time);
+        state.request_autosave(now, AUTOSAVE_DEBOUNCE_SECS);
+    }
+    if let Some(before) = assistant_fingerprint_before
+        && state.assistant_fingerprint() != before
+    {
         let now = ctx.input(|input| input.time);
         state.request_autosave(now, AUTOSAVE_DEBOUNCE_SECS);
     }
