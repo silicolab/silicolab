@@ -1,5 +1,6 @@
 use super::*;
 
+use crate::domain::glycan::Anomer;
 use crate::domain::modification::{MethylDegree, UblKind};
 use crate::frontend::ptm_commands::{LipidKind, lipid_label, methyl_prefix, ubl_label};
 use crate::frontend::state::PtmUiKind;
@@ -246,24 +247,73 @@ fn render_family_controls(
                     .selected_text(glyco_kind_label(prompt.glyco_kind))
                     .show_ui(ui, |ui| {
                         crate::frontend::theme::stabilize_selectable_rows(ui);
-                        for kind in [GlycosylationKind::NLinked, GlycosylationKind::OLinked] {
+                        for choice in [
+                            None,
+                            Some(GlycosylationKind::NLinked),
+                            Some(GlycosylationKind::OLinked),
+                        ] {
                             if ui
-                                .selectable_label(prompt.glyco_kind == kind, glyco_kind_label(kind))
+                                .selectable_label(
+                                    prompt.glyco_kind == choice,
+                                    glyco_kind_label(choice),
+                                )
                                 .clicked()
                             {
-                                actions.push(AppAction::SetPtmGlycoKind(kind));
+                                actions.push(AppAction::SetPtmGlycoKind(choice));
                             }
                         }
-                    });
+                    })
+                    .response
+                    .on_hover_text(
+                        "The junction the glycan forms. Automatic reads it off the anchor \
+                         residue — Asn is N-linked, Ser and Thr are O-linked — so choosing \
+                         one here only asserts what that residue must already be.",
+                    );
+            });
+            ui.horizontal(|ui| {
+                ui.label("Reducing end:");
+                egui::ComboBox::from_id_salt("ptm_glyco_root_anomer")
+                    .selected_text(root_anomer_label(prompt.glyco_root_anomer))
+                    .show_ui(ui, |ui| {
+                        crate::frontend::theme::stabilize_selectable_rows(ui);
+                        for choice in [None, Some(Anomer::Alpha), Some(Anomer::Beta)] {
+                            if ui
+                                .selectable_label(
+                                    prompt.glyco_root_anomer == choice,
+                                    root_anomer_label(choice),
+                                )
+                                .clicked()
+                            {
+                                actions.push(AppAction::SetPtmGlycoRootAnomer(choice));
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text(
+                        "The anomeric configuration where the glycan meets the protein. \
+                         Automatic derives it from the linkage and the reducing sugar \
+                         (N-linked GlcNAc is beta, O-linked GalNAc is alpha).",
+                    );
             });
         }
     }
 }
 
 /// Display label for a glycosylation linkage in the panel selector.
-fn glyco_kind_label(kind: GlycosylationKind) -> &'static str {
+fn glyco_kind_label(kind: Option<GlycosylationKind>) -> &'static str {
     match kind {
-        GlycosylationKind::NLinked => "N-linked",
-        GlycosylationKind::OLinked => "O-linked",
+        None => "Automatic",
+        Some(GlycosylationKind::NLinked) => "N-linked",
+        Some(GlycosylationKind::OLinked) => "O-linked",
+    }
+}
+
+/// Display label for the reducing-end anomer override.
+fn root_anomer_label(anomer: Option<Anomer>) -> &'static str {
+    match anomer {
+        None => "Automatic",
+        Some(Anomer::Alpha) => "alpha",
+        Some(Anomer::Beta) => "beta",
+        Some(Anomer::Unknown) => "unspecified",
     }
 }

@@ -354,6 +354,45 @@ pub fn lookup(token: &str) -> Option<MonosaccharideEntry> {
     TABLE.iter().copied().find(|entry| entry.token == token)
 }
 
+/// The entry realising an exact stereochemistry. `None` when the anomer is
+/// unspecified, or when that anomer of the sugar has no dictionary entry
+/// (α-ManNAc, β-Neu5Gc, …) — those carry no PDB CCD code or CHARMM residue.
+pub fn entry_for(mono: Monosaccharide) -> Option<MonosaccharideEntry> {
+    TABLE.iter().copied().find(|entry| entry.mono == mono)
+}
+
+/// Whether a token names its own anomer. Only the `a`/`b`-prefixed spellings do;
+/// the bare ones (`Man`, `Fuc`, …) merely carry the dictionary's default, which
+/// a linkage is free to override.
+pub fn token_states_anomer(token: &str) -> bool {
+    token.starts_with(['a', 'b'])
+}
+
+fn base_entry(kind: SugarKind) -> Option<MonosaccharideEntry> {
+    TABLE
+        .iter()
+        .copied()
+        .find(|entry| entry.mono.kind == kind && !token_states_anomer(entry.token))
+}
+
+/// The unprefixed spelling of a sugar, used to render canonical notation where
+/// the anomer travels in the linkage rather than the token.
+pub fn base_token(kind: SugarKind) -> Option<&'static str> {
+    base_entry(kind).map(|entry| entry.token)
+}
+
+/// The anomer a bare token implies — the configuration a free sugar of this kind
+/// takes when nothing states otherwise.
+pub fn default_anomer(kind: SugarKind) -> Option<Anomer> {
+    base_entry(kind).map(|entry| entry.mono.anomer)
+}
+
+/// The anomeric carbon of a sugar, independent of its configuration — C2 for the
+/// sialic acids, C1 elsewhere.
+pub fn anomeric_carbon(kind: SugarKind) -> Option<u8> {
+    base_entry(kind).map(|entry| entry.anomeric_carbon)
+}
+
 pub fn supported_tokens() -> Vec<&'static str> {
     TABLE.iter().map(|entry| entry.token).collect()
 }
@@ -427,6 +466,61 @@ mod tests {
     #[test]
     fn unknown_token_returns_none() {
         assert!(lookup("Bogus").is_none());
+    }
+
+    #[test]
+    fn only_prefixed_tokens_state_their_anomer() {
+        for token in ["Man", "Fuc", "GlcNAc", "Neu5Ac", "IdoA", "GalA"] {
+            assert!(!token_states_anomer(token), "{token}");
+        }
+        for token in ["aMan", "bFuc", "aGlcNAc", "bNeu5Ac"] {
+            assert!(token_states_anomer(token), "{token}");
+        }
+    }
+
+    #[test]
+    fn base_token_and_default_anomer_come_from_the_unprefixed_spelling() {
+        assert_eq!(base_token(SugarKind::Man), Some("Man"));
+        assert_eq!(base_token(SugarKind::Fuc), Some("Fuc"));
+        assert_eq!(default_anomer(SugarKind::Man), Some(Anomer::Beta));
+        assert_eq!(default_anomer(SugarKind::Fuc), Some(Anomer::Alpha));
+        assert_eq!(anomeric_carbon(SugarKind::Neu5Ac), Some(2));
+        assert_eq!(anomeric_carbon(SugarKind::Man), Some(1));
+    }
+
+    #[test]
+    fn entry_for_resolves_an_exact_stereochemistry() {
+        let alpha_man = mono(
+            SugarKind::Man,
+            RingForm::Pyranose,
+            AbsConfig::D,
+            Anomer::Alpha,
+        );
+        assert_eq!(entry_for(alpha_man).unwrap().pdb_ccd, "MAN");
+
+        let alpha_mannac = mono(
+            SugarKind::ManNAc,
+            RingForm::Pyranose,
+            AbsConfig::D,
+            Anomer::Alpha,
+        );
+        assert!(
+            entry_for(alpha_mannac).is_none(),
+            "the dictionary carries no alpha-ManNAc residue"
+        );
+    }
+
+    /// Every sugar in the table must have an unprefixed spelling, or canonical
+    /// notation could not be rendered for it.
+    #[test]
+    fn every_sugar_has_a_base_token() {
+        for entry in TABLE {
+            assert!(
+                base_token(entry.mono.kind).is_some(),
+                "{:?} has no unprefixed token",
+                entry.mono.kind
+            );
+        }
     }
 
     #[test]

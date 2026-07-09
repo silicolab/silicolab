@@ -84,15 +84,8 @@ fn outward_direction(carbon_index: usize, axial: bool) -> Vector3<f32> {
 }
 
 pub fn ring_template(mono: Monosaccharide) -> Option<RingTemplate> {
-    let entry = entry_for(mono)?;
+    let entry = dictionary::entry_for(mono)?;
     Some(build_pyranose(entry, mono))
-}
-
-fn entry_for(mono: Monosaccharide) -> Option<MonosaccharideEntry> {
-    dictionary::supported_tokens()
-        .into_iter()
-        .filter_map(dictionary::lookup)
-        .find(|entry| entry.mono == mono)
 }
 
 fn build_pyranose(entry: MonosaccharideEntry, mono: Monosaccharide) -> RingTemplate {

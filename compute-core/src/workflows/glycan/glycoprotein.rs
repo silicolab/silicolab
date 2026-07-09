@@ -1,25 +1,61 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Result, anyhow, bail};
 use nalgebra::Vector3;
 
-use crate::domain::glycan::{self, ProteinAnchor};
+use crate::domain::glycan::{self, Anomer, ProteinAnchor};
 use crate::domain::{Biopolymer, BondType, ResidueId, Structure};
 use crate::engines::forcefield;
 use crate::workflows::assembly::condense::{self, AcceptorSpec, DonorSpec};
 
-use super::builder::glycan_to_structure;
+use super::builder::tree_to_structure;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum GlycosylationKind {
-    NLinked,
-    OLinked,
+pub use crate::domain::glycan::GlycosylationKind;
+
+/// A glycosylated protein, together with what the anchor residue and the
+/// notation resolved to.
+#[derive(Debug, Clone)]
+pub struct Glycosylation {
+    pub structure: Structure,
+    /// The junction the anchor residue forms.
+    pub kind: GlycosylationKind,
+    /// Canonical notation for the glycan as built, every anomer stated.
+    pub notation: String,
 }
 
+/// The junction an anchor residue forms, and the side-chain atom the glycan's
+/// reducing end condenses onto.
+///
+/// The residue alone fixes both: Asn offers an amide nitrogen (ND2), Ser and Thr
+/// a hydroxyl oxygen (OG/OG1), and no residue offers each. The glycan plays no
+/// part — a given sugar can sit on either junction.
+fn anchor_for_residue(residue_name: &str) -> Option<(GlycosylationKind, ProteinAnchor)> {
+    match residue_name {
+        "ASN" => Some((GlycosylationKind::NLinked, ProteinAnchor::AsnNd2)),
+        "SER" => Some((GlycosylationKind::OLinked, ProteinAnchor::SerOg)),
+        "THR" => Some((GlycosylationKind::OLinked, ProteinAnchor::ThrOg1)),
+        _ => None,
+    }
+}
+
+/// Which junction a residue forms, for callers that want to show it before
+/// committing to a modification.
+pub fn glycosylation_kind_for_residue(residue_name: &str) -> Option<GlycosylationKind> {
+    anchor_for_residue(residue_name.trim()).map(|(kind, _)| kind)
+}
+
+/// Attach a glycan to `anchor`.
+///
+/// `requested_kind` is an assertion, not an input: the junction is derived from
+/// the anchor residue, and a request that disagrees with it is an error. Pass
+/// `None` to accept the derivation. `root_anomer` likewise overrides the
+/// reducing end's configuration, which is otherwise derived from the junction
+/// and the reducing sugar.
 pub fn glycosylate_protein(
     protein: &Structure,
     glycan_notation: &str,
     anchor: ResidueId,
-    kind: GlycosylationKind,
-) -> Result<Structure> {
+    requested_kind: Option<GlycosylationKind>,
+    root_anomer: Option<Anomer>,
+) -> Result<Glycosylation> {
     let protein_bio = protein
         .biopolymer
         .as_ref()
@@ -36,15 +72,34 @@ pub fn glycosylate_protein(
         .trim()
         .to_string();
 
-    let anchor_atom_name = anchor_atom_name(&anchor_residue_name, kind)
-        .ok_or_else(|| anyhow!("{anchor_residue_name} is not a valid {kind:?} anchor residue"))?;
+    let (kind, anchor_site) = anchor_for_residue(&anchor_residue_name).ok_or_else(|| {
+        anyhow!(
+            "{anchor_residue_name} is not a glycosylation anchor residue (expected Asn, Ser or Thr)"
+        )
+    })?;
+    if let Some(requested) = requested_kind
+        && requested != kind
+    {
+        bail!(
+            "{anchor_residue_name} is an {} anchor, but {} glycosylation was requested",
+            kind.name(),
+            requested.name()
+        );
+    }
+
+    let anchor_atom_name = anchor_site.atom_name();
     let anchor_atom = atom_in_residue(protein_bio, anchor_residue_index, anchor_atom_name)
         .ok_or_else(|| anyhow!("anchor residue is missing atom {anchor_atom_name}"))?;
     let anchor_hydrogen = anchor_hydrogen_atom(protein_bio, anchor_residue_index, kind);
     let anchor_outward =
         anchor_outward_direction(protein, protein_bio, anchor_residue_index, anchor_atom);
 
-    let glycan = glycan_to_structure(glycan_notation, None)?;
+    // The reducing end's configuration is fixed by the aglycon it condenses onto,
+    // so it is settled here rather than by the notation alone.
+    let mut tree = glycan::parse(glycan_notation)?;
+    glycan::resolve_root_anomer(&mut tree, Some(kind), root_anomer)?;
+    let notation = glycan::to_iupac(&tree);
+    let glycan = tree_to_structure(&tree, glycan_notation.to_string())?;
     let glycan_bio = glycan
         .biopolymer
         .as_ref()
@@ -77,7 +132,7 @@ pub fn glycosylate_protein(
         outward: donor_outward,
     };
 
-    condense::attach_fragment(
+    let structure = condense::attach_fragment(
         protein,
         acceptor,
         &glycan,
@@ -85,16 +140,13 @@ pub fn glycosylate_protein(
         bond_length,
         BondType::Single,
         "glycan",
-    )
-}
+    )?;
 
-fn anchor_atom_name(residue_name: &str, kind: GlycosylationKind) -> Option<&'static str> {
-    match (kind, residue_name) {
-        (GlycosylationKind::NLinked, "ASN") => Some(ProteinAnchor::AsnNd2.atom_name()),
-        (GlycosylationKind::OLinked, "SER") => Some(ProteinAnchor::SerOg.atom_name()),
-        (GlycosylationKind::OLinked, "THR") => Some(ProteinAnchor::ThrOg1.atom_name()),
-        _ => None,
-    }
+    Ok(Glycosylation {
+        structure,
+        kind,
+        notation,
+    })
 }
 
 fn atom_in_residue(
@@ -189,6 +241,7 @@ mod tests {
     use super::*;
     use crate::domain::glycan::{Aglycon, infer_attachment};
     use crate::domain::{Atom, AtomCategory, Bond, ChainRecord, ResidueRecord};
+    use crate::workflows::glycan::builder::glycan_to_structure;
     use nalgebra::Point3;
 
     fn atom(element: &str, x: f32, y: f32, z: f32) -> Atom {
@@ -311,13 +364,15 @@ mod tests {
         let glycan = glycan_to_structure("GlcNAc", None).expect("glycan");
         let glycan_atom_count = glycan.atoms.len();
 
-        let result = glycosylate_protein(
-            &protein,
-            "GlcNAc",
-            ResidueId::new('A', 1, ' '),
+        let glycosylation =
+            glycosylate_protein(&protein, "GlcNAc", ResidueId::new('A', 1, ' '), None, None)
+                .expect("glycosylation");
+        assert_eq!(
+            glycosylation.kind,
             GlycosylationKind::NLinked,
-        )
-        .expect("glycosylation");
+            "Asn derives an N-linked junction"
+        );
+        let result = glycosylation.structure;
 
         assert_eq!(
             result.atoms.len(),
@@ -346,13 +401,15 @@ mod tests {
         let glycan = glycan_to_structure("GlcNAc", None).expect("glycan");
         let glycan_atom_count = glycan.atoms.len();
 
-        let result = glycosylate_protein(
-            &protein,
-            "GlcNAc",
-            ResidueId::new('A', 1, ' '),
+        let glycosylation =
+            glycosylate_protein(&protein, "GlcNAc", ResidueId::new('A', 1, ' '), None, None)
+                .expect("glycosylation");
+        assert_eq!(
+            glycosylation.kind,
             GlycosylationKind::OLinked,
-        )
-        .expect("glycosylation");
+            "Ser derives an O-linked junction"
+        );
+        let result = glycosylation.structure;
 
         assert_eq!(
             result.atoms.len(),
@@ -373,16 +430,175 @@ mod tests {
         }
     }
 
+    /// Mucin-type O-glycosylation is alpha-GalNAc. Nobody states that: the anchor
+    /// residue implies the junction, and the junction implies the configuration.
+    #[test]
+    fn o_linked_galnac_is_built_alpha() {
+        let result = glycosylate_protein(
+            &ser_structure(),
+            "GalNAc",
+            ResidueId::new('A', 1, ' '),
+            None,
+            None,
+        )
+        .expect("glycosylation");
+
+        assert_eq!(result.notation, "GalNAc(a1-O)");
+        let bio = result.structure.biopolymer.as_ref().unwrap();
+        assert!(
+            bio.residues.iter().any(|r| r.residue_name == "A2G"),
+            "expected alpha-GalNAc (A2G), got {:?}",
+            bio.residues
+                .iter()
+                .map(|r| &r.residue_name)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// The same sugar attached to Asn would be beta, and is refused outright:
+    /// N-glycans are GlcNAc-linked.
+    #[test]
+    fn n_linked_refuses_a_galnac_reducing_end() {
+        let err = glycosylate_protein(
+            &asn_structure(),
+            "GalNAc",
+            ResidueId::new('A', 1, ' '),
+            None,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("GlcNAc"), "{err}");
+    }
+
+    /// The anchor residue alone fixes the junction — the glycan has no say.
+    #[test]
+    fn the_junction_is_derived_from_the_anchor_residue() {
+        assert_eq!(
+            glycosylation_kind_for_residue("ASN"),
+            Some(GlycosylationKind::NLinked)
+        );
+        assert_eq!(
+            glycosylation_kind_for_residue("SER"),
+            Some(GlycosylationKind::OLinked)
+        );
+        assert_eq!(
+            glycosylation_kind_for_residue("THR"),
+            Some(GlycosylationKind::OLinked)
+        );
+        assert_eq!(glycosylation_kind_for_residue("ALA"), None);
+    }
+
+    /// A stated kind is an assertion against the residue, not an input that can
+    /// steer it.
+    #[test]
+    fn a_kind_contradicting_the_anchor_residue_is_refused() {
+        let err = glycosylate_protein(
+            &ser_structure(),
+            "GlcNAc",
+            ResidueId::new('A', 1, ' '),
+            Some(GlycosylationKind::NLinked),
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("SER"), "{err}");
+        assert!(
+            err.contains("O-linked") && err.contains("N-linked"),
+            "{err}"
+        );
+
+        // Agreeing with the residue is accepted.
+        assert!(
+            glycosylate_protein(
+                &ser_structure(),
+                "GlcNAc",
+                ResidueId::new('A', 1, ' '),
+                Some(GlycosylationKind::OLinked),
+                None,
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn a_residue_that_cannot_carry_a_glycan_is_refused() {
+        let mut protein = ser_structure();
+        let bio = protein.biopolymer.as_mut().unwrap();
+        bio.residues[0].residue_name = "ALA".to_string();
+
+        let err = glycosylate_protein(&protein, "GlcNAc", ResidueId::new('A', 1, ' '), None, None)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("not a glycosylation anchor"), "{err}");
+    }
+
+    /// The override replaces the derivation, so an alpha N-linked GlcNAc — which
+    /// the canonical table would never produce — is buildable when asked for.
+    #[test]
+    fn an_explicit_root_anomer_overrides_the_derivation() {
+        let derived = glycosylate_protein(
+            &asn_structure(),
+            "GlcNAc",
+            ResidueId::new('A', 1, ' '),
+            None,
+            None,
+        )
+        .expect("derived");
+        let forced = glycosylate_protein(
+            &asn_structure(),
+            "GlcNAc",
+            ResidueId::new('A', 1, ' '),
+            None,
+            Some(Anomer::Alpha),
+        )
+        .expect("forced");
+
+        let ccd = |s: &Structure| -> Vec<String> {
+            s.biopolymer
+                .as_ref()
+                .unwrap()
+                .residues
+                .iter()
+                .filter(|r| !r.is_standard_amino_acid)
+                .map(|r| r.residue_name.clone())
+                .collect()
+        };
+        assert_eq!(
+            ccd(&derived.structure),
+            vec!["NAG"],
+            "beta-GlcNAc by derivation"
+        );
+        assert_eq!(
+            ccd(&forced.structure),
+            vec!["NDG"],
+            "alpha-GlcNAc by override"
+        );
+    }
+
+    /// A reducing-end configuration that contradicts the aglycon is an error, not
+    /// a silent override.
+    #[test]
+    fn a_contradicting_reducing_anomer_is_refused() {
+        let err = glycosylate_protein(
+            &asn_structure(),
+            "aGlcNAc",
+            ResidueId::new('A', 1, ' '),
+            None,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("beta") && err.contains("alpha"), "{err}");
+    }
+
     #[test]
     fn junction_round_trips_through_pdb() {
         let protein = asn_structure();
-        let result = glycosylate_protein(
-            &protein,
-            "GlcNAc",
-            ResidueId::new('A', 1, ' '),
-            GlycosylationKind::NLinked,
-        )
-        .expect("glycosylation");
+        let result =
+            glycosylate_protein(&protein, "GlcNAc", ResidueId::new('A', 1, ' '), None, None)
+                .expect("glycosylation")
+                .structure;
 
         let serialized = crate::io::formats::pdb::to_pdb(&result).expect("serialize glycoprotein");
         assert!(

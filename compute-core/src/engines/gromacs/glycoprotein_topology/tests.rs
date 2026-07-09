@@ -2,7 +2,7 @@ use super::*;
 use crate::domain::ResidueId;
 use crate::domain::biopolymer::{Biopolymer, ChainRecord, ResidueRecord};
 use crate::domain::structure::{Atom, Bond, BondType, Structure};
-use crate::workflows::glycan::glycoprotein::{GlycosylationKind, glycosylate_protein};
+use crate::workflows::glycan::glycoprotein::glycosylate_protein;
 use nalgebra::Point3;
 
 fn database() -> CarbTopologyDatabase {
@@ -107,13 +107,9 @@ Protein_chain_A  1
 
 fn n_linked_glycoprotein() -> Structure {
     let protein = protein_with_asn();
-    glycosylate_protein(
-        &protein,
-        "GlcNAc",
-        ResidueId::new('A', 1, ' '),
-        GlycosylationKind::NLinked,
-    )
-    .expect("glycosylation succeeds")
+    glycosylate_protein(&protein, "GlcNAc", ResidueId::new('A', 1, ' '), None, None)
+        .expect("glycosylation succeeds")
+        .structure
 }
 
 fn protein_with_two_asn() -> Structure {
@@ -173,20 +169,12 @@ fn protein_with_two_asn() -> Structure {
 
 fn two_site_glycoprotein() -> Structure {
     let protein = protein_with_two_asn();
-    let first = glycosylate_protein(
-        &protein,
-        "GlcNAc",
-        ResidueId::new('A', 1, ' '),
-        GlycosylationKind::NLinked,
-    )
-    .expect("first glycosylation succeeds");
-    glycosylate_protein(
-        &first,
-        "GlcNAc",
-        ResidueId::new('A', 2, ' '),
-        GlycosylationKind::NLinked,
-    )
-    .expect("second glycosylation succeeds")
+    let first = glycosylate_protein(&protein, "GlcNAc", ResidueId::new('A', 1, ' '), None, None)
+        .expect("first glycosylation succeeds")
+        .structure;
+    glycosylate_protein(&first, "GlcNAc", ResidueId::new('A', 2, ' '), None, None)
+        .expect("second glycosylation succeeds")
+        .structure
 }
 
 const TWO_ASN_PROTEIN_TOP: &str = "\

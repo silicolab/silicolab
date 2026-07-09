@@ -128,8 +128,11 @@ pub enum AppAction {
     SetPtmNTerminal(bool),
     /// Set the IUPAC-condensed glycan notation (Glycosylate family).
     SetPtmGlycanIupac(String),
-    /// Set the N-linked/O-linked glycosylation kind (Glycosylate family).
-    SetPtmGlycoKind(crate::workflows::glycan::GlycosylationKind),
+    /// Assert the glycosylation junction, or `None` to derive it from the anchor
+    /// residue (Glycosylate family).
+    SetPtmGlycoKind(Option<crate::workflows::glycan::GlycosylationKind>),
+    /// Override the reducing end's anomer, or `None` to derive it (Glycosylate).
+    SetPtmGlycoRootAnomer(Option<crate::domain::glycan::Anomer>),
     /// Set the result entry's name.
     SetPtmName(String),
     /// Apply the modification to the active protein, creating a new entry.

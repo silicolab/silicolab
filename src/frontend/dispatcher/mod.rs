@@ -190,6 +190,9 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SetPtmNTerminal(on) => with_ptm_prompt(state, |p| p.n_terminal = on),
         AppAction::SetPtmGlycanIupac(iupac) => with_ptm_prompt(state, |p| p.glycan_iupac = iupac),
         AppAction::SetPtmGlycoKind(kind) => with_ptm_prompt(state, |p| p.glyco_kind = kind),
+        AppAction::SetPtmGlycoRootAnomer(anomer) => {
+            with_ptm_prompt(state, |p| p.glyco_root_anomer = anomer)
+        }
         AppAction::SetPtmName(name) => with_ptm_prompt(state, |p| p.output_name = name),
         AppAction::StartPtm => start_pending_ptm(state),
         AppAction::CancelPtmPrompt => cancel_pending_ptm_request(state),

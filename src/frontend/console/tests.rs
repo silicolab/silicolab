@@ -426,16 +426,34 @@ fn glycan_parses_iupac_and_name_flag() {
     }
 }
 
+/// Neither the junction nor the reducing anomer needs stating: both follow from
+/// the anchor residue and the glycan.
 #[test]
-fn glycosylate_parses_protein_iupac_anchor_and_kind() {
-    let line = "glycosylate --protein active --iupac Man(b1-4)GlcNAc(b1-4)GlcNAc --at A:297 --kind n --name n-glycan";
+fn glycosylate_parses_protein_iupac_and_anchor_without_a_kind() {
+    let line = "glycosylate --protein active --iupac Man(b1-4)GlcNAc(b1-4)GlcNAc --at A:297 --name n-glycan";
     match parse_command(&shell_words(line).unwrap()).unwrap() {
         Command::Glycosylate(args) => {
             assert_eq!(args.protein.as_deref(), Some("active"));
             assert_eq!(args.iupac.as_deref(), Some("Man(b1-4)GlcNAc(b1-4)GlcNAc"));
             assert_eq!(args.at.as_deref(), Some("A:297"));
-            assert_eq!(args.kind, "n");
+            assert_eq!(args.kind, None, "the junction is derived from the anchor");
+            assert_eq!(
+                args.anomer, None,
+                "the reducing anomer is derived by default"
+            );
             assert_eq!(args.name.as_deref(), Some("n-glycan"));
+        }
+        other => panic!("expected glycosylate, got {other:?}"),
+    }
+}
+
+#[test]
+fn glycosylate_parses_the_kind_assertion_and_the_anomer_override() {
+    let line = "glycosylate --protein active --iupac GalNAc --at A:12 --kind o --anomer a";
+    match parse_command(&shell_words(line).unwrap()).unwrap() {
+        Command::Glycosylate(args) => {
+            assert_eq!(args.kind.as_deref(), Some("o"));
+            assert_eq!(args.anomer.as_deref(), Some("a"));
         }
         other => panic!("expected glycosylate, got {other:?}"),
     }

@@ -4,6 +4,7 @@
 //! [`crate::frontend::ptm_commands::PtmRequest`] and routes it through the shared
 //! `apply_ptm` seam, so the console and panel never re-implement dispatch.
 
+use crate::domain::glycan::Anomer;
 use crate::domain::modification::{MethylDegree, UblKind};
 use crate::frontend::ptm_commands::LipidKind;
 use crate::workflows::glycan::GlycosylationKind;
@@ -82,8 +83,12 @@ pub struct PendingPtm {
     pub n_terminal: bool,
     /// IUPAC-condensed glycan notation for [`PtmUiKind::Glycosylate`].
     pub glycan_iupac: String,
-    /// N-linked / O-linked selector for [`PtmUiKind::Glycosylate`].
-    pub glyco_kind: GlycosylationKind,
+    /// Assert the junction for [`PtmUiKind::Glycosylate`]; `None` accepts the one
+    /// the anchor residue implies.
+    pub glyco_kind: Option<GlycosylationKind>,
+    /// Override the reducing end's anomer; `None` derives it from the junction
+    /// and the reducing sugar.
+    pub glyco_root_anomer: Option<Anomer>,
     /// Name for the resulting entry (blank keeps the auto-generated title).
     pub output_name: String,
 }
@@ -100,7 +105,8 @@ impl Default for PendingPtm {
             ubl_override: None,
             n_terminal: false,
             glycan_iupac: String::new(),
-            glyco_kind: GlycosylationKind::NLinked,
+            glyco_kind: None,
+            glyco_root_anomer: None,
             output_name: String::new(),
         }
     }
