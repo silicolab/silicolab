@@ -55,6 +55,10 @@ pub enum AppAction {
         end: usize,
         toggle: bool,
     },
+    SelectResidues {
+        residue_indices: Vec<usize>,
+        mode: ResidueSelectionMode,
+    },
     /// Apply a per-atom *base* drawing style to the current selection (or, when
     /// the selection is empty, to every atom as the new default).
     SetSelectionStyle(crate::frontend::state::AtomStyle),
@@ -487,6 +491,14 @@ pub enum LeaveIntent {
     OpenProject,
     OpenRecentProject(std::path::PathBuf),
     CloseProject,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResidueSelectionMode {
+    Replace,
+    Add,
+    Toggle,
+    Remove,
 }
 
 impl LeaveIntent {

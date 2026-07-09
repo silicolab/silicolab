@@ -155,6 +155,10 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
             end,
             toggle,
         } => select_residue_range(state, chain_id, start, end, toggle),
+        AppAction::SelectResidues {
+            residue_indices,
+            mode,
+        } => select_residues(state, residue_indices, mode),
         AppAction::SetSelectionStyle(style) => set_selection_style(state, style),
         AppAction::SetCartoonOverlay(on) => set_overlay(state, OverlayKind::Cartoon, on),
         AppAction::SetSurfaceOverlay(on) => set_overlay(state, OverlayKind::Surface, on),
