@@ -1,5 +1,8 @@
 use std::collections::BTreeMap;
 
+use eframe::egui;
+
+use crate::frontend::actions::ResidueSelectionMode;
 use crate::frontend::state::{
     DisorderedSystemPrompt, DockingPrompt, EngineDraft, EntryListState, LayoutState, MdRunPrompt,
     MdSystemPrompt, OptimizationPrompt, PendingPtm, ProteinPrepPrompt, QmPrompt, RemoteHostDraft,
@@ -59,6 +62,14 @@ pub struct SequenceViewerState {
     pub chain_filter: Option<char>,
     pub last_clicked_residue: Option<usize>,
     pub last_scrolled_primary_atom: Option<usize>,
+    pub drag: Option<SequenceDragState>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct SequenceDragState {
+    pub origin: egui::Pos2,
+    pub current: egui::Pos2,
+    pub mode: ResidueSelectionMode,
 }
 
 pub struct UiState {

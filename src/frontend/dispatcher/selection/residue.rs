@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::frontend::actions::ResidueSelectionMode;
+
 pub(crate) fn select_residue(state: &mut AppState, residue_index: usize, toggle: bool) {
     let atom_count = state.structure().atoms.len();
     let Some(atom_indices) = residue_atom_indices(state, residue_index, atom_count) else {
@@ -11,7 +13,11 @@ pub(crate) fn select_residue(state: &mut AppState, residue_index: usize, toggle:
     select_residue_atoms(
         state,
         atom_indices,
-        toggle,
+        if toggle {
+            ResidueSelectionMode::Toggle
+        } else {
+            ResidueSelectionMode::Replace
+        },
         "Selected residue has no valid atoms",
     );
 }
@@ -35,15 +41,39 @@ pub(crate) fn select_residue_range(
     select_residue_atoms(
         state,
         atom_indices,
-        toggle,
+        if toggle {
+            ResidueSelectionMode::Toggle
+        } else {
+            ResidueSelectionMode::Replace
+        },
         "Selected residue range has no valid atoms",
+    );
+}
+
+pub(crate) fn select_residues(
+    state: &mut AppState,
+    residue_indices: Vec<usize>,
+    mode: ResidueSelectionMode,
+) {
+    let atom_count = state.structure().atoms.len();
+    let Some(atom_indices) = residue_set_atom_indices(state, residue_indices, atom_count) else {
+        state.ui.selection.retain_valid(atom_count);
+        state.set_message("Residue selection is unavailable for the active entry".to_string());
+        return;
+    };
+
+    select_residue_atoms(
+        state,
+        atom_indices,
+        mode,
+        "Selected residues have no valid atoms",
     );
 }
 
 fn select_residue_atoms(
     state: &mut AppState,
     atom_indices: Vec<usize>,
-    toggle: bool,
+    mode: ResidueSelectionMode,
     empty_message: &str,
 ) {
     let atom_count = state.structure().atoms.len();
@@ -53,12 +83,23 @@ fn select_residue_atoms(
         return;
     }
 
-    if toggle {
-        for atom_index in atom_indices {
-            state.ui.selection.toggle(atom_index);
+    match mode {
+        ResidueSelectionMode::Replace => state.ui.selection.select_indices(atom_indices),
+        ResidueSelectionMode::Add => {
+            for atom_index in atom_indices {
+                state.ui.selection.add(atom_index);
+            }
         }
-    } else {
-        state.ui.selection.select_indices(atom_indices);
+        ResidueSelectionMode::Toggle => {
+            for atom_index in atom_indices {
+                state.ui.selection.toggle(atom_index);
+            }
+        }
+        ResidueSelectionMode::Remove => {
+            for atom_index in atom_indices {
+                state.ui.selection.remove(atom_index);
+            }
+        }
     }
     state.ui.selection.retain_valid(atom_count);
 
@@ -67,6 +108,27 @@ fn select_residue_atoms(
     } else {
         state.set_message(format!("Selected {} atom(s)", state.ui.selection.len()));
     }
+}
+
+fn residue_set_atom_indices(
+    state: &AppState,
+    residue_indices: Vec<usize>,
+    atom_count: usize,
+) -> Option<Vec<usize>> {
+    let biopolymer = state.structure().biopolymer.as_ref()?;
+    if !biopolymer.is_compatible_with_atom_count(atom_count) {
+        return None;
+    }
+
+    let mut deduped = std::collections::BTreeSet::new();
+    Some(
+        residue_indices
+            .into_iter()
+            .filter(|residue_index| deduped.insert(*residue_index))
+            .filter_map(|residue_index| biopolymer.residues.get(residue_index))
+            .flat_map(|residue| valid_residue_atoms(residue, atom_count))
+            .collect(),
+    )
 }
 
 fn residue_atom_indices(
@@ -140,7 +202,10 @@ mod tests {
     use crate::{
         backend::project::WorkspaceSession,
         domain::{Atom, PdbAtomAnnotation, Structure, build_biopolymer},
-        frontend::{actions::AppAction, state::AppState},
+        frontend::{
+            actions::{AppAction, ResidueSelectionMode},
+            state::AppState,
+        },
     };
 
     fn annotated_atom(element: &str, x: f32) -> Atom {
@@ -320,5 +385,59 @@ mod tests {
         );
 
         assert_eq!(state.ui.selection.ordered_indices(), vec![0, 1, 4, 5]);
+    }
+
+    #[test]
+    fn select_residues_supports_add_and_remove_modes() {
+        let ctx = Context::default();
+        let mut state = scratch_state(residue_structure());
+
+        crate::frontend::dispatcher::dispatch(
+            &mut state,
+            AppAction::SelectResidues {
+                residue_indices: vec![0],
+                mode: ResidueSelectionMode::Replace,
+            },
+            &ctx,
+        );
+        assert_eq!(state.ui.selection.ordered_indices(), vec![0, 1]);
+
+        crate::frontend::dispatcher::dispatch(
+            &mut state,
+            AppAction::SelectResidues {
+                residue_indices: vec![1],
+                mode: ResidueSelectionMode::Add,
+            },
+            &ctx,
+        );
+        assert_eq!(state.ui.selection.ordered_indices(), vec![0, 1, 2, 3]);
+
+        crate::frontend::dispatcher::dispatch(
+            &mut state,
+            AppAction::SelectResidues {
+                residue_indices: vec![0],
+                mode: ResidueSelectionMode::Remove,
+            },
+            &ctx,
+        );
+        assert_eq!(state.ui.selection.ordered_indices(), vec![2, 3]);
+    }
+
+    #[test]
+    fn select_residues_deduplicates_toggle_input() {
+        let ctx = Context::default();
+        let mut state = scratch_state(residue_structure());
+        state.ui.selection.select_indices([0, 2]);
+
+        crate::frontend::dispatcher::dispatch(
+            &mut state,
+            AppAction::SelectResidues {
+                residue_indices: vec![0, 0, 1],
+                mode: ResidueSelectionMode::Toggle,
+            },
+            &ctx,
+        );
+
+        assert_eq!(state.ui.selection.ordered_indices(), vec![1, 3]);
     }
 }
