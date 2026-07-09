@@ -36,10 +36,15 @@ pub(crate) fn start_pending_ptm(state: &mut AppState) {
         }
     };
     match apply_ptm(state, "active", request, Some(&prompt.output_name)) {
-        Ok(entry_id) => {
+        Ok(outcome) => {
             state.ui.pending_ptm = None;
+            let entry_id = outcome.entry_id;
+            let detail = outcome
+                .detail
+                .map(|detail| format!(" ({detail})"))
+                .unwrap_or_default();
             state.set_message(format!(
-                "{} applied as entry #{entry_id}",
+                "{} applied as entry #{entry_id}{detail}",
                 prompt.family.label()
             ));
             complete_active_task(state, TaskKind::ModifyProteinPtm, TaskStatus::Completed);
@@ -89,6 +94,7 @@ fn build_ptm_request(prompt: &PendingPtm) -> Result<PtmRequest> {
                 residue,
                 iupac: iupac.to_string(),
                 kind: prompt.glyco_kind,
+                root_anomer: prompt.glyco_root_anomer,
             }
         }
     })

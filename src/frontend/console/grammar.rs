@@ -240,8 +240,14 @@ pub(crate) struct GlycosylateArgs {
     pub(crate) iupac: Option<String>,
     #[arg(long)]
     pub(crate) at: Option<String>,
-    #[arg(long, default_value = "n")]
-    pub(crate) kind: String,
+    /// Assert the junction instead of accepting the one the anchor residue
+    /// implies (Asn is N-linked, Ser/Thr O-linked); a mismatch is an error.
+    #[arg(long)]
+    pub(crate) kind: Option<String>,
+    /// Override the reducing end's anomeric configuration instead of deriving it
+    /// from the junction and the reducing sugar.
+    #[arg(long)]
+    pub(crate) anomer: Option<String>,
     #[arg(long)]
     pub(crate) name: Option<String>,
 }

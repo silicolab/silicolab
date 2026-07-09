@@ -2,6 +2,7 @@ pub mod dictionary;
 pub mod iupac;
 pub mod linkage_topology;
 pub mod patches;
+pub mod reducing_end;
 pub mod templates;
 
 use crate::domain::ResidueId;
@@ -14,7 +15,25 @@ pub type NodeId = usize;
 pub struct GlycanTree {
     pub nodes: Vec<GlycanResidue>,
     pub root: NodeId,
-    pub attachment: Option<Aglycon>,
+    /// The aglycon named by the reducing-end linkage (`GlcNAc(b1-N)`), when the
+    /// notation states one. Cross-checked against the requested glycosylation.
+    pub aglycon: Option<GlycosylationKind>,
+}
+
+/// Which protein side chain a glycan's reducing end condenses onto.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GlycosylationKind {
+    NLinked,
+    OLinked,
+}
+
+impl GlycosylationKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::NLinked => "N-linked",
+            Self::OLinked => "O-linked",
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,6 +81,25 @@ pub enum Anomer {
     Alpha,
     Beta,
     Unknown,
+}
+
+impl Anomer {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Alpha => "alpha",
+            Self::Beta => "beta",
+            Self::Unknown => "unspecified",
+        }
+    }
+
+    /// The `a`/`b`/`?` character this anomer takes inside a linkage.
+    pub fn symbol(self) -> char {
+        match self {
+            Self::Alpha => 'a',
+            Self::Beta => 'b',
+            Self::Unknown => '?',
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -200,12 +238,13 @@ fn residue_name_for(biopolymer: &Biopolymer, atom_index: usize) -> Option<&str> 
     )
 }
 
-pub use dictionary::{MonosaccharideEntry, lookup, supported_tokens};
-pub use iupac::parse;
+pub use dictionary::{MonosaccharideEntry, entry_for, lookup, supported_tokens};
+pub use iupac::{parse, to_iupac};
 pub(crate) use linkage_topology::ProteinAnchor;
 pub use linkage_topology::{
     BondLinkage, CrossResidueLinkage, classify_bond, cross_residue_linkages, is_anomeric_carbon,
 };
+pub use reducing_end::{canonical_anomer, resolve_root_anomer};
 pub use templates::{CoordinationSite, RingTemplate, TemplateAtom, TemplateBond, ring_template};
 
 #[cfg(test)]

@@ -574,15 +574,16 @@ END
     fn wsl_gromacs_build_glycoprotein_topology_runs_end_to_end() {
         use crate::domain::ResidueId;
         use crate::io::formats::pdb::parse_pdb;
-        use crate::workflows::glycan::glycoprotein::{GlycosylationKind, glycosylate_protein};
+        use crate::workflows::glycan::glycoprotein::glycosylate_protein;
 
         let working_dir = std::env::temp_dir().join("silicolab_gmx_build_glycoprotein");
         let _ = std::fs::remove_dir_all(&working_dir);
 
         let protein = parse_pdb(TRIPEPTIDE_ASN_PDB).expect("fixture parses");
         let anchor = ResidueId::new('A', 2, ' ');
-        let structure = glycosylate_protein(&protein, "GlcNAc", anchor, GlycosylationKind::NLinked)
-            .expect("glycosylation succeeds");
+        let structure = glycosylate_protein(&protein, "GlcNAc", anchor, None, None)
+            .expect("glycosylation succeeds")
+            .structure;
         let solute_atoms = structure.atoms.len();
 
         let launch = EngineLaunch {

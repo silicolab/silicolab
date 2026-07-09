@@ -8,6 +8,7 @@
 use anyhow::{Context, Result, anyhow, bail};
 
 use crate::{
+    domain::glycan::Anomer,
     domain::{
         ProteinAnchor, ResidueId, Structure,
         modification::{AcylKind, MethylDegree, PrenylKind, UblKind},
@@ -70,27 +71,40 @@ pub(crate) enum PtmRequest {
         residue: ResidueId,
         /// IUPAC-condensed glycan notation to build and attach.
         iupac: String,
-        /// N-linked (Asn ND2) or O-linked (Ser/Thr OG); the workflow derives the
-        /// anchor atom from this.
-        kind: GlycosylationKind,
+        /// Assert the junction rather than accept the one the anchor residue
+        /// implies; a mismatch is an error.
+        kind: Option<GlycosylationKind>,
+        /// Override the reducing end's anomeric configuration, which is otherwise
+        /// derived from the junction and the reducing sugar.
+        root_anomer: Option<Anomer>,
     },
 }
 
+/// What [`apply_ptm`] produced: the new entry, plus anything the workflow
+/// resolved that the caller could not have known up front — for glycosylation,
+/// the junction derived from the anchor residue and the canonical notation the
+/// glycan was actually built with.
+pub(crate) struct PtmOutcome {
+    pub(crate) entry_id: u64,
+    pub(crate) detail: Option<String>,
+}
+
 /// Resolve `protein_entry`, apply `req` to its structure, and add the product as
-/// a new active entry, returning that entry id. `output_name`, when non-empty,
-/// names the new entry. The single seam the console and the GUI share: it owns
-/// entry resolution, anchor inference, the `compute_core` call, naming, and
-/// registration so neither front-end re-implements the dispatch.
+/// a new active entry. `output_name`, when non-empty, names the new entry. The
+/// single seam the console and the GUI share: it owns entry resolution, anchor
+/// inference, the `compute_core` call, naming, and registration so neither
+/// front-end re-implements the dispatch.
 pub(crate) fn apply_ptm(
     state: &mut AppState,
     protein_entry: &str,
     req: PtmRequest,
     output_name: Option<&str>,
-) -> Result<u64> {
+) -> Result<PtmOutcome> {
     let protein_id = resolve_entry_id(state, protein_entry)?;
     state.ensure_entry_loaded(protein_id);
     let protein = entry_structure(state, protein_id, "protein")?;
 
+    let mut detail = None;
     let modified = match req {
         PtmRequest::Phosphorylate { residue } => {
             let anchor = phosphorylation_anchor(&protein, &residue)?;
@@ -132,10 +146,17 @@ pub(crate) fn apply_ptm(
             residue,
             iupac,
             kind,
+            root_anomer,
         } => {
             let site = label(&residue);
-            glycosylate_protein(&protein, &iupac, residue, kind)
-                .with_context(|| format!("could not glycosylate at {site}"))?
+            let glycosylation = glycosylate_protein(&protein, &iupac, residue, kind, root_anomer)
+                .with_context(|| format!("could not glycosylate at {site}"))?;
+            detail = Some(format!(
+                "{} as {}",
+                glycosylation.kind.name(),
+                glycosylation.notation
+            ));
+            glycosylation.structure
         }
     };
 
@@ -145,7 +166,7 @@ pub(crate) fn apply_ptm(
         state.entries.rename_entry(entry_id, name.to_string());
     }
     state.show_entry(entry_id);
-    Ok(entry_id)
+    Ok(PtmOutcome { entry_id, detail })
 }
 
 fn apply_lipidate(protein: &Structure, residue: ResidueId, kind: LipidKind) -> Result<Structure> {
@@ -272,7 +293,8 @@ pub(crate) fn phosphorylate_command(
         &protein_ref,
         PtmRequest::Phosphorylate { residue },
         args.name.as_deref(),
-    )?;
+    )?
+    .entry_id;
     Ok(format!(
         "phosphorylated {protein_ref} at {at} as entry #{entry_id} ({} atoms)",
         atom_count(state, entry_id)
@@ -300,7 +322,8 @@ pub(crate) fn acetylate_command(state: &mut AppState, args: AcetylateArgs) -> Re
             n_terminal,
         },
         args.name.as_deref(),
-    )?;
+    )?
+    .entry_id;
     let site = if n_terminal { "N-terminus" } else { "Lys NZ" };
     Ok(format!(
         "acetylated {protein_ref} at {at} ({site}) as entry #{entry_id} ({} atoms)",
@@ -326,7 +349,8 @@ pub(crate) fn methylate_command(state: &mut AppState, args: MethylateArgs) -> Re
         &protein_ref,
         PtmRequest::Methylate { residue, degree },
         args.name.as_deref(),
-    )?;
+    )?
+    .entry_id;
     Ok(format!(
         "{}methylated {protein_ref} at {at} as entry #{entry_id} ({} atoms)",
         methyl_prefix(degree),
@@ -352,7 +376,8 @@ pub(crate) fn lipidate_command(state: &mut AppState, args: LipidateArgs) -> Resu
         &protein_ref,
         PtmRequest::Lipidate { residue, kind },
         args.name.as_deref(),
-    )?;
+    )?
+    .entry_id;
     Ok(format!(
         "lipidated {protein_ref} with {} at {at} as entry #{entry_id} ({} atoms)",
         lipid_label(kind),
@@ -386,7 +411,8 @@ pub(crate) fn ubiquitinate_command(state: &mut AppState, args: UbiquitinateArgs)
             with_entry,
         },
         args.name.as_deref(),
-    )?;
+    )?
+    .entry_id;
     Ok(format!(
         "conjugated {} to {protein_ref} at {at} as entry #{entry_id} ({} atoms)",
         ubl_label(ubl),
