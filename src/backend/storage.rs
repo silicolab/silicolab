@@ -5,6 +5,7 @@ use crate::{
     frontend::ViewportVisualState,
 };
 
+mod assistant;
 mod entries;
 mod history;
 pub mod jobs;
@@ -16,6 +17,7 @@ mod tasks;
 mod view_load;
 mod view_save;
 
+pub use assistant::*;
 pub(crate) use entries::*;
 pub(crate) use history::*;
 pub use project::*;
@@ -36,6 +38,8 @@ pub struct ProjectSnapshot {
     pub tasks: TaskManager,
     pub view: ProjectViewSettings,
     pub history: History,
+    pub assistant: ProjectAssistantSnapshot,
+    pub warnings: Vec<String>,
 }
 
 /// Borrowed view of the data a save reads. Saving only needs read access, so the
@@ -48,6 +52,7 @@ pub struct ProjectSnapshotRef<'a> {
     pub tasks: &'a TaskManager,
     pub view: &'a ProjectViewSettings,
     pub history: &'a History,
+    pub assistant: &'a ProjectAssistantSnapshot,
 }
 
 impl ProjectSnapshot {
@@ -58,6 +63,7 @@ impl ProjectSnapshot {
             tasks: &self.tasks,
             view: &self.view,
             history: &self.history,
+            assistant: &self.assistant,
         }
     }
 }

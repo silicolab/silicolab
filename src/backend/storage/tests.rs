@@ -9,8 +9,11 @@ use crate::{
         history::{EditSnapshot, History},
         project::ProjectSession,
         storage::{
-            ProjectSnapshot, ProjectViewSettings, initialize_project_databases,
-            load_project_snapshot, load_structure_for_compound, save_project_snapshot,
+            ASSISTANT_STATE_FORMAT, PersistedAssistantConversation, PersistedChatMessage,
+            PersistedContentBlock, PersistedRole, PersistedTranscriptEntry, PersistedUsage,
+            ProjectAssistantSnapshot, ProjectSnapshot, ProjectViewSettings,
+            initialize_project_databases, load_project_snapshot, load_structure_for_compound,
+            save_project_snapshot,
         },
         tasks::TaskManager,
     },
@@ -51,6 +54,8 @@ fn structure_roundtrips_through_project_databases() {
         tasks: TaskManager::default(),
         view: ProjectViewSettings::default(),
         history: History::default(),
+        assistant: ProjectAssistantSnapshot::default(),
+        warnings: Vec::new(),
     };
 
     save_project_snapshot(&session, &snapshot, true).unwrap();
@@ -92,6 +97,8 @@ fn entry_origin_roundtrips_through_project_databases() {
         tasks: TaskManager::default(),
         view: ProjectViewSettings::default(),
         history: History::default(),
+        assistant: ProjectAssistantSnapshot::default(),
+        warnings: Vec::new(),
     };
 
     save_project_snapshot(&session, &snapshot, true).unwrap();
@@ -133,6 +140,8 @@ END
         tasks: TaskManager::default(),
         view: ProjectViewSettings::default(),
         history: History::default(),
+        assistant: ProjectAssistantSnapshot::default(),
+        warnings: Vec::new(),
     };
 
     save_project_snapshot(&session, &snapshot, true).unwrap();
@@ -243,6 +252,8 @@ fn project_view_settings_roundtrip_surface_overrides() {
             tasks: TaskManager::default(),
             view,
             history: History::default(),
+            assistant: ProjectAssistantSnapshot::default(),
+            warnings: Vec::new(),
         },
         true,
     )
@@ -320,6 +331,8 @@ fn entry_view_settings_roundtrip_without_leaking_to_other_entries() {
             tasks: TaskManager::default(),
             view,
             history: History::default(),
+            assistant: ProjectAssistantSnapshot::default(),
+            warnings: Vec::new(),
         },
         true,
     )
@@ -371,6 +384,8 @@ fn entries_without_open_tabs_are_loaded_lazily() {
             tasks: TaskManager::default(),
             view: ProjectViewSettings::default(),
             history: History::default(),
+            assistant: ProjectAssistantSnapshot::default(),
+            warnings: Vec::new(),
         },
         true,
     )
@@ -406,6 +421,8 @@ fn unchanged_compounds_are_not_rewritten() {
         tasks: TaskManager::default(),
         view: ProjectViewSettings::default(),
         history: History::default(),
+        assistant: ProjectAssistantSnapshot::default(),
+        warnings: Vec::new(),
     };
     save_project_snapshot(&session, &snapshot, true).unwrap();
 
@@ -456,6 +473,8 @@ fn undo_history_survives_save_and_load() {
             tasks: TaskManager::default(),
             view: ProjectViewSettings::default(),
             history,
+            assistant: ProjectAssistantSnapshot::default(),
+            warnings: Vec::new(),
         },
         true,
     )
@@ -468,4 +487,145 @@ fn undo_history_survives_save_and_load() {
     let snapshot = restored.take_undo().expect("undo snapshot restored");
     assert_eq!(snapshot.structure.title, "before-edit");
     assert_eq!(snapshot.selection.ordered_indices(), vec![0]);
+}
+
+#[test]
+fn assistant_history_survives_save_and_load() {
+    let root = PathBuf::from("target/test-project-assistant-history");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join(".silicolab")).unwrap();
+    let session = ProjectSession::from_root(root, "Assistant".to_string());
+    initialize_project_databases(&session).unwrap();
+
+    let assistant = ProjectAssistantSnapshot {
+        version: ASSISTANT_STATE_FORMAT as u32,
+        active_conversation: 2,
+        next_conversation_id: 3,
+        next_conversation_number: 3,
+        conversations: vec![PersistedAssistantConversation {
+            id: 2,
+            title: "Protein setup".to_string(),
+            history: vec![
+                PersistedChatMessage {
+                    role: PersistedRole::User,
+                    content: vec![PersistedContentBlock::Text {
+                        text: "prepare 1ubq".to_string(),
+                    }],
+                },
+                PersistedChatMessage {
+                    role: PersistedRole::Assistant,
+                    content: vec![PersistedContentBlock::Text {
+                        text: "Loaded it.".to_string(),
+                    }],
+                },
+            ],
+            transcript: vec![
+                PersistedTranscriptEntry::User {
+                    text: "prepare 1ubq".to_string(),
+                },
+                PersistedTranscriptEntry::Assistant {
+                    text: "Loaded it.".to_string(),
+                },
+                PersistedTranscriptEntry::Tool {
+                    summary: "fetch 1ubq".to_string(),
+                    result: Some("Created entry #1".to_string()),
+                    is_error: false,
+                },
+            ],
+            input: "next step".to_string(),
+            session_usage: PersistedUsage {
+                input: 12,
+                output: 5,
+                cache_read: 2,
+                cache_write: 1,
+            },
+            last_usage: Some(PersistedUsage {
+                input: 7,
+                output: 3,
+                cache_read: 0,
+                cache_write: 0,
+            }),
+        }],
+    };
+
+    save_project_snapshot(
+        &session,
+        &ProjectSnapshot {
+            name: "Assistant".to_string(),
+            entries: EntryStore::new_empty(),
+            tasks: TaskManager::default(),
+            view: ProjectViewSettings::default(),
+            history: History::default(),
+            assistant: assistant.clone(),
+            warnings: Vec::new(),
+        },
+        true,
+    )
+    .unwrap();
+
+    let loaded = load_project_snapshot(&session).unwrap();
+    assert!(loaded.warnings.is_empty());
+    assert_eq!(loaded.assistant, assistant);
+}
+
+#[test]
+fn old_project_without_assistant_state_loads_default_assistant() {
+    let root = PathBuf::from("target/test-project-no-assistant-state");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join(".silicolab")).unwrap();
+    let session = ProjectSession::from_root(root, "Legacy".to_string());
+    initialize_project_databases(&session).unwrap();
+
+    let loaded = load_project_snapshot(&session).unwrap();
+
+    assert!(loaded.warnings.is_empty());
+    assert!(loaded.assistant.conversations.is_empty());
+}
+
+#[test]
+fn corrupt_assistant_state_warns_but_project_loads() {
+    let root = PathBuf::from("target/test-project-corrupt-assistant");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join(".silicolab")).unwrap();
+    let session = ProjectSession::from_root(root, "CorruptAssistant".to_string());
+    initialize_project_databases(&session).unwrap();
+
+    save_project_snapshot(
+        &session,
+        &ProjectSnapshot {
+            name: "CorruptAssistant".to_string(),
+            entries: EntryStore::new_empty(),
+            tasks: TaskManager::default(),
+            view: ProjectViewSettings::default(),
+            history: History::default(),
+            assistant: ProjectAssistantSnapshot {
+                conversations: vec![PersistedAssistantConversation {
+                    id: 1,
+                    title: "Chat".to_string(),
+                    history: Vec::new(),
+                    transcript: Vec::new(),
+                    input: String::new(),
+                    session_usage: PersistedUsage::default(),
+                    last_usage: None,
+                }],
+                ..ProjectAssistantSnapshot::default()
+            },
+            warnings: Vec::new(),
+        },
+        true,
+    )
+    .unwrap();
+    let db = Connection::open(&session.project_db).unwrap();
+    db.execute(
+        "update assistant_state set payload = ?1, uncompressed_len = ?2 where id = 1",
+        params![vec![0u8, 1, 2], 16i64],
+    )
+    .unwrap();
+    drop(db);
+
+    let loaded = load_project_snapshot(&session).unwrap();
+
+    assert!(loaded.assistant.conversations.is_empty());
+    assert_eq!(loaded.warnings.len(), 1);
+    assert!(loaded.warnings[0].contains("Assistant history"));
 }

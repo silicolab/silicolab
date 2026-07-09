@@ -78,3 +78,33 @@ fn project_saved_fingerprint_tracks_leave_confirmation() {
     assert!(state.has_project_changes_to_save());
     assert!(state.needs_leave_confirmation());
 }
+
+#[test]
+fn project_saved_fingerprint_tracks_assistant_history() {
+    let project =
+        ProjectSession::from_root(PathBuf::from("target/test-assistant-dirty"), "test".into());
+    let mut state = AppState::new(
+        Structure::empty(),
+        None,
+        WorkspaceSession::Project(project),
+        Default::default(),
+        Vec::new(),
+        None,
+    );
+
+    assert!(!state.has_project_changes_to_save());
+
+    state
+        .ui
+        .agent
+        .transcript
+        .push(crate::frontend::agent::TranscriptEntry::User(
+            "hello".to_string(),
+        ));
+
+    assert!(state.has_project_changes_to_save());
+
+    state.mark_project_saved();
+
+    assert!(!state.has_project_changes_to_save());
+}
