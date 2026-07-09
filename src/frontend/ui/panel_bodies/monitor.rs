@@ -393,7 +393,7 @@ pub(crate) fn render_monitor_popover(state: &mut AppState, ctx: &egui::Context) 
             let pal = crate::frontend::theme::palette(ui);
             egui::Frame::popup(ui.style())
                 .fill(pal.window_backing)
-                .stroke(egui::Stroke::new(1.0, pal.hairline))
+                .stroke(egui::Stroke::new(1.0_f32, pal.hairline))
                 .corner_radius(egui::CornerRadius::same(
                     crate::frontend::theme::radius::CARD,
                 ))

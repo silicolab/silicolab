@@ -292,9 +292,9 @@ fn render_residue_cell(
     }
 
     let stroke = if residue.any_selected || residue.primary_selected || hovered {
-        Stroke::new(1.0, pal.accent)
+        Stroke::new(1.0_f32, pal.accent)
     } else {
-        Stroke::new(1.0, pal.neutral_overlay(24))
+        Stroke::new(1.0_f32, pal.neutral_overlay(24))
     };
     ui.painter().rect_stroke(
         rect,

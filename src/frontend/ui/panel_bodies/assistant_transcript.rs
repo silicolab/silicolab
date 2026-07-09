@@ -158,7 +158,7 @@ pub(super) fn render_tool_block(
                 ui.painter().hline(
                     line_rect.left()..=line_rect.right(),
                     line_rect.center().y,
-                    Stroke::new(1.0, pal.neutral_overlay(18)),
+                    Stroke::new(1.0_f32, pal.neutral_overlay(18)),
                 );
                 ui.add_space(5.0);
 

@@ -137,7 +137,7 @@ pub(crate) fn render_assistant_composer(
         let frame_inner_width = (content_width - 16.0).max(80.0);
         let response = Frame::default()
             .fill(pal.input_fill)
-            .stroke(Stroke::new(1.0, pal.hairline))
+            .stroke(Stroke::new(1.0_f32, pal.hairline))
             .corner_radius(CornerRadius::same(composer_radius))
             .inner_margin(Margin::symmetric(8, 8))
             .show(ui, |ui| {
@@ -215,7 +215,7 @@ pub(crate) fn render_assistant_composer(
         ui.painter().rect_stroke(
             composer_rect,
             CornerRadius::same(composer_radius),
-            Stroke::new(1.0, pal.accent),
+            Stroke::new(1.0_f32, pal.accent),
             egui::StrokeKind::Inside,
         );
         ui.ctx()

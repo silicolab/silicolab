@@ -231,7 +231,7 @@ pub(crate) fn render_primary_sidebar(
             card_rect,
             segment_radius,
             card_fill,
-            Stroke::new(1.0, pal.hairline),
+            Stroke::new(1.0_f32, pal.hairline),
             egui::StrokeKind::Inside,
         );
 
@@ -402,7 +402,7 @@ fn render_sidebar_monitor_footer(
     let top = ui.max_rect().left_top();
     let right = ui.max_rect().right_top().x;
     ui.painter()
-        .hline(top.x..=right, top.y, Stroke::new(1.0, pal.hairline));
+        .hline(top.x..=right, top.y, Stroke::new(1.0_f32, pal.hairline));
     ui.add_space(9.0);
     // Inset the right edge so the gauges sit with equal ~10px margins inside the
     // sidebar (the panel's own inner margins are 10 left / 2 right): this keeps
@@ -440,7 +440,7 @@ pub(crate) fn render_sidebar_search_popover(
             .show(&ctx, |ui| {
                 Frame::popup(ui.style())
                     .fill(pal.input_fill)
-                    .stroke(Stroke::new(1.0, pal.hairline))
+                    .stroke(Stroke::new(1.0_f32, pal.hairline))
                     .corner_radius(egui::CornerRadius::same(
                         crate::frontend::theme::radius::CARD,
                     ))

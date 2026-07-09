@@ -59,12 +59,12 @@ pub(crate) fn render_chart(
                 Mark::Line => plot_ui.line(
                     Line::new(series.name.clone(), PlotPoints::from(series.points.clone()))
                         .color(color)
-                        .width(1.5),
+                        .width(1.5_f32),
                 ),
                 Mark::Sticks => plot_ui.points(
                     Points::new(series.name.clone(), PlotPoints::from(series.points.clone()))
-                        .stems(0.0)
-                        .radius(1.5)
+                        .stems(0.0_f32)
+                        .radius(1.5_f32)
                         .color(color),
                 ),
             }

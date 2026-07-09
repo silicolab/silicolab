@@ -35,7 +35,7 @@ pub(super) fn render_notification(state: &AppState, ui: &egui::Ui, actions: &mut
             ui.set_max_width(460.0);
             Frame::default()
                 .fill(pal.window_backing)
-                .stroke(Stroke::new(1.0, pal.hairline))
+                .stroke(Stroke::new(1.0_f32, pal.hairline))
                 .corner_radius(egui::CornerRadius::same(theme::radius::MODAL))
                 .inner_margin(Margin::same(14))
                 .shadow(egui::Shadow {
