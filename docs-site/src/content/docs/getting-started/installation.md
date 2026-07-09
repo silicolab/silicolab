@@ -29,7 +29,9 @@ Some features call external programs at run time. You can install them later —
 SilicoLab works without them until you use the corresponding feature.
 
 - **GROMACS** — required for molecular dynamics simulations.
-- **ORCA** — used for quantum chemistry calculations.
 
-A dedicated setup guide for these tools (including GPU acceleration and
-remote execution over SSH) is planned for an upcoming section of this manual.
+Quantum chemistry is available through the built-in Hartree engine.
+
+See [External tools](./external-tools/) for setup notes, including GPU
+acceleration. See [Remote execution](./remote-execution/) to run heavy jobs on
+a remote Linux host over SSH.
