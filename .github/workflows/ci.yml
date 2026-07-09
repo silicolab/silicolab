@@ -24,7 +24,6 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  RUSTFLAGS: -D warnings
   # Full debuginfo dominates compile time and balloons the cache; line tables
   # keep usable panic backtraces at a fraction of the size.
   CARGO_PROFILE_DEV_DEBUG: line-tables-only
@@ -82,11 +81,17 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all --check
 
+  # `-D warnings` lives here, not in the workflow-level env: a warning is a lint
+  # verdict, and only this job reports lint verdicts. Denying warnings across
+  # every job means a new rustc lint fails the Test matrix too, hiding whether
+  # the code under test actually works. `--all-targets` already lints test code.
   clippy:
     name: Clippy
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup-rust
