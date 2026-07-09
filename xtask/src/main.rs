@@ -39,6 +39,7 @@ fn pr_check() -> Result<(), String> {
         5,
         "fmt",
         &["fmt", "--all", "--check", "--quiet"],
+        Warnings::Allow,
     )?;
     run_cargo_step(
         &repo_root,
@@ -52,6 +53,7 @@ fn pr_check() -> Result<(), String> {
             "--all-features",
             "--quiet",
         ],
+        Warnings::Deny,
     )?;
     assert_worker_pure_rust(&repo_root, 3, 5)?;
     assert_rust_file_sizes(&repo_root, 4, 5)?;
@@ -61,6 +63,7 @@ fn pr_check() -> Result<(), String> {
         5,
         "test",
         &["test", "--workspace", "--all-features", "--quiet"],
+        Warnings::Allow,
     )?;
 
     println!(
@@ -77,16 +80,25 @@ fn repo_root() -> Result<PathBuf, String> {
         .ok_or_else(|| "could not resolve repository root".to_owned())
 }
 
+/// Mirrors CI: only the clippy job denies warnings, so a new rustc lint fails
+/// lint checking rather than masquerading as a test failure.
+#[derive(Clone, Copy)]
+enum Warnings {
+    Deny,
+    Allow,
+}
+
 fn run_cargo_step(
     repo_root: &Path,
     index: usize,
     total: usize,
     name: &str,
     args: &[&str],
+    warnings: Warnings,
 ) -> Result<(), String> {
     let started_at = Instant::now();
     print_step(index, total, name);
-    let output = cargo_output(repo_root, args)?;
+    let output = cargo_output(repo_root, args, warnings)?;
 
     if !output.status.success() {
         print_command_failure("cargo", args, &output);
@@ -120,6 +132,7 @@ fn assert_worker_pure_rust(repo_root: &Path, index: usize, total: usize) -> Resu
             "--prefix",
             "none",
         ],
+        Warnings::Allow,
     )?;
 
     if !output.status.success() {
@@ -178,13 +191,17 @@ fn assert_worker_pure_rust(repo_root: &Path, index: usize, total: usize) -> Resu
     }
 }
 
-fn cargo_output(repo_root: &Path, args: &[&str]) -> Result<Output, String> {
-    Command::new("cargo")
+fn cargo_output(repo_root: &Path, args: &[&str], warnings: Warnings) -> Result<Output, String> {
+    let mut command = Command::new("cargo");
+    command
         .args(args)
         .current_dir(repo_root)
         .env("CARGO_TERM_COLOR", "always")
-        .env("RUSTFLAGS", "-D warnings")
-        .env("CARGO_PROFILE_DEV_DEBUG", "line-tables-only")
+        .env("CARGO_PROFILE_DEV_DEBUG", "line-tables-only");
+    if let Warnings::Deny = warnings {
+        command.env("RUSTFLAGS", "-D warnings");
+    }
+    command
         .output()
         .map_err(|error| format!("failed to run cargo {}: {error}", args.join(" ")))
 }

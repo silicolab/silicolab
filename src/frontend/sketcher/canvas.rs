@@ -56,7 +56,7 @@ pub(super) fn show_canvas(state: &mut SketcherState, ui: &mut Ui) {
     painter.rect_stroke(
         rect,
         4.0,
-        Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color),
+        Stroke::new(1.0_f32, ui.visuals().widgets.noninteractive.bg_stroke.color),
         StrokeKind::Inside,
     );
 
@@ -114,7 +114,7 @@ fn draw_hover(
     {
         let a = state.to_screen(rect, state.sketch.atoms[bond.a].pos);
         let b = state.to_screen(rect, state.sketch.atoms[bond.b].pos);
-        painter.line_segment([a, b], Stroke::new(9.0, halo));
+        painter.line_segment([a, b], Stroke::new(9.0_f32, halo));
     }
 }
 
@@ -205,7 +205,7 @@ fn draw_atoms(state: &SketcherState, painter: &eframe::egui::Painter, rect: Rect
 
         // Selection ring.
         if state.selected_atoms.contains(&index) {
-            painter.circle_stroke(center, 11.0, Stroke::new(2.0, selection));
+            painter.circle_stroke(center, 11.0, Stroke::new(2.0_f32, selection));
         }
 
         // Carbons are drawn as bare vertices unless isolated.
@@ -240,7 +240,7 @@ fn draw_atoms(state: &SketcherState, painter: &eframe::egui::Painter, rect: Rect
             let warn = Color32::from_rgb(225, 70, 70);
             painter.line_segment(
                 [center + vec2(-8.0, 11.0), center + vec2(8.0, 11.0)],
-                Stroke::new(2.0, warn),
+                Stroke::new(2.0_f32, warn),
             );
         }
     }
@@ -290,7 +290,7 @@ fn draw_overlays(
                 let a = state.to_screen(rect, anchor);
                 let b = state.to_screen(rect, pointer);
                 draw_dashed(painter, a, b, Stroke::new(BOND_WIDTH, preview));
-                painter.circle_stroke(b, 6.0, Stroke::new(1.5, preview));
+                painter.circle_stroke(b, 6.0, Stroke::new(1.5_f32, preview));
             }
         }
         Some(GesturePreview::Chain { count }) => {
@@ -306,7 +306,11 @@ fn draw_overlays(
         }
         Some(GesturePreview::Rotate { center, degrees }) => {
             let c = state.to_screen(rect, center);
-            painter.circle_stroke(c, 4.0, Stroke::new(1.5, Color32::from_rgb(110, 170, 120)));
+            painter.circle_stroke(
+                c,
+                4.0,
+                Stroke::new(1.5_f32, Color32::from_rgb(110, 170, 120)),
+            );
             painter.text(
                 c + vec2(12.0, -12.0),
                 Align2::LEFT_CENTER,
@@ -327,7 +331,7 @@ fn draw_overlays(
                 painter.rect_stroke(
                     marquee,
                     0.0,
-                    Stroke::new(1.0, Color32::from_rgb(90, 140, 245)),
+                    Stroke::new(1.0_f32, Color32::from_rgb(90, 140, 245)),
                     StrokeKind::Inside,
                 );
             }
@@ -358,7 +362,7 @@ fn draw_ring_preview(
     for (local, vertex) in placement.vertices.iter().enumerate() {
         let pos = state.to_screen(rect, placement.positions[local]);
         if vertex.is_some() {
-            painter.circle_stroke(pos, 6.0, Stroke::new(1.5, color));
+            painter.circle_stroke(pos, 6.0, Stroke::new(1.5_f32, color));
         } else {
             painter.circle_filled(pos, 2.0, color);
         }

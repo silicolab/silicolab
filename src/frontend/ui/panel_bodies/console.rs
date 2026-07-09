@@ -81,7 +81,7 @@ pub(crate) fn render_console_panel(
 
             let response = Frame::default()
                 .fill(pal.input_fill)
-                .stroke(Stroke::new(1.0, pal.hairline))
+                .stroke(Stroke::new(1.0_f32, pal.hairline))
                 .corner_radius(egui::CornerRadius::same(input_radius))
                 .inner_margin(Margin::symmetric(INPUT_X_MARGIN as i8, 3))
                 .show(ui, |ui| {

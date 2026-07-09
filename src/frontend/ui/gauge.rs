@@ -131,7 +131,7 @@ fn sparkline(ui: &mut egui::Ui, history: &VecDeque<Option<f32>>, height: f32, co
     painter.hline(
         rect.left()..=rect.right(),
         rect.bottom() - 0.5,
-        Stroke::new(1.0, pal.text_tertiary.gamma_multiply(0.25)),
+        Stroke::new(1.0_f32, pal.text_tertiary.gamma_multiply(0.25)),
     );
 
     if history.len() < 2 {
@@ -167,7 +167,7 @@ fn sparkline(ui: &mut egui::Ui, history: &VecDeque<Option<f32>>, height: f32, co
         mesh.add_triangle(base, base + 2, base + 3);
     }
     painter.add(egui::Shape::mesh(mesh));
-    painter.add(egui::Shape::line(pts, Stroke::new(1.6, color)));
+    painter.add(egui::Shape::line(pts, Stroke::new(1.6_f32, color)));
 }
 
 #[cfg(test)]

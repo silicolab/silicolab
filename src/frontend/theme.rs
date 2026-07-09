@@ -624,7 +624,7 @@ fn build_visuals(scheme: ColorScheme, dark: bool) -> Visuals {
     // buttons / `selectable_label`s (see `Style::button_style`). A transparent
     // color there makes the selected combo/menu item's text invisible.
     visuals.selection.bg_fill = pal.selection_fill;
-    visuals.selection.stroke = Stroke::new(0.0, pal.text_strong);
+    visuals.selection.stroke = Stroke::new(0.0_f32, pal.text_strong);
     visuals.hyperlink_color = pal.accent;
 
     // Controls have gently rounded corners. egui defaults to 2-3px; nudge up.
@@ -649,8 +649,8 @@ fn build_visuals(scheme: ColorScheme, dark: bool) -> Visuals {
     // state: egui subtracts `bg_stroke.width` from button/selectable inner
     // margins, so switching to `Stroke::NONE` makes ComboBox menu rows and
     // selectable labels shift by a pixel while hovering.
-    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, pal.hairline);
-    let invisible_stable_stroke = Stroke::new(1.0, Color32::TRANSPARENT);
+    visuals.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, pal.hairline);
+    let invisible_stable_stroke = Stroke::new(1.0_f32, Color32::TRANSPARENT);
 
     visuals.widgets.hovered.weak_bg_fill = pal.item_fill_hover;
     visuals.widgets.hovered.bg_fill = pal.item_fill_hover;
@@ -672,7 +672,7 @@ fn build_visuals(scheme: ColorScheme, dark: bool) -> Visuals {
     visuals.widgets.active.fg_stroke.color = pal.text_primary;
     visuals.widgets.open.fg_stroke.color = pal.text_primary;
 
-    visuals.window_stroke = Stroke::new(1.0, pal.hairline);
+    visuals.window_stroke = Stroke::new(1.0_f32, pal.hairline);
 
     // Popups (tooltips, menus, combo lists) and windows get a soft, mostly
     // *vertical* drop shadow. egui's default shoves the popup shadow well to the

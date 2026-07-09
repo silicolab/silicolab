@@ -59,7 +59,7 @@ pub fn component_preview(
         painter.rect_stroke(
             rect,
             canvas_radius,
-            Stroke::new(1.0, pal.hairline),
+            Stroke::new(1.0_f32, pal.hairline),
             egui::StrokeKind::Inside,
         );
 
@@ -106,11 +106,11 @@ pub fn component_preview(
                         let perp = perpendicular_offset(start, end, offset);
                         painter.line_segment(
                             [start + perp, end + perp],
-                            Stroke::new(1.5, Color32::from_rgb(80, 84, 90)),
+                            Stroke::new(1.5_f32, Color32::from_rgb(80, 84, 90)),
                         );
                         painter.line_segment(
                             [start - perp, end - perp],
-                            Stroke::new(1.5, Color32::from_rgb(80, 84, 90)),
+                            Stroke::new(1.5_f32, Color32::from_rgb(80, 84, 90)),
                         );
                     }
                     BondType::Triple => {
@@ -118,15 +118,15 @@ pub fn component_preview(
                         let perp = perpendicular_offset(start, end, offset);
                         painter.line_segment(
                             [start, end],
-                            Stroke::new(1.5, Color32::from_rgb(80, 84, 90)),
+                            Stroke::new(1.5_f32, Color32::from_rgb(80, 84, 90)),
                         );
                         painter.line_segment(
                             [start + perp, end + perp],
-                            Stroke::new(1.5, Color32::from_rgb(80, 84, 90)),
+                            Stroke::new(1.5_f32, Color32::from_rgb(80, 84, 90)),
                         );
                         painter.line_segment(
                             [start - perp, end - perp],
-                            Stroke::new(1.5, Color32::from_rgb(80, 84, 90)),
+                            Stroke::new(1.5_f32, Color32::from_rgb(80, 84, 90)),
                         );
                     }
                     BondType::Aromatic => {
@@ -144,7 +144,7 @@ pub fn component_preview(
                     _ => {
                         painter.line_segment(
                             [start, end],
-                            Stroke::new(2.0, Color32::from_rgb(80, 84, 90)),
+                            Stroke::new(2.0_f32, Color32::from_rgb(80, 84, 90)),
                         );
                     }
                 }
@@ -194,11 +194,11 @@ pub fn component_preview(
             );
             painter.line_segment(
                 [pos + Vec2::new(-4.0, 0.0), pos + Vec2::new(4.0, 0.0)],
-                Stroke::new(1.4, port_color),
+                Stroke::new(1.4_f32, port_color),
             );
             painter.line_segment(
                 [pos + Vec2::new(0.0, -4.0), pos + Vec2::new(0.0, 4.0)],
-                Stroke::new(1.4, port_color),
+                Stroke::new(1.4_f32, port_color),
             );
 
             if let Some(atom) = component.atoms.get(site.binding_atom) {
@@ -212,7 +212,7 @@ pub fn component_preview(
                     COMPONENT_PREVIEW_ATOM_RADIUS + COMPONENT_PREVIEW_ATOM_STROKE_WIDTH * 0.5,
                     COMPONENT_PREVIEW_PORT_RADIUS + COMPONENT_PREVIEW_PORT_STROKE_WIDTH * 0.5,
                 ) {
-                    painter.line_segment([start, end], Stroke::new(1.0, port_color));
+                    painter.line_segment([start, end], Stroke::new(1.0_f32, port_color));
                 }
             }
         }
