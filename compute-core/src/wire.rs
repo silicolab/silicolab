@@ -22,30 +22,93 @@ use crate::engines::docking::{DockingInput, DockingOutcome, DockingRequest};
 use crate::engines::gromacs::GromacsProgress;
 use crate::engines::qm::{QmJob, QmOutcome};
 use crate::engines::remote::launcher::{self, RemoteExecution, RemoteJobPhase};
+use crate::launch::{EngineId, EngineLaunches};
 use crate::workflows::docking::{DockingProgress, run_docking_calculation};
 use crate::workflows::gromacs::{GromacsJob, GromacsOutcome, run_gromacs_calculation};
 use crate::workflows::qm::{QmCalculationProgress, run_qm_calculation};
 
-/// A complete engine job, independent of where it runs. `cores` travels with the
-/// request so an in-process pool, a subprocess, and a remote worker all size the
-/// engine's thread pool the same way.
+/// A complete engine job, independent of where it runs — and complete means the
+/// request alone determines the execution. `cores` sizes the engine's thread pool
+/// identically for an in-process pool, a subprocess, and a remote worker;
+/// `launches` says how to invoke every external program the job needs, resolved on
+/// the client against the target it was submitted to.
+///
+/// An executor never discovers an engine for itself. A worker that re-probed the
+/// node would run whatever binary happened to be installed there, silently
+/// ignoring the launch the user configured — so the launch travels with the job.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EngineRequest {
     pub engine: Engine,
     #[serde(default)]
     pub cores: Option<usize>,
+    /// Launches for [`Engine::required_engines`]. Built-in engines need none.
+    #[serde(default)]
+    pub launches: EngineLaunches,
 }
 
 impl EngineRequest {
-    pub fn new(engine: Engine) -> Self {
+    /// Build a request, rejecting one whose engine needs an external program that
+    /// `launches` does not supply. The one place a job is bound to its launches:
+    /// past this constructor, a request is known to be runnable anywhere its
+    /// engine's programs exist.
+    pub fn new(engine: Engine, cores: Option<usize>, launches: EngineLaunches) -> Result<Self> {
+        let request = Self {
+            engine,
+            cores,
+            launches,
+        };
+        request.check_launches()?;
+        Ok(request)
+    }
+
+    /// A request for a built-in engine, which runs in-process and needs no
+    /// external program. Misuse (passing an engine that does need one) is caught
+    /// by [`validate_request`] and by the executor, so this cannot smuggle an
+    /// unlaunchable job past them — it only skips an impossible error path.
+    pub fn builtin(engine: Engine, cores: Option<usize>) -> Self {
+        debug_assert!(
+            engine.required_engines().is_empty(),
+            "`{}` needs an external launch; use EngineRequest::new",
+            engine_label(&engine)
+        );
         Self {
             engine,
-            cores: None,
+            cores,
+            launches: EngineLaunches::new(),
         }
     }
 
-    pub fn with_cores(engine: Engine, cores: Option<usize>) -> Self {
-        Self { engine, cores }
+    fn check_launches(&self) -> Result<()> {
+        for id in self.engine.required_engines() {
+            if !self.launches.contains(*id) {
+                bail!(
+                    "the {} job carries no launch for `{}`",
+                    engine_label(&self.engine),
+                    id.as_str()
+                );
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The external engines a job must be given a launch for. Built-in engines (UFF,
+/// hartree, docking) run in-process and need none; a job that shelled out to two
+/// programs would name both.
+impl Engine {
+    pub fn required_engines(&self) -> &'static [EngineId] {
+        match self {
+            Engine::Qm(_) | Engine::Docking(_) => &[],
+            Engine::Gromacs(_) => &[EngineId::GROMACS],
+        }
+    }
+}
+
+fn engine_label(engine: &Engine) -> &'static str {
+    match engine {
+        Engine::Qm(_) => "QM",
+        Engine::Docking(_) => "docking",
+        Engine::Gromacs(_) => "GROMACS",
     }
 }
 
@@ -405,11 +468,14 @@ fn run_remote_blocking(
     }
 }
 
-/// Reject a payload the worker should not run: no atoms, or a non-finite
-/// (NaN/inf) coordinate. The engine would also reject these, but checking up
-/// front turns malformed remote input into a clear, immediate non-zero exit
-/// rather than a deeper engine error.
+/// Reject a payload the worker should not run: a missing external-engine launch,
+/// no atoms, or a non-finite (NaN/inf) coordinate. The engine would also reject
+/// these, but checking up front turns malformed remote input into a clear,
+/// immediate non-zero exit rather than a deeper engine error. The launch check
+/// re-runs [`EngineRequest::check_launches`] here because `request.json` crosses
+/// a process boundary and is parsed, not constructed.
 fn validate_request(request: &EngineRequest) -> Result<()> {
+    request.check_launches()?;
     match &request.engine {
         Engine::Qm(job) => validate_qm_job(job),
         Engine::Docking(docking) => validate_docking_request(docking),
@@ -535,7 +601,11 @@ fn run_request(
     cancel: Arc<AtomicBool>,
     mut progress: impl FnMut(String) + Send,
 ) -> Result<EngineOutcome> {
-    let EngineRequest { engine, cores } = request;
+    let EngineRequest {
+        engine,
+        cores,
+        launches,
+    } = request;
     match engine {
         Engine::Qm(job) => {
             let result =
@@ -556,7 +626,11 @@ fn run_request(
             // GROMACS drives the external `gmx` (single-threaded via `mdrun -nt 1`),
             // so the requested core count does not size a thread pool here either;
             // both progress variants collapse onto the one console channel.
-            let outcome = run_gromacs_calculation(job, cancel, |event| {
+            let launch = launches
+                .get(EngineId::GROMACS)
+                .ok_or_else(|| anyhow::anyhow!("the GROMACS job carries no launch for `gmx`"))?
+                .clone();
+            let outcome = run_gromacs_calculation(job, launch, cancel, |event| {
                 progress(match event {
                     GromacsProgress::Stage(text) | GromacsProgress::Log(text) => text,
                 })

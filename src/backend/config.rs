@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
 use crate::backend::representation::RepresentationPrefs;
-use crate::engines::registry::EngineLaunch;
+use crate::engines::registry::EngineLaunches;
 
 use compute_core::hosts::home_dir;
 pub use compute_core::hosts::{
@@ -171,12 +171,12 @@ pub struct AppConfig {
     pub default_project_dir: PathBuf,
     pub last_project_path: Option<PathBuf>,
     pub closed_to_scratch: bool,
-    /// User-provided overrides for how each engine is launched, keyed by
-    /// [`crate::engines::registry::EngineId`] string. Lets users point at a
-    /// GROMACS inside WSL (`wsl.exe -e /usr/local/gromacs/bin/gmx`) or a
-    /// non-PATH native install.
+    /// User-provided overrides for how each engine is launched on this machine.
+    /// Lets users point at a GROMACS inside WSL
+    /// (`wsl.exe -e /usr/local/gromacs/bin/gmx`) or a non-PATH native install.
+    /// The local-target twin of [`RemoteHost::engines`].
     #[serde(default)]
-    pub engine_overrides: HashMap<String, EngineLaunch>,
+    pub engine_overrides: EngineLaunches,
     /// Remote hosts the user can submit engine jobs to over SSH, keyed by
     /// [`RemoteHost::id`]. Backward compatible (empty default; old `settings.json`
     /// still parses). Preserved across "Reset all settings" like `engine_overrides`.
@@ -376,7 +376,7 @@ impl Default for AppConfig {
             default_project_dir: home_dir().join("silicolab_project"),
             last_project_path: None,
             closed_to_scratch: false,
-            engine_overrides: HashMap::default(),
+            engine_overrides: EngineLaunches::new(),
             remote_hosts: HashMap::default(),
             default_compute_target: ComputeTarget::default(),
             default_task_panel_placement: TaskPanelPlacement::default(),
@@ -551,7 +551,7 @@ mod tests {
         AppConfig, ColorScheme, ComputeTarget, MonitorRefresh, RecentProject, RemoteHost,
         ThemeMode, back_up_corrupt_file, load_config_from, remember_recent_project, save_config_to,
     };
-    use crate::engines::registry::EngineLaunch;
+    use crate::engines::registry::{EngineId, EngineLaunch};
 
     #[test]
     fn reset_preferences_keeps_engine_overrides_and_last_project() {
@@ -564,7 +564,7 @@ mod tests {
             ..AppConfig::default()
         };
         config.engine_overrides.insert(
-            "gromacs".to_string(),
+            EngineId::GROMACS,
             EngineLaunch {
                 command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
                 program: "/usr/local/gromacs/bin/gmx".to_string(),
@@ -580,7 +580,7 @@ mod tests {
                 port: 22,
                 work_root: "~/.silicolab".to_string(),
                 prelude: vec!["module load gromacs".to_string()],
-                engines: HashMap::new(),
+                engines: Default::default(),
                 engine_versions: HashMap::new(),
                 resources: Default::default(),
                 scheduler: Default::default(),

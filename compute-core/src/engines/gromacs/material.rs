@@ -34,8 +34,8 @@ use crate::engines::gromacs::{
     runner::{GromacsProgress, subprocess_failure},
     topgen::render_top,
 };
-use crate::engines::remote::Compute;
 use crate::io::formats::gro::parse_gro;
+use crate::launch::Compute;
 use crate::md::{
     FrameworkMode, MdTopology, SolvationOptions, WaterModel, ensure_periodic_cutoff_fits,
     set_slab_c_axis, solvent_definitions,

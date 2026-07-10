@@ -29,10 +29,8 @@ pub fn spawn_qm_job(job: QmJob, threads: Option<usize>) -> RunningQmJob {
     } else {
         Executor::LocalSubprocess
     };
-    let running = run_job(
-        EngineRequest::with_cores(Engine::Qm(job), threads),
-        executor,
-    );
+    // hartree is built in: a QM job needs no external launch.
+    let running = run_job(EngineRequest::builtin(Engine::Qm(job), threads), executor);
     // Production runs QM in a subprocess so Cancel can kill an opaque hartree
     // calculation without requiring in-process preemption hooks. Tests keep the
     // in-process path because Rust's test harness is not the self-exec worker.

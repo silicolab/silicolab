@@ -28,18 +28,16 @@ use crate::{
         AtomCategory, Structure,
         glycan::linkage_topology::{self, BondLinkage},
     },
-    engines::{
-        gromacs::{
-            carb_topology::build_glycan_topology,
-            exec::run_gmx,
-            forcefield_assets::{self, bundle},
-            glycoprotein_topology::{self, merge_glycan_into_protein_topology},
-            runner::{GromacsProgress, subprocess_failure},
-            topgen::render_top,
-        },
-        remote::Compute,
+    engines::gromacs::{
+        carb_topology::build_glycan_topology,
+        exec::run_gmx,
+        forcefield_assets::{self, bundle},
+        glycoprotein_topology::{self, merge_glycan_into_protein_topology},
+        runner::{GromacsProgress, subprocess_failure},
+        topgen::render_top,
     },
     io::formats::{gro::parse_gro, pdb::to_pdb},
+    launch::Compute,
     md::{BoxShape, BoxSizing, MdSystemConfig, WaterModel},
 };
 

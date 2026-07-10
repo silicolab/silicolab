@@ -73,8 +73,9 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
             }
             meta.freeze_selection()
         });
-    // A remote target relays the whole pipeline to a deployed worker, which
-    // resolves `gmx` and runs it on the node; the local arm runs `gmx` here.
+    // A remote target relays the whole pipeline to a deployed worker, which runs
+    // the `gmx` the submission resolved against that host; the local arm runs
+    // `gmx` here.
     if let Some(host) = resolve_remote_host(state, &prompt.prefs.target) {
         let topology = match crate::workflows::gromacs::WireTopology::from_source(&topology) {
             Ok(topology) => topology,
@@ -90,7 +91,7 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
                 stages,
                 max_duration_per_stage: Duration::from_secs(60 * 60),
                 freeze: framework_freeze,
-                resources: crate::engines::remote::ComputeResources {
+                resources: crate::launch::ComputeResources {
                     cores: prompt.prefs.cores_per_subtask,
                     gpu: prompt.prefs.gpu.count(),
                 },
@@ -110,7 +111,7 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
         }
     };
     // Local run: apply the panel's CPU/GPU request to the mdrun stages.
-    compute.resources = crate::engines::remote::ComputeResources {
+    compute.resources = crate::launch::ComputeResources {
         cores: prompt.prefs.cores_per_subtask,
         gpu: prompt.prefs.gpu.count(),
     };
@@ -199,46 +200,37 @@ pub(crate) fn resolve_md_topology_source(
     Ok(TopologySource::Inline(render_top(&topology)))
 }
 
+/// The `gmx` launch for a local MD job: the same override → probe → error rule a
+/// remote job resolves against its host, here against this machine. A detected
+/// launch is cached as an override so later builds reuse it rather than
+/// cold-starting WSL to re-probe every time.
 pub(crate) fn resolve_md_engine_launch(
     state: &mut AppState,
     engine: crate::frontend::state::MdEngineChoice,
 ) -> anyhow::Result<crate::engines::registry::EngineLaunch> {
-    let registry = EngineRegistry::probe(&state.config.engine_overrides);
-    match engine {
-        crate::frontend::state::MdEngineChoice::Gromacs => {
-            // A configured override or a native PATH install wins (cheap, already
-            // resolved by probe). Otherwise, on Windows GROMACS conventionally
-            // lives in WSL: auto-detect it (cold-starts WSL once) so the common
-            // setup works with no manual configuration. Only when there is no
-            // WSL, or WSL has no gmx, do we surface the not-found guidance.
-            if let Some(launch) = registry.launch(EngineId::GROMACS).cloned() {
-                return Ok(launch);
-            }
-            let launch = crate::engines::registry::detect_wsl_gromacs_launch().ok_or_else(|| {
-                anyhow!(
-                    "Could not find GROMACS. Install it and ensure `gmx` is on PATH, set up WSL with GROMACS installed, or configure its launch in Settings -> Engines."
-                )
-            })?;
-            // Persist the detected launch as an override so later builds reuse it
-            // directly instead of cold-starting WSL to re-probe every time (slow),
-            // and so it shows up in Settings -> Engines.
-            persist_detected_engine_launch(state, EngineId::GROMACS, launch.clone());
-            Ok(launch)
-        }
+    use crate::backend::engine_launch::{LaunchTarget, resolve_engine_launch};
+    let id = match engine {
+        crate::frontend::state::MdEngineChoice::Gromacs => EngineId::GROMACS,
+    };
+    let resolved = resolve_engine_launch(LaunchTarget::Local(&state.config.engine_overrides), id)?;
+    if resolved.detected {
+        persist_detected_engine_launch(state, id, resolved.launch.clone());
     }
+    Ok(resolved.launch)
 }
 
-/// The local [`Compute`] for an MD job: the resolved `gmx` launch (override / PATH
-/// / WSL auto-detect). A remote MD job does not build a `Compute` — it relays
-/// through [`start_remote_engine`] and the worker resolves `gmx` on the node — so
-/// this only ever yields a local launch.
+/// The local [`Compute`] for an MD job: the resolved `gmx` launch. A remote MD job
+/// resolves its own launch against the target host in [`spawn_remote_submit`] and
+/// ships it in `request.json`, so this only ever yields a local launch.
+///
+/// [`spawn_remote_submit`]: crate::frontend::remote_jobs::spawn_remote_submit
 pub(crate) fn resolve_md_compute(
     state: &mut AppState,
     engine: crate::frontend::state::MdEngineChoice,
-) -> anyhow::Result<crate::engines::remote::Compute> {
-    Ok(crate::engines::remote::Compute::local(
-        resolve_md_engine_launch(state, engine)?,
-    ))
+) -> anyhow::Result<crate::launch::Compute> {
+    Ok(crate::launch::Compute::local(resolve_md_engine_launch(
+        state, engine,
+    )?))
 }
 
 /// Cache an auto-detected engine launch into `engine_overrides` and save the
@@ -250,7 +242,7 @@ pub(crate) fn persist_detected_engine_launch(
     id: EngineId,
     launch: crate::engines::registry::EngineLaunch,
 ) {
-    if cache_engine_override(&mut state.config.engine_overrides, id, launch) {
+    if state.config.engine_overrides.cache_detected(id, launch) {
         // Keep the Settings panel draft in sync so it reflects the cached launch.
         state.ui.settings.engine_drafts.remove(id.as_str());
         persist_engine_config(state, "GROMACS launch detected and saved");
@@ -260,22 +252,6 @@ pub(crate) fn persist_detected_engine_launch(
         // the override; no `--version` WSL cold-start).
         reprobe_engines(state);
     }
-}
-
-/// Insert `launch` as the override for `id` only when none is configured.
-/// Returns `true` when newly inserted (the caller should then persist), `false`
-/// when an existing override was left untouched.
-pub(crate) fn cache_engine_override(
-    overrides: &mut std::collections::HashMap<String, crate::engines::registry::EngineLaunch>,
-    id: EngineId,
-    launch: crate::engines::registry::EngineLaunch,
-) -> bool {
-    let key = id.as_str().to_string();
-    if overrides.contains_key(&key) {
-        return false;
-    }
-    overrides.insert(key, launch);
-    true
 }
 
 /// Load the MD system context recorded by the active entry's build, or derive a
@@ -359,19 +335,18 @@ pub(crate) fn detect_engine_versions(state: &mut AppState) {
 }
 
 pub(crate) fn apply_engine_override(state: &mut AppState, id: EngineId) {
-    let key = id.as_str().to_string();
     let draft = state
         .ui
         .settings
         .engine_drafts
-        .entry(key.clone())
+        .entry(id.as_str().to_string())
         .or_default();
     match draft.to_launch() {
         Some(launch) => {
-            state.config.engine_overrides.insert(key, launch);
+            state.config.engine_overrides.insert(id, launch);
         }
         None => {
-            state.config.engine_overrides.remove(&key);
+            state.config.engine_overrides.remove(id);
         }
     }
     // "Apply & Detect" is an explicit user action, so paying the version probe
@@ -381,9 +356,8 @@ pub(crate) fn apply_engine_override(state: &mut AppState, id: EngineId) {
 }
 
 pub(crate) fn clear_engine_override(state: &mut AppState, id: EngineId) {
-    let key = id.as_str().to_string();
-    state.config.engine_overrides.remove(&key);
-    state.ui.settings.engine_drafts.remove(&key);
+    state.config.engine_overrides.remove(id);
+    state.ui.settings.engine_drafts.remove(id.as_str());
     persist_engine_config(state, "engine override cleared; using auto-detection");
     reprobe_engines(state);
 }

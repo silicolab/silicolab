@@ -11,7 +11,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::launch::EngineLaunch;
+use crate::launch::EngineLaunches;
 
 /// A remote host SilicoLab can submit external-engine jobs to over SSH. Stored in
 /// the app config keyed by [`RemoteHost::id`]. Connection is key-based only — no
@@ -39,11 +39,13 @@ pub struct RemoteHost {
     /// non-interactive PATH.
     #[serde(default)]
     pub prelude: Vec<String>,
-    /// Per-engine launch on this host, keyed by [`crate::engines::registry::EngineId`]
-    /// string. `program` is the remote path to the engine; `command_prefix` is
-    /// normally empty (the remote shell, not a local launcher, runs it).
+    /// Per-engine launch on this host. `program` is the remote path to the engine
+    /// (or a bare name the prelude puts on PATH); `command_prefix` is normally
+    /// empty (the remote shell, not a local launcher, runs it). A job submitted to
+    /// this host carries the launch resolved from here in its `request.json` — the
+    /// worker never rediscovers the engine.
     #[serde(default)]
-    pub engines: HashMap<String, EngineLaunch>,
+    pub engines: EngineLaunches,
     /// Cached `<engine> --version` strings, keyed by engine id, plus the reserved
     /// `_worker` deployment identity. Engine entries let settings show versions
     /// without re-probing over SSH on every open.

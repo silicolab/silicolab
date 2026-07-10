@@ -70,7 +70,7 @@ impl RemoteHostDraft {
     pub fn from_host(host: &crate::backend::config::RemoteHost) -> Self {
         let gmx_program = host
             .engines
-            .get(crate::engines::registry::EngineId::GROMACS.as_str())
+            .get(crate::engines::registry::EngineId::GROMACS)
             .map(|launch| launch.program.clone())
             .unwrap_or_default();
         Self {

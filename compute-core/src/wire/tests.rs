@@ -3,6 +3,26 @@ use nalgebra::Point3;
 use super::*;
 use crate::domain::{Atom, Structure};
 use crate::engines::qm::{QmKind, QmMethod, QmOptions, QmOutcome, QmRequest};
+use crate::launch::EngineLaunch;
+
+fn builtin_request(engine: Engine) -> EngineRequest {
+    EngineRequest::builtin(engine, None)
+}
+
+/// The launches a GROMACS job must carry.
+fn gmx_launches(program: &str) -> EngineLaunches {
+    let mut launches = EngineLaunches::new();
+    launches.insert(EngineId::GROMACS, EngineLaunch::native(program));
+    launches
+}
+
+/// A GROMACS request whose `gmx` sits at a non-default path — the launch the
+/// worker must honor rather than rediscover.
+const TEST_GMX: &str = "/opt/gromacs-2022.5/bin/gmx";
+
+fn gromacs_request(engine: Engine) -> EngineRequest {
+    EngineRequest::new(engine, None, gmx_launches(TEST_GMX)).expect("gromacs launch supplied")
+}
 
 fn h2_single_point() -> EngineRequest {
     let structure = Structure::new(
@@ -20,7 +40,7 @@ fn h2_single_point() -> EngineRequest {
             },
         ],
     );
-    EngineRequest::new(Engine::Qm(QmJob::Molecular(QmRequest {
+    builtin_request(Engine::Qm(QmJob::Molecular(QmRequest {
         structure,
         method: QmMethod::Rhf,
         basis: "sto-3g".to_string(),
@@ -35,7 +55,7 @@ fn h2_single_point() -> EngineRequest {
 #[test]
 fn validate_request_rejects_empty_nan_and_accepts_h2() {
     // Empty atoms → rejected.
-    let empty = EngineRequest::new(Engine::Qm(QmJob::Molecular(QmRequest {
+    let empty = builtin_request(Engine::Qm(QmJob::Molecular(QmRequest {
         structure: Structure::new("empty", Vec::new()),
         method: QmMethod::Rhf,
         basis: "sto-3g".to_string(),
@@ -66,7 +86,7 @@ fn validate_request_rejects_empty_nan_and_accepts_h2() {
         ],
     );
     nan_structure.atoms[1].position.y = f32::INFINITY;
-    let nan = EngineRequest::new(Engine::Qm(QmJob::Molecular(QmRequest {
+    let nan = builtin_request(Engine::Qm(QmJob::Molecular(QmRequest {
         structure: nan_structure,
         method: QmMethod::Rhf,
         basis: "sto-3g".to_string(),
@@ -86,6 +106,57 @@ fn validate_request_rejects_empty_nan_and_accepts_h2() {
     assert!(validate_request(&h2_single_point()).is_ok());
 }
 
+/// An external-engine job with no launch is refused when constructed, and again
+/// when parsed back off the wire — a hand-edited or stale `request.json` must not
+/// reach the engine and be silently run against whatever binary the node has.
+#[test]
+fn a_gromacs_job_without_a_launch_is_rejected_at_both_ends() {
+    let job = Engine::Gromacs(GromacsJob::Build(minimal_build_request()));
+
+    let error = EngineRequest::new(job.clone(), None, EngineLaunches::new())
+        .expect_err("a GROMACS job needs a gmx launch")
+        .to_string();
+    assert!(
+        error.contains("gromacs"),
+        "message names the engine: {error}"
+    );
+
+    // Forge the envelope the constructor refuses, as a stale `request.json` would.
+    let forged = EngineRequest {
+        engine: job,
+        cores: None,
+        launches: EngineLaunches::new(),
+    };
+    assert!(validate_request(&forged).is_err());
+
+    // An entry with an empty program counts as absent, not as a launch.
+    let mut blank = EngineLaunches::new();
+    blank.insert(EngineId::GROMACS, EngineLaunch::native(""));
+    assert!(!blank.contains(EngineId::GROMACS));
+}
+
+/// The smallest build request that satisfies the structure validator.
+fn minimal_build_request() -> crate::workflows::gromacs::GromacsBuildRequest {
+    use crate::md::{MdSystemConfig, WaterModel};
+    use crate::workflows::gromacs::GromacsBuildRequest;
+    GromacsBuildRequest {
+        structure: Structure::new(
+            "ar",
+            vec![Atom {
+                element: "Ar".to_string(),
+                position: Point3::new(0.0, 0.0, 0.0),
+                charge: 0.0,
+            }],
+        ),
+        force_field: "amber14sb".to_string(),
+        water: WaterModel::Tip3p,
+        box_config: MdSystemConfig::default(),
+        solvate: false,
+        ions: None,
+        max_duration: Duration::from_secs(60),
+    }
+}
+
 #[test]
 fn validate_request_rejects_a_non_finite_lattice() {
     use crate::domain::UnitCell;
@@ -102,7 +173,7 @@ fn validate_request_rejects_a_non_finite_lattice() {
         }],
         cell,
     );
-    let request = EngineRequest::new(Engine::Qm(QmJob::Periodic(PeriodicQmRequest::new(
+    let request = builtin_request(Engine::Qm(QmJob::Periodic(PeriodicQmRequest::new(
         structure,
     ))));
     let error = validate_request(&request).unwrap_err().to_string();
@@ -155,7 +226,7 @@ fn ts_request_round_trips_with_two_endpoint_product() {
         guess: QmTsGuess::TwoEndpoint(Box::new(QmTsEndpoints::new(product))),
         ..QmTsConfig::default()
     });
-    let wrapped = EngineRequest::new(Engine::Qm(QmJob::Molecular(request)));
+    let wrapped = builtin_request(Engine::Qm(QmJob::Molecular(request)));
     let json = serde_json::to_vec(&wrapped).unwrap();
     let back: EngineRequest = serde_json::from_slice(&json).unwrap();
     let Engine::Qm(QmJob::Molecular(req)) = back.engine else {
@@ -226,7 +297,7 @@ fn periodic_request_round_trips_with_cell() {
         }],
         UnitCell::from_parameters(5.43, 5.43, 5.43, 90.0, 90.0, 90.0),
     );
-    let request = EngineRequest::new(Engine::Qm(QmJob::Periodic(PeriodicQmRequest::new(
+    let request = builtin_request(Engine::Qm(QmJob::Periodic(PeriodicQmRequest::new(
         structure,
     ))));
     let json = serde_json::to_vec(&request).unwrap();
@@ -328,7 +399,7 @@ fn butane_score_request() -> EngineRequest {
             ],
         )
     };
-    EngineRequest::new(Engine::Docking(DockingRequest {
+    builtin_request(Engine::Docking(DockingRequest {
         receptor: DockingInput::Structure(Box::new(skeleton())),
         ligand: DockingInput::Structure(Box::new(skeleton())),
         box_center: [1.8, 0.6, 0.0],
@@ -427,7 +498,7 @@ fn gromacs_run_request_round_trips_through_the_payload_bridge() {
         ],
         UnitCell::from_parameters(20.0, 20.0, 20.0, 90.0, 90.0, 90.0),
     );
-    let request = EngineRequest::new(Engine::Gromacs(GromacsJob::Run(GromacsRunRequest {
+    let request = gromacs_request(Engine::Gromacs(GromacsJob::Run(GromacsRunRequest {
         structure,
         topology: WireTopology {
             top: "; topol\n".to_string(),
@@ -450,10 +521,18 @@ fn gromacs_run_request_round_trips_through_the_payload_bridge() {
             group: "Framework".to_string(),
             atom_indices: vec![0, 1],
         }),
-        resources: crate::engines::remote::ComputeResources { cores: 4, gpu: 1 },
+        resources: crate::launch::ComputeResources { cores: 4, gpu: 1 },
     })));
     let json = serde_json::to_vec(&request).unwrap();
     let back: EngineRequest = serde_json::from_slice(&json).unwrap();
+    // The configured `gmx` must survive the wire: a worker that re-derived it
+    // would run whichever GROMACS happens to sit on the node.
+    assert_eq!(
+        back.launches
+            .get(EngineId::GROMACS)
+            .map(|l| l.program.as_str()),
+        Some(TEST_GMX)
+    );
     let Engine::Gromacs(GromacsJob::Run(req)) = back.engine else {
         panic!("expected a GROMACS run job");
     };
@@ -484,7 +563,7 @@ fn gromacs_build_request_round_trips() {
             charge: 0.0,
         }],
     );
-    let request = EngineRequest::new(Engine::Gromacs(GromacsJob::Build(GromacsBuildRequest {
+    let request = gromacs_request(Engine::Gromacs(GromacsJob::Build(GromacsBuildRequest {
         structure,
         force_field: "amber99sb-ildn".to_string(),
         water: WaterModel::Tip3p,
@@ -529,7 +608,7 @@ fn gromacs_material_request_round_trips_with_cell_override() {
     // cell payload bridge, not just the six scalar parameters.
     let cell = UnitCell::from_parameters(2.46, 2.46, 12.0, 90.0, 90.0, 120.0);
     let original_vectors = cell.vectors;
-    let request = EngineRequest::new(Engine::Gromacs(GromacsJob::BuildMaterial(
+    let request = gromacs_request(Engine::Gromacs(GromacsJob::BuildMaterial(
         GromacsMaterialRequest {
             structure,
             mode: FrameworkMode::Rigid,
@@ -599,7 +678,7 @@ fn validate_gromacs_rejects_an_empty_structure() {
     use crate::workflows::gromacs::{GromacsBuildRequest, GromacsJob};
     use crate::workflows::molecular_dynamics::{BoxShape, MdSystemConfig, WaterModel};
 
-    let request = EngineRequest::new(Engine::Gromacs(GromacsJob::Build(GromacsBuildRequest {
+    let request = gromacs_request(Engine::Gromacs(GromacsJob::Build(GromacsBuildRequest {
         structure: Structure::new("empty", Vec::new()),
         force_field: "amber99sb-ildn".to_string(),
         water: WaterModel::Spc,

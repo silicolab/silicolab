@@ -265,11 +265,11 @@ pub(crate) fn poll_remote_probe(state: &mut AppState, ctx: &egui::Context) {
             );
         }
         Ok(RemoteProbeOutcome::Detected(Some((program, version)))) => {
-            let key = EngineId::GROMACS.as_str().to_string();
             if let Some(host) = state.config.remote_hosts.get_mut(&probe.host_id) {
                 host.engines
-                    .insert(key.clone(), EngineLaunch::native(&program));
-                host.engine_versions.insert(key, version.clone());
+                    .insert(EngineId::GROMACS, EngineLaunch::native(&program));
+                host.engine_versions
+                    .insert(EngineId::GROMACS.as_str().to_string(), version.clone());
             }
             if let Some(draft) = state.ui.settings.remote_host_drafts.get_mut(&probe.host_id) {
                 draft.gmx_program = program;

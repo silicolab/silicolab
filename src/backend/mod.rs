@@ -1,6 +1,7 @@
 pub mod assistant_config;
 pub mod chart_export;
 pub mod config;
+pub mod engine_launch;
 pub mod entries;
 pub mod force_fields;
 pub mod hardware;

@@ -711,42 +711,4 @@ mod tests {
         assert!(state.ui.pending_supercell.is_some());
         assert!(state.structure().cell.is_none());
     }
-
-    #[test]
-    fn caching_a_detected_launch_inserts_once_and_never_clobbers() {
-        use crate::engines::registry::{EngineId, EngineLaunch};
-        use std::collections::HashMap;
-
-        let mut overrides: HashMap<String, EngineLaunch> = HashMap::new();
-        let detected = EngineLaunch {
-            command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
-            program: "/usr/local/gromacs/bin/gmx".to_string(),
-        };
-
-        // First detection caches the launch.
-        assert!(super::cache_engine_override(
-            &mut overrides,
-            EngineId::GROMACS,
-            detected.clone()
-        ));
-        assert_eq!(
-            overrides.get("gromacs").map(|l| l.program.as_str()),
-            Some("/usr/local/gromacs/bin/gmx")
-        );
-
-        // A later detection must not overwrite a launch already configured.
-        let other = EngineLaunch {
-            command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
-            program: "gmx".to_string(),
-        };
-        assert!(!super::cache_engine_override(
-            &mut overrides,
-            EngineId::GROMACS,
-            other
-        ));
-        assert_eq!(
-            overrides.get("gromacs").map(|l| l.program.as_str()),
-            Some("/usr/local/gromacs/bin/gmx")
-        );
-    }
 }

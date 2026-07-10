@@ -271,7 +271,7 @@ mod tests {
             port: 22,
             work_root: "~/.silicolab/".into(),
             prelude: Vec::new(),
-            engines: std::collections::HashMap::new(),
+            engines: crate::launch::EngineLaunches::new(),
             engine_versions: std::collections::HashMap::new(),
             resources: Default::default(),
             scheduler: Default::default(),

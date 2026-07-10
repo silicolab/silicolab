@@ -7,7 +7,7 @@ fn host_from_draft(
     id: String,
     draft: &crate::frontend::state::RemoteHostDraft,
     prior_versions: std::collections::HashMap<String, String>,
-    _prior_resources: crate::backend::config::ResourceSpec,
+    prior_engines: &crate::engines::registry::EngineLaunches,
 ) -> anyhow::Result<crate::backend::config::RemoteHost> {
     let hostname = draft.hostname.trim();
     let username = draft.username.trim();
@@ -39,13 +39,25 @@ fn host_from_draft(
         .filter(|line| !line.is_empty())
         .map(str::to_string)
         .collect();
-    let mut engines = std::collections::HashMap::new();
+    let mut engines = crate::engines::registry::EngineLaunches::new();
     let gmx = draft.gmx_program.trim();
     if !gmx.is_empty() {
         engines.insert(
-            EngineId::GROMACS.as_str().to_string(),
+            EngineId::GROMACS,
             crate::engines::registry::EngineLaunch::native(gmx),
         );
+    }
+    // A cached version describes the launch it was probed from, and the job now
+    // runs whatever launch is configured here — so a version whose program the
+    // user just edited is about a different binary. Drop it rather than show it
+    // beside the new path. Non-engine keys (the worker deployment identity) stay.
+    let mut engine_versions = prior_versions;
+    if engines.get(EngineId::GROMACS).map(|l| l.program.as_str())
+        != prior_engines
+            .get(EngineId::GROMACS)
+            .map(|l| l.program.as_str())
+    {
+        engine_versions.remove(EngineId::GROMACS.as_str());
     }
     let label = {
         let label = draft.label.trim();
@@ -146,7 +158,7 @@ fn host_from_draft(
         work_root,
         prelude,
         engines,
-        engine_versions: prior_versions,
+        engine_versions,
         resources,
         scheduler,
     })
@@ -159,7 +171,7 @@ pub(crate) fn add_remote_host(state: &mut AppState) {
         id.clone(),
         &draft,
         std::collections::HashMap::new(),
-        Default::default(),
+        &Default::default(),
     ) {
         Ok(host) => {
             let label = host.label.clone();
@@ -179,8 +191,8 @@ pub(crate) fn save_remote_host(state: &mut AppState, id: String) {
     let prior_versions = prior
         .map(|host| host.engine_versions.clone())
         .unwrap_or_default();
-    let prior_resources = prior.map(|host| host.resources.clone()).unwrap_or_default();
-    match host_from_draft(id.clone(), &draft, prior_versions, prior_resources) {
+    let prior_engines = prior.map(|host| host.engines.clone()).unwrap_or_default();
+    match host_from_draft(id.clone(), &draft, prior_versions, &prior_engines) {
         Ok(host) => {
             let label = host.label.clone();
             state.config.remote_hosts.insert(id, host);
@@ -413,4 +425,93 @@ pub(crate) fn setup_remote_host_key(state: &mut AppState, id: String) {
     state.set_message(
         "Run the shown command once on the remote host, then click Verify.".to_string(),
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engines::registry::{EngineLaunch, EngineLaunches};
+    use std::collections::HashMap;
+
+    const WORKER_KEY: &str = crate::engines::remote::deploy::WORKER_DEPLOYMENT_KEY;
+
+    fn draft_with_gmx(program: &str) -> crate::frontend::state::RemoteHostDraft {
+        crate::frontend::state::RemoteHostDraft {
+            hostname: "login.example.edu".to_string(),
+            username: "alice".to_string(),
+            port: "22".to_string(),
+            gmx_program: program.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn prior_state(program: &str) -> (HashMap<String, String>, EngineLaunches) {
+        let mut versions = HashMap::new();
+        versions.insert(EngineId::GROMACS.as_str().to_string(), "2026.2".to_string());
+        versions.insert(WORKER_KEY.to_string(), "dev:abc".to_string());
+        let mut engines = EngineLaunches::new();
+        engines.insert(EngineId::GROMACS, EngineLaunch::native(program));
+        (versions, engines)
+    }
+
+    /// A cached version belongs to the program it was probed from. Editing the
+    /// path must not leave the old version beside the new binary — since the job
+    /// now runs whatever launch is configured here, that pairing would be a lie.
+    #[test]
+    fn editing_the_gmx_path_drops_its_stale_version() {
+        let (versions, engines) = prior_state("/usr/local/gromacs/bin/gmx");
+        let host = host_from_draft(
+            "h".to_string(),
+            &draft_with_gmx("/opt/gromacs-2022.5/bin/gmx"),
+            versions,
+            &engines,
+        )
+        .expect("draft is valid");
+
+        assert!(
+            !host
+                .engine_versions
+                .contains_key(EngineId::GROMACS.as_str()),
+            "the 2026.2 version must not survive onto the 2022.5 path"
+        );
+        // The worker deployment identity is not an engine version; it stays.
+        assert_eq!(
+            host.engine_versions.get(WORKER_KEY).map(String::as_str),
+            Some("dev:abc")
+        );
+    }
+
+    #[test]
+    fn saving_an_unchanged_gmx_path_keeps_its_version() {
+        let (versions, engines) = prior_state("/usr/local/gromacs/bin/gmx");
+        let host = host_from_draft(
+            "h".to_string(),
+            &draft_with_gmx("/usr/local/gromacs/bin/gmx"),
+            versions,
+            &engines,
+        )
+        .expect("draft is valid");
+
+        assert_eq!(
+            host.engine_versions
+                .get(EngineId::GROMACS.as_str())
+                .map(String::as_str),
+            Some("2026.2")
+        );
+    }
+
+    /// Clearing the field un-configures the engine, so its version goes too.
+    #[test]
+    fn clearing_the_gmx_path_drops_its_version() {
+        let (versions, engines) = prior_state("/usr/local/gromacs/bin/gmx");
+        let host = host_from_draft("h".to_string(), &draft_with_gmx(""), versions, &engines)
+            .expect("draft is valid");
+
+        assert!(!host.engines.contains(EngineId::GROMACS));
+        assert!(
+            !host
+                .engine_versions
+                .contains_key(EngineId::GROMACS.as_str())
+        );
+    }
 }

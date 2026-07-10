@@ -9,10 +9,8 @@ use std::{
 
 use anyhow::Result;
 
-use crate::engines::{
-    gromacs::runner::{GromacsProgress, SubprocessOutcome, run_subprocess},
-    remote::Compute,
-};
+use crate::engines::gromacs::runner::{GromacsProgress, SubprocessOutcome, run_subprocess};
+use crate::launch::Compute;
 
 pub(crate) fn run_gmx<F>(
     compute: &Compute,

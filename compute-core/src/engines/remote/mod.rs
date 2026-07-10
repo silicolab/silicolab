@@ -10,7 +10,8 @@
 //! [`sync_up`]/[`sync_down`] file transfer, and the host probes
 //! ([`detect_remote_engine`], [`run_probe_command`]) are the shared spine the
 //! detached [`launcher`] drives to deploy and run the pre-deployed headless worker
-//! on a host. A GROMACS launch travels with [`Compute`].
+//! on a host. How to *launch* an engine is not this module's business: an
+//! [`crate::launch::EngineLaunch`] rides in the job's `request.json`.
 
 #[cfg(any(feature = "network", feature = "dev-worker"))]
 mod artifact;
@@ -34,55 +35,7 @@ use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::engines::process::{self, ProcessConfig};
-use crate::engines::registry::EngineLaunch;
 use crate::hosts::RemoteHost;
-
-/// CPU/GPU resources a `gmx mdrun` subprocess may use, mapped to mdrun flags by
-/// the runner. `0` means "let gmx decide" (its own default — all cores / detected
-/// GPUs), preserving the prior behaviour for an untouched run. Serializable so a
-/// relayed remote job carries the request to the worker.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
-pub struct ComputeResources {
-    /// CPU threads for the mdrun (`-nt`, or `-ntomp` under a GPU rank); `0` = gmx
-    /// default (all available cores).
-    pub cores: u32,
-    /// GPUs to offload to (`-ntmpi`/`-nb gpu`…); `0` = none / gmx auto-detect.
-    pub gpu: u32,
-}
-
-/// How to invoke `gmx`: the launch descriptor (and the resource envelope) threaded
-/// through the GROMACS pipeline so a run and its launch travel together. `gmx`
-/// always runs as a local subprocess of whichever host executes the pipeline — the
-/// laptop for a local run, the compute node for a relayed remote run — so there is
-/// no transport here.
-#[derive(Debug, Clone)]
-pub struct Compute {
-    pub launch: EngineLaunch,
-    pub resources: ComputeResources,
-}
-
-impl Compute {
-    /// Run `gmx` as a local subprocess with this launch, letting gmx pick its own
-    /// CPU/GPU defaults.
-    pub fn local(launch: EngineLaunch) -> Self {
-        Self {
-            launch,
-            resources: ComputeResources::default(),
-        }
-    }
-
-    /// Run `gmx` locally with an explicit CPU/GPU resource request.
-    pub fn local_with_resources(launch: EngineLaunch, resources: ComputeResources) -> Self {
-        Self { launch, resources }
-    }
-}
-
-impl From<EngineLaunch> for Compute {
-    /// Keeps existing call sites terse (`launch.into()`).
-    fn from(launch: EngineLaunch) -> Self {
-        Self::local(launch)
-    }
-}
 
 /// Plain-data SSH connection target plus the per-run remote scratch dir. Built
 /// fresh per job by [`RemoteTarget::for_run`]; cheaply `Clone`.
@@ -167,11 +120,6 @@ impl RemoteTarget {
 
 /// Filename of the local incremental-sync manifest (excluded from upload).
 const MANIFEST_FILE: &str = ".silicolab_remote_manifest.json";
-
-/// GROMACS executables to probe on a remote host, in priority order — bare names
-/// (resolved via the host's prelude/PATH) then the conventional install path.
-pub const GMX_REMOTE_CANDIDATES: &[&str] =
-    &["gmx", "/usr/local/gromacs/bin/gmx", "gmx_mpi", "gmx_d"];
 
 // ---------------------------------------------------------------------------
 // SSH/SCP command construction (pure; unit-tested without a network).
@@ -325,18 +273,21 @@ pub fn check_passwordless(target: &RemoteTarget) -> bool {
     matches!(process::run(config), Ok(result) if result.success())
 }
 
-/// SSH-run each candidate `<prelude && candidate> --version` and return the first
-/// that identifies as a working engine, with its parsed version. Used by the
-/// settings "Detect" button (always off the UI thread).
+/// SSH-run each of `spec`'s candidate executables as
+/// `<prelude && candidate> <version_arg>` and return the first that identifies as
+/// that engine, with its parsed version. Used by the settings "Detect" button and
+/// by remote launch resolution at submit time (always off the UI thread).
 pub fn detect_remote_engine(
     target: &RemoteTarget,
-    candidates: &[&str],
+    spec: &crate::engines::registry::EngineSpec,
 ) -> Option<(String, String)> {
-    for candidate in candidates {
+    let version_arg = spec.version_arg?;
+    for candidate in spec.candidate_executables {
         let script = format!(
-            "{}{} --version",
+            "{}{} {}",
             target.prelude_prefix(),
-            sh_quote(candidate)
+            sh_quote(candidate),
+            sh_quote(version_arg)
         );
         let config = ssh_config(target, &script, Some(Duration::from_secs(30)));
         let Ok(result) = process::run(config) else {
@@ -344,7 +295,7 @@ pub fn detect_remote_engine(
         };
         let blob = format!("{}{}", result.stdout, result.stderr);
         if result.success()
-            && blob.contains("GROMACS")
+            && blob.contains(spec.identity_marker)
             && let Some(version) = crate::engines::registry::extract_version(&blob)
         {
             return Some((candidate.to_string(), version));
@@ -638,12 +589,6 @@ mod tests {
     }
 
     #[test]
-    fn compute_from_launch_carries_it() {
-        let compute: Compute = EngineLaunch::native("gmx").into();
-        assert_eq!(compute.launch.program, "gmx");
-    }
-
-    #[test]
     fn remote_target_anchors_dir_at_run_uuid() {
         use crate::hosts::RemoteHost;
         let host = RemoteHost {
@@ -654,7 +599,7 @@ mod tests {
             port: 22,
             work_root: "~/.silicolab/".to_string(), // trailing slash trimmed
             prelude: Vec::new(),
-            engines: HashMap::new(),
+            engines: crate::launch::EngineLaunches::new(),
             engine_versions: HashMap::new(),
             resources: Default::default(),
             scheduler: Default::default(),

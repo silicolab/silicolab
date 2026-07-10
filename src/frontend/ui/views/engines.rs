@@ -131,7 +131,7 @@ pub(crate) fn render_engine_settings(
             let seed = state
                 .config
                 .engine_overrides
-                .get(&key)
+                .get(row.id)
                 .map(EngineDraft::from_launch)
                 .or_else(|| row.launch.as_ref().map(EngineDraft::from_launch))
                 .unwrap_or_default();
