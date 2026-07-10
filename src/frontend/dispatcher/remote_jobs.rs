@@ -41,7 +41,7 @@ pub(crate) fn start_remote_engine(
     state: &mut AppState,
     host: crate::backend::config::RemoteHost,
     engine: crate::wire::Engine,
-    cores: Option<usize>,
+    resources: crate::backend::config::JobResources,
 ) {
     let Some(task_run_id) = state.active_task_run else {
         state.set_message("no active task to run remotely".to_string());
@@ -71,7 +71,7 @@ pub(crate) fn start_remote_engine(
     let handle = crate::frontend::remote_jobs::spawn_remote_submit(
         host.clone(),
         engine,
-        cores,
+        resources,
         task.run_uuid.clone(),
         Some(task_run_id),
         task.controller_id.to_string(),
@@ -119,11 +119,13 @@ pub(crate) fn poll_remote_submit(state: &mut AppState, ctx: &egui::Context) {
                 remote_dir,
                 scheduler,
                 launch_handle,
+                cluster,
                 engine_id,
                 job_kind,
                 project_root,
                 local_run_dir,
                 deployment_id,
+                initial_phase,
             } = *submitted;
             if let Some(host) = state.config.remote_hosts.get_mut(&host_id) {
                 host.engine_versions.insert(
@@ -143,14 +145,19 @@ pub(crate) fn poll_remote_submit(state: &mut AppState, ctx: &egui::Context) {
                 remote_dir,
                 scheduler,
                 launch_handle,
+                cluster,
                 engine_id,
                 job_kind,
                 project_root,
                 local_run_dir: local_run_dir.to_string_lossy().to_string(),
-                status: registry::RemoteJobStatus::Running,
+                status: phase_status(initial_phase),
                 submitted_at_ms: registry::now_ms(),
                 last_polled_at_ms: None,
                 exit_code: None,
+                scheduler_state: None,
+                reason: None,
+                console_offset: 0,
+                unknown_since_ms: None,
             };
             if let Err(error) = registry::open().and_then(|conn| registry::upsert(&conn, &row)) {
                 state
@@ -216,7 +223,6 @@ pub(crate) fn refresh_remote_jobs(state: &mut AppState) {
 /// Drain a finished remote-jobs refresh: update each row's status in `jobs.db`,
 /// apply any retrieved QM outcome, and mark its task.
 pub(crate) fn poll_remote_jobs_refresh(state: &mut AppState, ctx: &egui::Context) {
-    use crate::frontend::remote_jobs::RemoteJobOutcome;
     let Some(refresh) = state.jobs.remote_jobs_refresh.take() else {
         return;
     };
@@ -224,68 +230,7 @@ pub(crate) fn poll_remote_jobs_refresh(state: &mut AppState, ctx: &egui::Context
         Ok(updates) => {
             let conn = registry::open().ok();
             for update in updates {
-                let (status, exit_code) = match &update.outcome {
-                    RemoteJobOutcome::Running => (registry::RemoteJobStatus::Running, None),
-                    RemoteJobOutcome::Done(_) => (registry::RemoteJobStatus::Done, Some(0i64)),
-                    RemoteJobOutcome::FailedExit(code) => {
-                        (registry::RemoteJobStatus::Failed, Some(*code as i64))
-                    }
-                    RemoteJobOutcome::Lost => (registry::RemoteJobStatus::Lost, None),
-                    // The job finished with exit 0 but its outcome is unparseable:
-                    // terminal failure, not a transient retry.
-                    RemoteJobOutcome::OutcomeUnreadable(_) => {
-                        (registry::RemoteJobStatus::Failed, Some(0i64))
-                    }
-                    RemoteJobOutcome::ProbeError(_) => (registry::RemoteJobStatus::Running, None),
-                };
-                // A transient probe error leaves the recorded status untouched.
-                if !matches!(update.outcome, RemoteJobOutcome::ProbeError(_))
-                    && let Some(conn) = conn.as_ref()
-                {
-                    let _ = registry::record_poll(
-                        conn,
-                        &update.run_uuid,
-                        status,
-                        exit_code,
-                        registry::now_ms(),
-                    );
-                }
-                let row = conn
-                    .as_ref()
-                    .and_then(|conn| registry::get(conn, &update.run_uuid).ok().flatten());
-                match update.outcome {
-                    RemoteJobOutcome::Done(outcome) => {
-                        if let Some(row) = row {
-                            apply_remote_outcome(state, &row, *outcome);
-                        }
-                    }
-                    RemoteJobOutcome::FailedExit(code) => {
-                        mark_remote_task(state, &update.run_uuid, TaskStatus::Failed);
-                        state.output_log.push(format!(
-                            "remote job {} exited with status {code}",
-                            short_uuid(&update.run_uuid)
-                        ));
-                    }
-                    RemoteJobOutcome::Lost => {
-                        mark_remote_task(state, &update.run_uuid, TaskStatus::Failed);
-                        state.output_log.push(format!(
-                            "remote job {} was lost (no exit code)",
-                            short_uuid(&update.run_uuid)
-                        ));
-                    }
-                    RemoteJobOutcome::OutcomeUnreadable(error) => {
-                        mark_remote_task(state, &update.run_uuid, TaskStatus::Failed);
-                        state.output_log.push(format!(
-                            "remote job {} finished but its outcome was unreadable: {error}",
-                            short_uuid(&update.run_uuid)
-                        ));
-                    }
-                    RemoteJobOutcome::ProbeError(error) => state.output_log.push(format!(
-                        "remote job {} probe error: {error}",
-                        short_uuid(&update.run_uuid)
-                    )),
-                    RemoteJobOutcome::Running => {}
-                }
+                apply_remote_observation(state, conn.as_ref(), &update.run_uuid, update.outcome);
             }
             reload_remote_jobs(state);
             state.set_message("Remote jobs refreshed".to_string());
@@ -297,6 +242,138 @@ pub(crate) fn poll_remote_jobs_refresh(state: &mut AppState, ctx: &egui::Context
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
             state.set_message("Remote refresh worker stopped unexpectedly".to_string());
         }
+    }
+}
+
+/// Persist one observation of a remote job and apply whatever it settles: a
+/// retrieved outcome, a terminal task status, or a logged probe error. The
+/// refresh drain and the cancel drain share this so both advance the console
+/// offset, record the scheduler state, and materialize a result identically —
+/// a job that finishes while its cancellation is in flight still lands.
+/// Returns the status written to the registry, if one was.
+fn apply_remote_observation(
+    state: &mut AppState,
+    conn: Option<&rusqlite::Connection>,
+    run_uuid: &str,
+    outcome: crate::frontend::remote_jobs::RemoteJobOutcome,
+) -> Option<registry::RemoteJobStatus> {
+    use crate::frontend::remote_jobs::RemoteJobOutcome;
+    let prior = conn.and_then(|conn| registry::get(conn, run_uuid).ok().flatten());
+    let observation = match &outcome {
+        RemoteJobOutcome::Observed(observation)
+        | RemoteJobOutcome::Done(_, observation)
+        | RemoteJobOutcome::OutcomeUnreadable(_, observation) => Some(observation),
+        RemoteJobOutcome::ProbeError(_) => None,
+    };
+    let mut recorded = None;
+    if let (Some(conn), Some(prior), Some(observation)) = (conn, prior.as_ref(), observation) {
+        let now = registry::now_ms();
+        let (status, unknown_since_ms) = observed_status(prior, observation.phase, now);
+        let _ = registry::record_observation(
+            conn,
+            run_uuid,
+            registry::RemoteObservationUpdate {
+                status,
+                exit_code: observation.exit_code.map(i64::from),
+                scheduler_state: observation.scheduler_state.as_deref(),
+                reason: observation.reason.as_deref(),
+                console_offset: observation.console.next_offset,
+                unknown_since_ms,
+                polled_at_ms: now,
+            },
+        );
+        recorded = Some(status);
+    }
+    match outcome {
+        RemoteJobOutcome::Done(engine_outcome, _) => {
+            if let Some(row) = conn.and_then(|conn| registry::get(conn, run_uuid).ok().flatten()) {
+                apply_remote_outcome(state, &row, *engine_outcome);
+            }
+        }
+        RemoteJobOutcome::OutcomeUnreadable(error, _) => {
+            mark_remote_task(state, run_uuid, TaskStatus::Failed);
+            state.output_log.push(format!(
+                "remote job {} finished but its outcome was unreadable: {error}",
+                short_uuid(run_uuid)
+            ));
+        }
+        RemoteJobOutcome::ProbeError(error) => state.output_log.push(format!(
+            "remote job {} probe error: {error}",
+            short_uuid(run_uuid)
+        )),
+        RemoteJobOutcome::Observed(observation) => match observation.phase {
+            crate::engines::remote::launcher::RemoteJobPhase::Failed
+            | crate::engines::remote::launcher::RemoteJobPhase::Lost => {
+                mark_remote_task(state, run_uuid, TaskStatus::Failed);
+            }
+            crate::engines::remote::launcher::RemoteJobPhase::Cancelled => {
+                mark_remote_task(state, run_uuid, TaskStatus::Cancelled);
+            }
+            _ => {}
+        },
+    }
+    recorded
+}
+
+pub(crate) fn poll_remote_cancel(state: &mut AppState, ctx: &egui::Context) {
+    let Some(cancel) = state.jobs.remote_cancel.take() else {
+        return;
+    };
+    match cancel.receiver.try_recv() {
+        Ok(Ok(outcome)) => {
+            let conn = registry::open().ok();
+            match apply_remote_observation(state, conn.as_ref(), &cancel.run_uuid, outcome) {
+                Some(registry::RemoteJobStatus::Cancelled) => {
+                    state.set_message("Remote cancellation confirmed".to_string());
+                }
+                Some(status) => {
+                    state.set_message(format!("Remote job finished as {}", status.token()));
+                }
+                None => state.set_message("Remote job state could not be recorded".to_string()),
+            }
+            reload_remote_jobs(state);
+        }
+        Ok(Err(error)) => {
+            state.set_message(format!("Remote cancellation failed: {error}"));
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => {
+            state.jobs.remote_cancel = Some(cancel);
+            ctx.request_repaint_after(Duration::from_millis(400));
+        }
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            state.set_message("Remote cancellation worker stopped unexpectedly".to_string());
+        }
+    }
+}
+
+fn phase_status(
+    phase: crate::engines::remote::launcher::RemoteJobPhase,
+) -> registry::RemoteJobStatus {
+    use crate::engines::remote::launcher::RemoteJobPhase;
+    match phase {
+        RemoteJobPhase::Queued => registry::RemoteJobStatus::Queued,
+        RemoteJobPhase::Cancelling => registry::RemoteJobStatus::Cancelling,
+        RemoteJobPhase::Succeeded => registry::RemoteJobStatus::Done,
+        RemoteJobPhase::Failed => registry::RemoteJobStatus::Failed,
+        RemoteJobPhase::Cancelled => registry::RemoteJobStatus::Cancelled,
+        RemoteJobPhase::Lost => registry::RemoteJobStatus::Lost,
+        _ => registry::RemoteJobStatus::Running,
+    }
+}
+
+fn observed_status(
+    prior: &registry::RemoteJob,
+    phase: crate::engines::remote::launcher::RemoteJobPhase,
+    now_ms: i64,
+) -> (registry::RemoteJobStatus, Option<i64>) {
+    if phase != crate::engines::remote::launcher::RemoteJobPhase::Unknown {
+        return (phase_status(phase), None);
+    }
+    let unknown_since = prior.unknown_since_ms.unwrap_or(now_ms);
+    if now_ms.saturating_sub(unknown_since) >= 60_000 {
+        (registry::RemoteJobStatus::Lost, Some(unknown_since))
+    } else {
+        (prior.status, Some(unknown_since))
     }
 }
 
@@ -418,6 +495,10 @@ fn mark_remote_task(state: &mut AppState, run_uuid: &str, status: TaskStatus) {
 /// Remove a remote job's scratch dir over SSH (a quick, bounded `rm -rf` of the
 /// run's own UUID-suffixed dir) and drop its registry row.
 pub(crate) fn remove_remote_job_scratch(state: &mut AppState, run_uuid: &str) {
+    if state.jobs.remote_cleanup.is_some() {
+        state.set_message("A remote cleanup is already running".to_string());
+        return;
+    }
     let row = (|| -> anyhow::Result<Option<registry::RemoteJob>> {
         registry::get(&registry::open()?, run_uuid)
     })()
@@ -426,20 +507,41 @@ pub(crate) fn remove_remote_job_scratch(state: &mut AppState, run_uuid: &str) {
     let Some(row) = row else {
         return;
     };
+    if !row.status.is_terminal() {
+        state
+            .set_message("Cancel the remote job before removing its scratch directory".to_string());
+        return;
+    }
     let Some(host) = state.config.remote_hosts.get(&row.host_id).cloned() else {
         state.set_message("The host for this job is no longer configured".to_string());
         return;
     };
-    let target = crate::engines::remote::RemoteTarget::for_run(&host, &row.run_uuid);
-    match crate::engines::remote::remove_remote_scratch(&target) {
-        Ok(()) => {
+    state.jobs.remote_cleanup = Some(crate::frontend::remote_jobs::spawn_remote_cleanup(
+        row, host,
+    ));
+    state.set_message("Removing remote scratch…".to_string());
+}
+
+pub(crate) fn poll_remote_cleanup(state: &mut AppState, ctx: &egui::Context) {
+    let Some(cleanup) = state.jobs.remote_cleanup.take() else {
+        return;
+    };
+    match cleanup.receiver.try_recv() {
+        Ok(Ok(())) => {
             if let Ok(conn) = registry::open() {
-                let _ = registry::remove(&conn, run_uuid);
+                let _ = registry::remove(&conn, &cleanup.run_uuid);
             }
             reload_remote_jobs(state);
             state.set_message("Removed the remote scratch directory".to_string());
         }
-        Err(error) => state.set_message(format!("Could not remove remote scratch: {error}")),
+        Ok(Err(error)) => state.set_message(format!("Could not remove remote scratch: {error}")),
+        Err(std::sync::mpsc::TryRecvError::Empty) => {
+            state.jobs.remote_cleanup = Some(cleanup);
+            ctx.request_repaint_after(Duration::from_millis(400));
+        }
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            state.set_message("Remote cleanup worker stopped unexpectedly".to_string());
+        }
     }
 }
 

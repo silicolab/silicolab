@@ -13,7 +13,10 @@ use crate::backend::representation::RepresentationPrefs;
 use crate::engines::registry::EngineLaunch;
 
 use compute_core::hosts::home_dir;
-pub use compute_core::hosts::{RemoteHost, ResourceSpec, config_dir};
+pub use compute_core::hosts::{
+    GpuRequest, JobResources, RemoteHost, ResourceSpec, SchedulerConfig, SlurmGpuSyntax,
+    SlurmProfile, config_dir,
+};
 
 pub use crate::backend::assistant_config::{ApprovalMode, AssistantConfig};
 
@@ -580,6 +583,7 @@ mod tests {
                 engines: HashMap::new(),
                 engine_versions: HashMap::new(),
                 resources: Default::default(),
+                scheduler: Default::default(),
             },
         );
 

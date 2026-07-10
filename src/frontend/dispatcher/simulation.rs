@@ -7,8 +7,9 @@ mod tests;
 
 pub(crate) use md_build::{FRAMEWORK_C_FLOOR_ANGSTROM, build_md_system};
 pub(crate) use remote::{
-    add_remote_host, check_remote_host, detect_remote_gromacs, fetch_remote_hardware,
-    remove_remote_host, save_remote_host, set_monitor_source, setup_remote_host_key,
+    add_remote_host, check_remote_host, detect_remote_gromacs, detect_remote_slurm,
+    fetch_remote_hardware, refresh_slurm_capabilities, remove_remote_host, save_remote_host,
+    set_monitor_source, setup_remote_host_key, test_remote_slurm,
 };
 
 pub(crate) fn start_pending_md_run(state: &mut AppState) {
@@ -91,13 +92,14 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
                 freeze: framework_freeze,
                 resources: crate::engines::remote::ComputeResources {
                     cores: prompt.prefs.cores_per_subtask,
-                    gpu: prompt.prefs.gpu_count,
+                    gpu: prompt.prefs.gpu.count(),
                 },
             },
         );
         state.optimization_origin = None;
         state.ui.pending_md_run = None;
-        relay_gromacs_job(state, host, prompt.engine.label(), job);
+        let resources = prompt.prefs.job_resources();
+        relay_gromacs_job(state, host, prompt.engine.label(), job, resources);
         return;
     }
     let mut compute = match resolve_md_compute(state, prompt.engine) {
@@ -110,7 +112,7 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
     // Local run: apply the panel's CPU/GPU request to the mdrun stages.
     compute.resources = crate::engines::remote::ComputeResources {
         cores: prompt.prefs.cores_per_subtask,
-        gpu: prompt.prefs.gpu_count,
+        gpu: prompt.prefs.gpu.count(),
     };
 
     let working_dir =

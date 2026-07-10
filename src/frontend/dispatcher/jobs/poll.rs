@@ -211,6 +211,8 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     ensure_remote_jobs_loaded(state);
     poll_remote_submit(state, ctx);
     poll_remote_jobs_refresh(state, ctx);
+    poll_remote_cancel(state, ctx);
+    poll_remote_cleanup(state, ctx);
     let assistant_before = (state.workspace.is_project()
         && (state.jobs.agent.is_some() || !state.jobs.agent_jobs.is_empty()))
     .then(|| state.assistant_fingerprint());
@@ -283,6 +285,36 @@ pub(crate) fn poll_remote_probe(state: &mut AppState, ctx: &egui::Context) {
                 "No GROMACS found on the remote host — set its path manually, or check the prelude."
                     .to_string(),
             );
+        }
+        Ok(RemoteProbeOutcome::SlurmDetected(detection)) => {
+            let accounting = if detection.sacct_available {
+                "sacct terminal history available"
+            } else {
+                "sacct unavailable; using scontrol fallback"
+            };
+            state.set_message(format!("Detected {} ({accounting})", detection.version));
+        }
+        Ok(RemoteProbeOutcome::SlurmCapabilities(capabilities)) => {
+            state
+                .ui
+                .settings
+                .slurm_capabilities
+                .insert(probe.host_id.clone(), capabilities);
+            state.set_message("Slurm capabilities refreshed".to_string());
+        }
+        Ok(RemoteProbeOutcome::SlurmTested(console, deployment_id)) => {
+            if let Some(host) = state.config.remote_hosts.get_mut(&probe.host_id) {
+                host.engine_versions.insert(
+                    crate::engines::remote::deploy::WORKER_DEPLOYMENT_KEY.to_string(),
+                    deployment_id,
+                );
+                let _ = save_config(&state.config);
+            }
+            state.output_log.push(console);
+            state.set_message("Slurm test job completed successfully".to_string());
+        }
+        Ok(RemoteProbeOutcome::Failed(error)) => {
+            state.set_message(format!("Remote scheduler check failed: {error}"));
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             state.jobs.remote_probe = Some(probe);

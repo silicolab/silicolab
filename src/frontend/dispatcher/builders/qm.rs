@@ -97,12 +97,7 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
     match remote_host {
         // A configured remote target: deploy + submit detached, tracked via the
         // job registry and the opt-in refresh — not the in-process worker.
-        Some(host) => start_remote_qm(
-            state,
-            job,
-            host,
-            (prompt.prefs.cores_per_subtask > 0).then_some(prompt.prefs.cores_per_subtask as usize),
-        ),
+        Some(host) => start_remote_qm(state, job, host, prompt.prefs.job_resources()),
         None => {
             let running = spawn_qm_job(job, Some(qm_thread_count(state, &prompt.prefs)));
             state.jobs.set_qm(running);
@@ -170,19 +165,14 @@ fn start_remote_qm(
     state: &mut AppState,
     job: crate::engines::qm::QmJob,
     host: crate::backend::config::RemoteHost,
-    cores_override: Option<usize>,
+    mut resources: crate::backend::config::JobResources,
 ) {
-    let requested_cores = crate::frontend::remote_jobs::resolve_requested_cores(
-        cores_override,
+    resources.cpus_per_task = Some(crate::frontend::remote_jobs::resolve_requested_cores(
+        resources.cpus_per_task.map(|value| value as usize),
         &host,
         state.config.compute_core_count,
-    );
-    start_remote_engine(
-        state,
-        host,
-        crate::wire::Engine::Qm(job),
-        Some(requested_cores),
-    );
+    ) as u32);
+    start_remote_engine(state, host, crate::wire::Engine::Qm(job), resources);
 }
 
 pub(crate) fn cancel_pending_qm_request(state: &mut AppState) {

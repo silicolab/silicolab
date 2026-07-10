@@ -167,10 +167,6 @@ pub enum CancelOutcome {
         id: JobControlId,
         task_run_id: Option<u64>,
     },
-    RequestFailed {
-        id: JobControlId,
-        reason: String,
-    },
     NotFound {
         id: JobControlId,
     },
@@ -184,9 +180,7 @@ impl CancelOutcome {
     pub fn task_run_id(&self) -> Option<u64> {
         match self {
             Self::Requested { task_run_id, .. } => *task_run_id,
-            Self::RequestFailed { .. } | Self::NotFound { .. } | Self::NotCancellable { .. } => {
-                None
-            }
+            Self::NotFound { .. } | Self::NotCancellable { .. } => None,
         }
     }
 }
@@ -449,9 +443,6 @@ pub fn format_cancel_outcome_for_job(
             ),
             _ => format!("Cancel requested for {}.", id.token()),
         },
-        CancelOutcome::RequestFailed { id, reason } => {
-            format!("Could not cancel {}: {reason}", id.token())
-        }
         CancelOutcome::NotFound { id } => format!("Job not found: {}", id.token()),
         CancelOutcome::NotCancellable { id, reason } => {
             format!("Job {} is not cancellable: {reason}", id.token())
@@ -546,25 +537,16 @@ pub fn remote_job_snapshot(row: &registry::RemoteJob) -> LiveJobSnapshot {
         label: format!("remote {} on {}", row.job_kind, row.host_label),
         engine_id: Some(row.engine_id.clone()),
         job_kind: Some(row.job_kind.clone()),
-        stage: None,
+        stage: match (&row.scheduler_state, &row.reason) {
+            (Some(state), Some(reason)) => Some(format!("{state}: {reason}")),
+            (Some(state), None) => Some(state.clone()),
+            (None, Some(reason)) => Some(reason.clone()),
+            (None, None) => None,
+        },
         task_run_id: None,
         run_uuid: Some(row.run_uuid.clone()),
         host_label: Some(row.host_label.clone()),
     }
-}
-
-pub fn record_remote_cancel_success(
-    conn: &rusqlite::Connection,
-    run_uuid: &str,
-    now_ms: i64,
-) -> anyhow::Result<()> {
-    registry::record_poll(
-        conn,
-        run_uuid,
-        registry::RemoteJobStatus::Cancelled,
-        None,
-        now_ms,
-    )
 }
 
 fn list_remote_snapshots(state: &AppState) -> Vec<LiveJobSnapshot> {
@@ -583,6 +565,17 @@ fn cancel_remote_controlled_job(
     state: &mut AppState,
     run_uuid: &str,
 ) -> anyhow::Result<CancelOutcome> {
+    if state
+        .jobs
+        .remote_cancel
+        .as_ref()
+        .is_some_and(|cancel| cancel.run_uuid == run_uuid)
+    {
+        return Ok(CancelOutcome::Requested {
+            id: JobControlId::Remote(run_uuid.to_string()),
+            task_run_id: state.tasks.task_run_by_uuid(run_uuid).map(|task| task.id),
+        });
+    }
     let conn = registry::open()?;
     let Some(row) = registry::get(&conn, run_uuid)? else {
         return Ok(CancelOutcome::NotFound {
@@ -602,29 +595,37 @@ fn cancel_remote_controlled_job(
             reason: format!("remote host {} is no longer configured", row.host_id),
         });
     };
-    let Some(launcher) = launcher_from_token(&row.scheduler) else {
+    if launcher_from_token(&row.scheduler).is_none() {
         return Ok(CancelOutcome::NotCancellable {
             id,
             reason: format!("unknown remote scheduler {}", row.scheduler),
         });
-    };
-    let target = crate::engines::remote::RemoteTarget::for_run(&host, &row.run_uuid);
-    let handle = crate::engines::remote::launcher::LaunchHandle(row.launch_handle.clone());
-    if let Err(error) = launcher.cancel(&target, &handle) {
-        return Ok(CancelOutcome::RequestFailed {
-            id,
-            reason: error.to_string(),
-        });
     }
-    record_remote_cancel_success(&conn, &row.run_uuid, registry::now_ms())?;
-    sync_remote_job_ui_row(state, &row.run_uuid, registry::RemoteJobStatus::Cancelled);
+    registry::record_observation(
+        &conn,
+        &row.run_uuid,
+        registry::RemoteObservationUpdate {
+            status: registry::RemoteJobStatus::Cancelling,
+            exit_code: row.exit_code,
+            scheduler_state: row.scheduler_state.as_deref(),
+            reason: row.reason.as_deref(),
+            console_offset: row.console_offset,
+            unknown_since_ms: row.unknown_since_ms,
+            polled_at_ms: registry::now_ms(),
+        },
+    )?;
+    sync_remote_job_ui_row(state, &row.run_uuid, registry::RemoteJobStatus::Cancelling);
     let task_run_id = state
         .tasks
         .task_run_by_uuid(&row.run_uuid)
         .map(|task| task.id);
     if let Some(task_run_id) = task_run_id {
-        mark_task_cancelled(state, task_run_id);
+        mark_task_cancelling(state, task_run_id);
     }
+    state.jobs.remote_cancel = Some(crate::frontend::remote_jobs::spawn_remote_cancel(
+        row.clone(),
+        host,
+    ));
     Ok(CancelOutcome::Requested {
         id: JobControlId::Remote(row.run_uuid),
         task_run_id,
@@ -632,18 +633,7 @@ fn cancel_remote_controlled_job(
 }
 
 fn launcher_from_token(token: &str) -> Option<crate::engines::remote::launcher::Launcher> {
-    match token {
-        "direct" => Some(crate::engines::remote::launcher::Launcher::Direct),
-        _ => None,
-    }
-}
-
-fn mark_task_cancelled(state: &mut AppState, task_run_id: u64) {
-    if let Err(error) =
-        crate::frontend::task_executor::mark_task_status(state, task_run_id, TaskStatus::Cancelled)
-    {
-        state.set_message(format!("failed to update task status: {error}"));
-    }
+    crate::engines::remote::launcher::Launcher::from_token(token).ok()
 }
 
 fn mark_task_cancelling(state: &mut AppState, task_run_id: u64) {
@@ -671,6 +661,7 @@ fn remote_status(status: registry::RemoteJobStatus) -> JobStatus {
     match status {
         registry::RemoteJobStatus::Queued => JobStatus::Queued,
         registry::RemoteJobStatus::Running => JobStatus::Running,
+        registry::RemoteJobStatus::Cancelling => JobStatus::Cancelling,
         registry::RemoteJobStatus::Done => JobStatus::Done,
         registry::RemoteJobStatus::Failed => JobStatus::Failed,
         registry::RemoteJobStatus::Lost => JobStatus::Lost,

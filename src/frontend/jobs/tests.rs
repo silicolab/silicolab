@@ -306,37 +306,6 @@ fn remote_job_snapshot_maps_last_known_registry_state() {
 }
 
 #[test]
-fn remote_cancel_success_updates_registry_status_without_ssh() {
-    let path = std::env::temp_dir().join(format!(
-        "silicolab-control-cancel-{}.db",
-        uuid::Uuid::new_v4().simple()
-    ));
-    let _ = std::fs::remove_file(&path);
-    let conn = crate::backend::storage::jobs::open_at(&path).unwrap();
-    crate::backend::storage::jobs::upsert(
-        &conn,
-        &remote_row(
-            "run-2",
-            crate::backend::storage::jobs::RemoteJobStatus::Running,
-        ),
-    )
-    .unwrap();
-
-    record_remote_cancel_success(&conn, "run-2", 1234).unwrap();
-
-    let row = crate::backend::storage::jobs::get(&conn, "run-2")
-        .unwrap()
-        .unwrap();
-    assert_eq!(
-        row.status,
-        crate::backend::storage::jobs::RemoteJobStatus::Cancelled
-    );
-    assert_eq!(row.last_polled_at_ms, Some(1234));
-    assert_eq!(row.exit_code, None);
-    let _ = std::fs::remove_file(path);
-}
-
-#[test]
 fn qm_cancel_alias_refuses_multiple_qm_jobs_without_cancelling_any() {
     let mut state = crate::frontend::state::AppState::scratch(Default::default(), Vec::new());
     let local_cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -546,6 +515,7 @@ fn remote_row(
         remote_dir: format!("~/.silicolab/runs/{run_uuid}"),
         scheduler: "direct".to_string(),
         launch_handle: "12345".to_string(),
+        cluster: None,
         engine_id: "hartree".to_string(),
         job_kind: "qm-energy".to_string(),
         project_root: Some("/work/proj".to_string()),
@@ -554,5 +524,9 @@ fn remote_row(
         submitted_at_ms: 1000,
         last_polled_at_ms: None,
         exit_code: None,
+        scheduler_state: None,
+        reason: None,
+        console_offset: 0,
+        unknown_since_ms: None,
     }
 }

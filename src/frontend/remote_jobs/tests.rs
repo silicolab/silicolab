@@ -13,9 +13,10 @@ fn host_with_cores(cores: Option<usize>) -> crate::backend::config::RemoteHost {
         engines: Default::default(),
         engine_versions: Default::default(),
         resources: ResourceSpec {
-            cores,
+            cpus_per_task: cores.map(|value| value as u32),
             ..Default::default()
         },
+        scheduler: Default::default(),
     }
 }
 
@@ -112,6 +113,7 @@ fn remote_qm_submit_then_refresh_against_ssh_host() {
         engines: Default::default(),
         engine_versions: Default::default(),
         resources: Default::default(),
+        scheduler: Default::default(),
     };
 
     let structure = Structure::new(
@@ -145,7 +147,10 @@ fn remote_qm_submit_then_refresh_against_ssh_host() {
     let submit = spawn_remote_submit(
         host.clone(),
         crate::wire::Engine::Qm(job),
-        Some(1),
+        crate::backend::config::JobResources {
+            cpus_per_task: Some(1),
+            ..Default::default()
+        },
         run_uuid.clone(),
         None,
         "qm-energy".to_string(),
@@ -168,6 +173,7 @@ fn remote_qm_submit_then_refresh_against_ssh_host() {
         remote_dir: submitted.remote_dir,
         scheduler: submitted.scheduler,
         launch_handle: submitted.launch_handle,
+        cluster: submitted.cluster,
         engine_id: submitted.engine_id,
         job_kind: submitted.job_kind,
         project_root: submitted.project_root,
@@ -176,6 +182,10 @@ fn remote_qm_submit_then_refresh_against_ssh_host() {
         submitted_at_ms: 0,
         last_polled_at_ms: None,
         exit_code: None,
+        scheduler_state: None,
+        reason: None,
+        console_offset: 0,
+        unknown_since_ms: None,
     };
 
     // Opt-in refresh, retried until the detached job finishes.
@@ -183,11 +193,21 @@ fn remote_qm_submit_then_refresh_against_ssh_host() {
         let refresh = spawn_remote_jobs_refresh(vec![(row.clone(), host.clone())]);
         let mut updates = refresh.receiver.recv().expect("refresh worker stays alive");
         match updates.pop().expect("one update per job").outcome {
-            RemoteJobOutcome::Done(outcome) => break *outcome,
-            RemoteJobOutcome::Running => std::thread::sleep(Duration::from_millis(500)),
-            RemoteJobOutcome::FailedExit(code) => panic!("remote job exited {code}"),
-            RemoteJobOutcome::Lost => panic!("remote job was lost"),
-            RemoteJobOutcome::OutcomeUnreadable(error) => {
+            RemoteJobOutcome::Done(outcome, _) => break *outcome,
+            RemoteJobOutcome::Observed(observation)
+                if !matches!(
+                    observation.phase,
+                    crate::engines::remote::launcher::RemoteJobPhase::Failed
+                        | crate::engines::remote::launcher::RemoteJobPhase::Lost
+                        | crate::engines::remote::launcher::RemoteJobPhase::Cancelled
+                ) =>
+            {
+                std::thread::sleep(Duration::from_millis(500))
+            }
+            RemoteJobOutcome::Observed(observation) => {
+                panic!("remote job ended as {:?}", observation.phase)
+            }
+            RemoteJobOutcome::OutcomeUnreadable(error, _) => {
                 panic!("outcome unreadable: {error}")
             }
             RemoteJobOutcome::ProbeError(error) => panic!("probe error: {error}"),
@@ -239,6 +259,7 @@ fn remote_docking_submit_then_refresh_against_ssh_host() {
         engines: Default::default(),
         engine_versions: Default::default(),
         resources: Default::default(),
+        scheduler: Default::default(),
     };
 
     let carbon = |x: f32, y: f32, z: f32| Atom {
@@ -276,7 +297,7 @@ fn remote_docking_submit_then_refresh_against_ssh_host() {
     let submit = spawn_remote_submit(
         host.clone(),
         crate::wire::Engine::Docking(request),
-        None,
+        Default::default(),
         run_uuid.clone(),
         None,
         "dock".to_string(),
@@ -299,6 +320,7 @@ fn remote_docking_submit_then_refresh_against_ssh_host() {
         remote_dir: submitted.remote_dir,
         scheduler: submitted.scheduler,
         launch_handle: submitted.launch_handle,
+        cluster: submitted.cluster,
         engine_id: submitted.engine_id,
         job_kind: submitted.job_kind,
         project_root: submitted.project_root,
@@ -307,17 +329,31 @@ fn remote_docking_submit_then_refresh_against_ssh_host() {
         submitted_at_ms: 0,
         last_polled_at_ms: None,
         exit_code: None,
+        scheduler_state: None,
+        reason: None,
+        console_offset: 0,
+        unknown_since_ms: None,
     };
 
     let outcome = loop {
         let refresh = spawn_remote_jobs_refresh(vec![(row.clone(), host.clone())]);
         let mut updates = refresh.receiver.recv().expect("refresh worker stays alive");
         match updates.pop().expect("one update per job").outcome {
-            RemoteJobOutcome::Done(outcome) => break *outcome,
-            RemoteJobOutcome::Running => std::thread::sleep(Duration::from_millis(500)),
-            RemoteJobOutcome::FailedExit(code) => panic!("remote job exited {code}"),
-            RemoteJobOutcome::Lost => panic!("remote job was lost"),
-            RemoteJobOutcome::OutcomeUnreadable(error) => {
+            RemoteJobOutcome::Done(outcome, _) => break *outcome,
+            RemoteJobOutcome::Observed(observation)
+                if !matches!(
+                    observation.phase,
+                    crate::engines::remote::launcher::RemoteJobPhase::Failed
+                        | crate::engines::remote::launcher::RemoteJobPhase::Lost
+                        | crate::engines::remote::launcher::RemoteJobPhase::Cancelled
+                ) =>
+            {
+                std::thread::sleep(Duration::from_millis(500))
+            }
+            RemoteJobOutcome::Observed(observation) => {
+                panic!("remote job ended as {:?}", observation.phase)
+            }
+            RemoteJobOutcome::OutcomeUnreadable(error, _) => {
                 panic!("outcome unreadable: {error}")
             }
             RemoteJobOutcome::ProbeError(error) => panic!("probe error: {error}"),
@@ -401,6 +437,7 @@ AR  8
         engines: Default::default(),
         engine_versions: Default::default(),
         resources: Default::default(),
+        scheduler: Default::default(),
     };
 
     // A 2×2×2 argon grid centered in a 30 Å cubic cell — finite starting energy,
@@ -443,7 +480,7 @@ AR  8
     let submit = spawn_remote_submit(
         host.clone(),
         crate::wire::Engine::Gromacs(job),
-        None,
+        Default::default(),
         run_uuid.clone(),
         None,
         "run-md".to_string(),
@@ -466,6 +503,7 @@ AR  8
         remote_dir: submitted.remote_dir,
         scheduler: submitted.scheduler,
         launch_handle: submitted.launch_handle,
+        cluster: submitted.cluster,
         engine_id: submitted.engine_id,
         job_kind: submitted.job_kind,
         project_root: submitted.project_root,
@@ -474,17 +512,31 @@ AR  8
         submitted_at_ms: 0,
         last_polled_at_ms: None,
         exit_code: None,
+        scheduler_state: None,
+        reason: None,
+        console_offset: 0,
+        unknown_since_ms: None,
     };
 
     let outcome = loop {
         let refresh = spawn_remote_jobs_refresh(vec![(row.clone(), host.clone())]);
         let mut updates = refresh.receiver.recv().expect("refresh worker stays alive");
         match updates.pop().expect("one update per job").outcome {
-            RemoteJobOutcome::Done(outcome) => break *outcome,
-            RemoteJobOutcome::Running => std::thread::sleep(Duration::from_millis(500)),
-            RemoteJobOutcome::FailedExit(code) => panic!("remote job exited {code}"),
-            RemoteJobOutcome::Lost => panic!("remote job was lost"),
-            RemoteJobOutcome::OutcomeUnreadable(error) => {
+            RemoteJobOutcome::Done(outcome, _) => break *outcome,
+            RemoteJobOutcome::Observed(observation)
+                if !matches!(
+                    observation.phase,
+                    crate::engines::remote::launcher::RemoteJobPhase::Failed
+                        | crate::engines::remote::launcher::RemoteJobPhase::Lost
+                        | crate::engines::remote::launcher::RemoteJobPhase::Cancelled
+                ) =>
+            {
+                std::thread::sleep(Duration::from_millis(500))
+            }
+            RemoteJobOutcome::Observed(observation) => {
+                panic!("remote job ended as {:?}", observation.phase)
+            }
+            RemoteJobOutcome::OutcomeUnreadable(error, _) => {
                 panic!("outcome unreadable: {error}")
             }
             RemoteJobOutcome::ProbeError(error) => panic!("probe error: {error}"),

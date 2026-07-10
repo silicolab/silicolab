@@ -101,6 +101,7 @@ pub struct RemoteTarget {
     pub known_hosts_path: PathBuf,
     /// Shell lines run before the engine (`module load …`, `source GMXRC`).
     pub prelude: Vec<String>,
+    pub scheduler_prelude: Vec<String>,
     /// The per-run remote scratch dir, e.g. `~/.silicolab/runs/<uuid>`. Built from
     /// a validated `work_root` (no shell metacharacters) + the run UUID, so it is
     /// safe to emit **unquoted** (the leading `~` must expand).
@@ -113,6 +114,18 @@ impl RemoteTarget {
     /// (hex + hyphens — safe to concatenate unquoted).
     pub fn for_run(host: &RemoteHost, run_uuid: &str) -> Self {
         let work_root = host.work_root.trim_end_matches('/');
+        Self::with_remote_dir(host, format!("{work_root}/runs/{run_uuid}"))
+    }
+
+    pub fn from_remote_dir(host: &RemoteHost, remote_dir: &str) -> Result<Self> {
+        validate_work_root(remote_dir)?;
+        if !remote_dir.contains("/runs/") {
+            bail!("remote run directory is outside the SilicoLab runs root");
+        }
+        Ok(Self::with_remote_dir(host, remote_dir.to_string()))
+    }
+
+    fn with_remote_dir(host: &RemoteHost, remote_dir: String) -> Self {
         Self {
             host_id: host.id.clone(),
             host_label: host.label.clone(),
@@ -122,7 +135,11 @@ impl RemoteTarget {
             key_path: bootstrap::private_key_path(),
             known_hosts_path: bootstrap::known_hosts_path(),
             prelude: host.prelude.clone(),
-            remote_dir: format!("{work_root}/runs/{run_uuid}"),
+            scheduler_prelude: match &host.scheduler {
+                crate::hosts::SchedulerConfig::Direct => Vec::new(),
+                crate::hosts::SchedulerConfig::Slurm(profile) => profile.scheduler_prelude.clone(),
+            },
+            remote_dir,
             connect_timeout_secs: 15,
         }
     }
@@ -136,6 +153,14 @@ impl RemoteTarget {
             String::new()
         } else {
             format!("{} && ", self.prelude.join(" && "))
+        }
+    }
+
+    fn scheduler_prefix(&self) -> String {
+        if self.scheduler_prelude.is_empty() {
+            String::new()
+        } else {
+            format!("{} && ", self.scheduler_prelude.join(" && "))
         }
     }
 }
@@ -547,6 +572,7 @@ mod tests {
             key_path: PathBuf::from("/home/alice/.silicolab/keys/id_silicolab_ed25519"),
             known_hosts_path: PathBuf::from("/home/alice/.silicolab/keys/known_hosts"),
             prelude: vec!["module load gromacs".to_string()],
+            scheduler_prelude: Vec::new(),
             remote_dir: "~/.silicolab/runs/abc-123".to_string(),
             connect_timeout_secs: 15,
         }
@@ -631,9 +657,12 @@ mod tests {
             engines: HashMap::new(),
             engine_versions: HashMap::new(),
             resources: Default::default(),
+            scheduler: Default::default(),
         };
         let target = RemoteTarget::for_run(&host, "abc-123");
         assert_eq!(target.remote_dir, "~/.silicolab/runs/abc-123");
+        let persisted = RemoteTarget::from_remote_dir(&host, "/scratch/old/runs/abc-123").unwrap();
+        assert_eq!(persisted.remote_dir, "/scratch/old/runs/abc-123");
     }
 
     #[test]

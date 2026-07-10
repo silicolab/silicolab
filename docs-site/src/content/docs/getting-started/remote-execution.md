@@ -1,70 +1,100 @@
 ---
 title: Remote execution
-description: Offload heavy compute jobs to a remote Linux host over SSH.
+description: Run compute jobs on a remote Linux host through Direct SSH or Slurm.
 sidebar:
   order: 4
 ---
 
-Heavy compute can be offloaded to a remote Linux machine, such as an HPC login
-node or GPU workstation, while the GUI stays on your laptop.
+Quantum chemistry, molecular docking, and MD/GROMACS jobs can run on a remote
+x86-64 Linux host while the GUI remains on your computer. SilicoLab uses the
+operating system's `ssh` and `scp` clients and deploys a checksum-verified,
+version-matched worker on first use.
 
-Quantum chemistry, molecular docking, and MD/GROMACS can all run remotely.
-SilicoLab drives the OS OpenSSH client (`ssh` and `scp`) as subprocesses. The
-OpenSSH client ships with macOS and Linux. On Windows 11, enable it under
-**Settings > Apps > Optional features > OpenSSH Client** if it is missing.
+## Set up SSH
 
-On first use, SilicoLab deploys a small self-contained worker to the host. The
-worker is pinned to the app version and verified against its published checksum
-before it runs.
+Open **Settings > Engines > Remote Hosts**, add the host's address, SSH user,
+port, and work directory, then select **Set up passwordless login**. SilicoLab
+creates a dedicated key under `~/.silicolab/keys` and keeps strict host-key
+verification enabled. Run the displayed authorization command once on the
+remote host, then select **Verify**.
 
-Testing remote changes from source is a contributor workflow; follow the
-[remote execution development guide](https://github.com/silicolab/silicolab/blob/main/docs/developing-remote-execution.md).
-Released builds always use the version-pinned, checksum-verified worker described
-above.
+The work directory defaults to `~/.silicolab`. It must be visible and writable
+on every node that may execute a job. On a cluster this normally means a shared
+home, project, or scratch filesystem. Select **Test scheduler** after configuring
+Slurm; the test submits a real short job and verifies worker visibility from the
+allocated node.
 
-## Set up a host
+**Job environment commands** run inside the allocated job before the worker.
+Use them for commands such as `module load gromacs` or CUDA setup. **Scheduler
+setup commands** run on the login node before `sbatch`, `squeue`, `scontrol`, and
+`scancel`; use them only when Slurm commands are not already on the
+non-interactive SSH `PATH`.
 
-Open **Settings > Engines > Remote Hosts**.
+## Direct SSH
 
-1. Select **Add host** and enter a label, hostname or IP address, username, and
-   optionally a port and remote work directory. The default work directory is
-   `~/.silicolab`. A custom work directory must be an absolute Linux path or
-   start with `~/`.
-2. Under **Setup commands**, enter the commands a fresh non-interactive SSH
-   shell needs before engine commands are available. For example, use
-   `module load gromacs` or `source /opt/gromacs/bin/GMXRC` to make `gmx`
-   runnable. Enter one command per line.
-3. Select **Set up passwordless login**. SilicoLab generates a dedicated key at
-   `~/.silicolab/keys/id_silicolab_ed25519` and shows a one-line command to run
-   once on the host. This key is separate from your personal SSH keys.
-4. Select **Verify** to confirm that key-based login works. Passwordless login
-   is required so unattended jobs never block on a password prompt.
-5. Select **Detect GROMACS** if you plan to run MD. This probes the host for
-   `gmx` and records the detected version. Quantum chemistry and docking run
-   inside the deployed worker, so they do not need a host-side GROMACS install.
+Choose **Direct SSH** for a dedicated workstation or bare compute node. The
+worker runs as a detached process group. CPU requests limit the worker thread
+pool; memory and walltime remain advisory because no scheduler enforces them.
 
-## Run remotely
+## Slurm
 
-Task panels for **Run MD**, **Build MD System**, **QM**, and **Molecular
-Docking** include a **Run on** selector. Pick the remote host there. In **Build
-MD System**, the selector applies to the GROMACS build step; the built-in
-geometry build always runs locally.
+Choose **Slurm** and configure the fields required by the cluster:
 
-New panels start from the **Default compute target** configured in
-**Settings > Engines > Remote Hosts**, and you can change the target per run.
+- **Partition** selects a queue, such as `debug` or `gpu`.
+- **Account** identifies the allocation charged for the job.
+- **QOS** selects a site-defined quality-of-service policy.
+- **Reservation** and **Constraint** are optional advanced selectors.
+- Default CPU, memory, and walltime values apply when a task does not override
+  them.
 
-SilicoLab stages inputs up, runs the job, streams the live log back, and stages
-results down. The result appears in the project the same way as a local run.
-For GROMACS jobs, each `gmx` step is launched detached so a dropped SSH
-connection does not kill the calculation.
+Select **Detect Slurm** to verify `sbatch`, `squeue`, `scancel`, and `scontrol`.
+`sacct` is optional; when it is unavailable, SilicoLab uses `scontrol` for
+terminal history. **Refresh cluster** loads partition, GPU-type, and feature
+suggestions. These values are hints and do not reserve currently idle hardware.
 
-Press **Esc** to cancel a remote run. SilicoLab also stops the remote job.
+GRES is the default GPU dialect. A task can request:
 
-## Current limitations
+- **No GPU**;
+- **Any available GPU** with a count; or
+- **Specific type** with a scheduler GPU type such as `a100` and a count.
 
-- A remote run occupies the single engine-job slot while active.
-- Closing the app leaves an in-flight remote job running. SilicoLab writes a
-  `remote_run.json` record into the local run directory, but it does not
-  auto-reattach to that job yet.
-- Remote scratch directories under `<work_root>/runs/<run-id>` are not
-  garbage-collected automatically.
+SilicoLab translates these requests to `--gres=gpu[:type]:count`. Select the
+`--gpus` dialect only when the cluster administrator recommends it. A site whose
+GPU request looks like neither can use **Custom**, a template argument with
+`{count}` and an optional `{type}` placeholder — for example
+`--gres=accel:{type}:{count}`. Slurm, not SilicoLab, chooses physical device
+indices and exposes the allocation to the job.
+
+## Run and monitor jobs
+
+Choose the host under **Run on** in a task panel, then set CPU, memory, walltime,
+and GPU intent. The task monitor shows queued, running, completing, cancelling,
+and terminal states. For queued Slurm jobs it also shows scheduler reasons such
+as `Priority`, `Resources`, `InvalidAccount`, or `InvalidQOS`.
+
+Use **Refresh Remote** to retrieve the latest state and appended console output.
+Closing SilicoLab does not stop a remote job. Reopen the project and refresh to
+continue monitoring or retrieve its result. The scheduler and remote directory
+captured at submission remain authoritative even if the host settings are
+edited later.
+
+Select **Cancel** for a queued or running job. Slurm cancellation remains in
+**Cancelling** until the scheduler confirms `CANCELLED`; repeated requests are
+safe. Remote scratch can be removed only after a terminal state is confirmed.
+
+Login-node CPU and GPU utilization is not shown as cluster utilization for a
+Slurm target. Allocation state and pending reason belong in the task monitor.
+
+## Troubleshooting
+
+- **Invalid account, QOS, or partition:** copy the exact values supplied by the
+  cluster administrator and refresh the job to see Slurm's pending reason.
+- **Worker is not visible on the compute node:** move the work root to a shared
+  filesystem and run **Test scheduler** again.
+- **No terminal history:** `sacct` may be disabled. SilicoLab automatically uses
+  `scontrol`; controller retention still determines how long old jobs remain
+  observable.
+- **Typed GPU remains pending:** confirm the type spelling under **Refresh
+  cluster** and check that the selected partition contains that GRES type.
+- **GROMACS is missing:** add the appropriate module or environment command to
+  **Job environment commands**, then use **Detect GROMACS**.

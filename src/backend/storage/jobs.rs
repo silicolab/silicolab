@@ -25,6 +25,7 @@ use crate::backend::config::config_dir;
 pub enum RemoteJobStatus {
     Queued,
     Running,
+    Cancelling,
     Done,
     Failed,
     Lost,
@@ -36,6 +37,7 @@ impl RemoteJobStatus {
         match self {
             RemoteJobStatus::Queued => "queued",
             RemoteJobStatus::Running => "running",
+            RemoteJobStatus::Cancelling => "cancelling",
             RemoteJobStatus::Done => "done",
             RemoteJobStatus::Failed => "failed",
             RemoteJobStatus::Lost => "lost",
@@ -47,6 +49,7 @@ impl RemoteJobStatus {
         Some(match token {
             "queued" => RemoteJobStatus::Queued,
             "running" => RemoteJobStatus::Running,
+            "cancelling" => RemoteJobStatus::Cancelling,
             "done" => RemoteJobStatus::Done,
             "failed" => RemoteJobStatus::Failed,
             "lost" => RemoteJobStatus::Lost,
@@ -83,6 +86,7 @@ pub struct RemoteJob {
     pub scheduler: String,
     /// The PGID (Direct) or JobID (scheduler) the job launched under.
     pub launch_handle: String,
+    pub cluster: Option<String>,
     /// The `EngineId` string (`hartree`).
     pub engine_id: String,
     /// Engine-specific job kind (e.g. the task controller id).
@@ -96,6 +100,10 @@ pub struct RemoteJob {
     pub last_polled_at_ms: Option<i64>,
     /// From `.exit`; `None` until terminal.
     pub exit_code: Option<i64>,
+    pub scheduler_state: Option<String>,
+    pub reason: Option<String>,
+    pub console_offset: u64,
+    pub unknown_since_ms: Option<i64>,
 }
 
 /// Path to the global registry database, alongside `settings.json`.
@@ -133,6 +141,7 @@ fn create_schema(conn: &Connection) -> Result<()> {
             remote_dir text,
             scheduler text,
             launch_handle text,
+            cluster text,
             engine_id text,
             job_kind text,
             project_root text,
@@ -141,6 +150,10 @@ fn create_schema(conn: &Connection) -> Result<()> {
             submitted_at_ms integer not null default 0,
             last_polled_at_ms integer,
             exit_code integer
+            ,scheduler_state text
+            ,reason text
+            ,console_offset integer not null default 0
+            ,unknown_since_ms integer
         );
         create index if not exists remote_jobs_host_idx on remote_jobs (host_id);
         ",
@@ -206,6 +219,20 @@ fn ensure_columns(conn: &Connection) -> Result<()> {
         "exit_code",
         "alter table remote_jobs add column exit_code integer",
     )?;
+    add_column("cluster", "alter table remote_jobs add column cluster text")?;
+    add_column(
+        "scheduler_state",
+        "alter table remote_jobs add column scheduler_state text",
+    )?;
+    add_column("reason", "alter table remote_jobs add column reason text")?;
+    add_column(
+        "console_offset",
+        "alter table remote_jobs add column console_offset integer not null default 0",
+    )?;
+    add_column(
+        "unknown_since_ms",
+        "alter table remote_jobs add column unknown_since_ms integer",
+    )?;
     Ok(())
 }
 
@@ -213,10 +240,11 @@ fn ensure_columns(conn: &Connection) -> Result<()> {
 pub fn upsert(conn: &Connection, job: &RemoteJob) -> Result<()> {
     conn.execute(
         "insert or replace into remote_jobs (
-            run_uuid, host_id, host_label, remote_dir, scheduler, launch_handle,
+            run_uuid, host_id, host_label, remote_dir, scheduler, launch_handle, cluster,
             engine_id, job_kind, project_root, local_run_dir, status,
-            submitted_at_ms, last_polled_at_ms, exit_code
-        ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+            submitted_at_ms, last_polled_at_ms, exit_code, scheduler_state, reason,
+            console_offset, unknown_since_ms
+        ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
         params![
             job.run_uuid,
             job.host_id,
@@ -224,6 +252,7 @@ pub fn upsert(conn: &Connection, job: &RemoteJob) -> Result<()> {
             job.remote_dir,
             job.scheduler,
             job.launch_handle,
+            job.cluster,
             job.engine_id,
             job.job_kind,
             job.project_root,
@@ -232,32 +261,43 @@ pub fn upsert(conn: &Connection, job: &RemoteJob) -> Result<()> {
             job.submitted_at_ms,
             job.last_polled_at_ms,
             job.exit_code,
+            job.scheduler_state,
+            job.reason,
+            job.console_offset as i64,
+            job.unknown_since_ms,
         ],
     )?;
     Ok(())
 }
 
-/// Record the result of a refresh: status, exit code (when terminal), and the
-/// poll timestamp.
-pub fn record_poll(
+pub struct RemoteObservationUpdate<'a> {
+    pub status: RemoteJobStatus,
+    pub exit_code: Option<i64>,
+    pub scheduler_state: Option<&'a str>,
+    pub reason: Option<&'a str>,
+    pub console_offset: u64,
+    pub unknown_since_ms: Option<i64>,
+    pub polled_at_ms: i64,
+}
+
+pub fn record_observation(
     conn: &Connection,
     run_uuid: &str,
-    status: RemoteJobStatus,
-    exit_code: Option<i64>,
-    polled_at_ms: i64,
+    update: RemoteObservationUpdate<'_>,
 ) -> Result<()> {
     conn.execute(
-        "update remote_jobs set status = ?2, exit_code = ?3, last_polled_at_ms = ?4 where run_uuid = ?1",
-        params![run_uuid, status.token(), exit_code, polled_at_ms],
+        "update remote_jobs set status = ?2, exit_code = ?3, scheduler_state = ?4, reason = ?5, console_offset = ?6, unknown_since_ms = ?7, last_polled_at_ms = ?8 where run_uuid = ?1",
+        params![run_uuid, update.status.token(), update.exit_code, update.scheduler_state, update.reason, update.console_offset as i64, update.unknown_since_ms, update.polled_at_ms],
     )?;
     Ok(())
 }
 
-/// All non-terminal rows (`queued`/`running`), oldest first — the reconnect set.
+/// All non-terminal rows (`queued`/`running`/`cancelling`), oldest first — the
+/// reconnect set.
 pub fn list_non_terminal(conn: &Connection) -> Result<Vec<RemoteJob>> {
     query(
         conn,
-        "where status in ('queued', 'running') order by submitted_at_ms",
+        "where status in ('queued', 'running', 'cancelling') order by submitted_at_ms",
         [],
     )
 }
@@ -288,8 +328,9 @@ pub fn remove(conn: &Connection, run_uuid: &str) -> Result<()> {
 }
 
 const COLUMNS: &str = "run_uuid, host_id, host_label, remote_dir, scheduler, \
-     launch_handle, engine_id, job_kind, project_root, local_run_dir, status, \
-     submitted_at_ms, last_polled_at_ms, exit_code";
+     launch_handle, cluster, engine_id, job_kind, project_root, local_run_dir, status, \
+     submitted_at_ms, last_polled_at_ms, exit_code, scheduler_state, reason, console_offset, \
+     unknown_since_ms";
 
 fn query(conn: &Connection, tail: &str, params: impl rusqlite::Params) -> Result<Vec<RemoteJob>> {
     let sql = format!("select {COLUMNS} from remote_jobs {tail}");
@@ -301,7 +342,7 @@ fn query(conn: &Connection, tail: &str, params: impl rusqlite::Params) -> Result
 }
 
 fn row_to_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<RemoteJob> {
-    let status: String = row.get(10)?;
+    let status: String = row.get(11)?;
     Ok(RemoteJob {
         run_uuid: row.get(0)?,
         host_id: row.get(1)?,
@@ -309,15 +350,20 @@ fn row_to_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<RemoteJob> {
         remote_dir: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
         scheduler: row.get::<_, Option<String>>(4)?.unwrap_or_default(),
         launch_handle: row.get::<_, Option<String>>(5)?.unwrap_or_default(),
-        engine_id: row.get::<_, Option<String>>(6)?.unwrap_or_default(),
-        job_kind: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
-        project_root: row.get(8)?,
-        local_run_dir: row.get::<_, Option<String>>(9)?.unwrap_or_default(),
+        cluster: row.get(6)?,
+        engine_id: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
+        job_kind: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
+        project_root: row.get(9)?,
+        local_run_dir: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
         // An unknown token degrades to Lost rather than failing the load.
         status: RemoteJobStatus::from_token(&status).unwrap_or(RemoteJobStatus::Lost),
-        submitted_at_ms: row.get(11)?,
-        last_polled_at_ms: row.get(12)?,
-        exit_code: row.get(13)?,
+        submitted_at_ms: row.get(12)?,
+        last_polled_at_ms: row.get(13)?,
+        exit_code: row.get(14)?,
+        scheduler_state: row.get(15)?,
+        reason: row.get(16)?,
+        console_offset: row.get::<_, i64>(17)?.max(0) as u64,
+        unknown_since_ms: row.get(18)?,
     })
 }
 
@@ -341,6 +387,7 @@ mod tests {
             remote_dir: format!("~/.silicolab/runs/{run_uuid}"),
             scheduler: "direct".to_string(),
             launch_handle: "12345".to_string(),
+            cluster: None,
             engine_id: "hartree".to_string(),
             job_kind: "qm-energy".to_string(),
             project_root: Some("/work/proj".to_string()),
@@ -349,6 +396,10 @@ mod tests {
             submitted_at_ms: 1000,
             last_polled_at_ms: None,
             exit_code: None,
+            scheduler_state: None,
+            reason: None,
+            console_offset: 0,
+            unknown_since_ms: None,
         }
     }
 
@@ -366,6 +417,7 @@ mod tests {
         for status in [
             RemoteJobStatus::Queued,
             RemoteJobStatus::Running,
+            RemoteJobStatus::Cancelling,
             RemoteJobStatus::Done,
             RemoteJobStatus::Failed,
             RemoteJobStatus::Lost,
@@ -410,7 +462,20 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].run_uuid, "a");
 
-        record_poll(&conn, "a", RemoteJobStatus::Done, Some(0), 2000).expect("record");
+        record_observation(
+            &conn,
+            "a",
+            RemoteObservationUpdate {
+                status: RemoteJobStatus::Done,
+                exit_code: Some(0),
+                scheduler_state: None,
+                reason: None,
+                console_offset: 0,
+                unknown_since_ms: None,
+                polled_at_ms: 2000,
+            },
+        )
+        .expect("record");
         assert!(list_non_terminal(&conn).expect("list").is_empty());
         let done = get(&conn, "a").expect("query").expect("present");
         assert_eq!(done.status, RemoteJobStatus::Done);
@@ -442,5 +507,67 @@ mod tests {
         assert_eq!(proj[0].run_uuid, "a");
 
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn older_registry_gains_scheduler_observation_columns() {
+        let path = std::env::temp_dir().join(format!(
+            "silicolab-jobs-old-{}.db",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "create table remote_jobs (run_uuid text primary key, host_id text not null, status text not null);",
+        )
+        .unwrap();
+        drop(conn);
+        let conn = open_at(&path).unwrap();
+        let columns = conn
+            .prepare("pragma table_info(remote_jobs)")
+            .unwrap()
+            .query_map([], |row| row.get::<_, String>(1))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap();
+        for column in [
+            "cluster",
+            "scheduler_state",
+            "reason",
+            "console_offset",
+            "unknown_since_ms",
+        ] {
+            assert!(columns.iter().any(|item| item == column));
+        }
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn scheduler_observation_round_trips() {
+        let (conn, path) = temp_db();
+        let mut job = sample("a");
+        job.scheduler = "slurm".to_string();
+        job.cluster = Some("alpha".to_string());
+        upsert(&conn, &job).unwrap();
+        record_observation(
+            &conn,
+            "a",
+            RemoteObservationUpdate {
+                status: RemoteJobStatus::Queued,
+                exit_code: None,
+                scheduler_state: Some("PENDING"),
+                reason: Some("Resources"),
+                console_offset: 128,
+                unknown_since_ms: Some(2000),
+                polled_at_ms: 2500,
+            },
+        )
+        .unwrap();
+        let loaded = get(&conn, "a").unwrap().unwrap();
+        assert_eq!(loaded.cluster.as_deref(), Some("alpha"));
+        assert_eq!(loaded.scheduler_state.as_deref(), Some("PENDING"));
+        assert_eq!(loaded.reason.as_deref(), Some("Resources"));
+        assert_eq!(loaded.console_offset, 128);
+        assert_eq!(loaded.unknown_since_ms, Some(2000));
+        let _ = std::fs::remove_file(path);
     }
 }

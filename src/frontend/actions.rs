@@ -282,6 +282,9 @@ pub enum AppAction {
     RemoveRemoteHost(String),
     /// Detect GROMACS on the host with this id (worker thread).
     DetectRemoteGromacs(String),
+    DetectRemoteSlurm(String),
+    RefreshSlurmCapabilities(String),
+    TestRemoteSlurm(String),
     /// Test passwordless login to the host with this id (worker thread).
     CheckRemoteHost(String),
     /// Generate the dedicated key (if needed) and show the one-line install

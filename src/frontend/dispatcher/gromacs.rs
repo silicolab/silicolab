@@ -16,6 +16,7 @@ pub(crate) fn relay_gromacs_job(
     host: crate::backend::config::RemoteHost,
     engine_label: &str,
     job: GromacsJob,
+    resources: crate::backend::config::JobResources,
 ) {
     if let Some(task_run_id) = state.active_task_run {
         state
@@ -23,7 +24,7 @@ pub(crate) fn relay_gromacs_job(
             .set_engine_label(task_run_id, Some(engine_label.to_string()));
         sync_task_manifest(state, task_run_id);
     }
-    start_remote_engine(state, host, crate::wire::Engine::Gromacs(job), None);
+    start_remote_engine(state, host, crate::wire::Engine::Gromacs(job), resources);
 }
 
 /// Apply a retrieved remote GROMACS outcome: log the summary, and — only when the

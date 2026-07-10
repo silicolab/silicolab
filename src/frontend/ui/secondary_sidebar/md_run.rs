@@ -383,6 +383,8 @@ pub(crate) fn render_md_run_task_panel(
             crate::frontend::state::ExecutionCaps {
                 cores: true,
                 gpu: true,
+                memory: true,
+                walltime: true,
                 ..Default::default()
             },
             &hosts,

@@ -47,6 +47,23 @@ pub struct RemoteHostDraft {
     pub prelude: String,
     /// Remote path to `gmx` (or a bare name resolved via the prelude/PATH).
     pub gmx_program: String,
+    pub slurm: bool,
+    pub scheduler_prelude: String,
+    pub partition: String,
+    pub account: String,
+    pub qos: String,
+    pub reservation: String,
+    pub constraint: String,
+    pub default_cpus: String,
+    pub default_memory_mib: String,
+    pub default_walltime_minutes: String,
+    pub default_gpu_kind: String,
+    pub default_gpu_count: String,
+    pub default_gpu_type: String,
+    pub gpu_syntax: String,
+    pub gres_name: String,
+    pub custom_gpu_argument: String,
+    pub extra_args: String,
 }
 
 impl RemoteHostDraft {
@@ -64,7 +81,102 @@ impl RemoteHostDraft {
             work_root: host.work_root.clone(),
             prelude: host.prelude.join("\n"),
             gmx_program,
+            slurm: matches!(
+                host.scheduler,
+                crate::backend::config::SchedulerConfig::Slurm(_)
+            ),
+            scheduler_prelude: match &host.scheduler {
+                crate::backend::config::SchedulerConfig::Slurm(profile) => {
+                    profile.scheduler_prelude.join("\n")
+                }
+                _ => String::new(),
+            },
+            partition: slurm_value(host, |profile| profile.partition.as_deref()),
+            account: slurm_value(host, |profile| profile.account.as_deref()),
+            qos: slurm_value(host, |profile| profile.qos.as_deref()),
+            reservation: slurm_value(host, |profile| profile.reservation.as_deref()),
+            constraint: slurm_value(host, |profile| profile.constraint.as_deref()),
+            default_cpus: host
+                .resources
+                .cpus_per_task
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            default_memory_mib: host
+                .resources
+                .memory_mib
+                .map(|value| value.to_string())
+                .unwrap_or_default(),
+            default_walltime_minutes: host
+                .resources
+                .walltime_seconds
+                .map(|value| (value / 60).to_string())
+                .unwrap_or_default(),
+            default_gpu_kind: match host.resources.gpu {
+                crate::backend::config::GpuRequest::None => "none",
+                crate::backend::config::GpuRequest::Any { .. } => "any",
+                crate::backend::config::GpuRequest::Typed { .. } => "typed",
+            }
+            .to_string(),
+            default_gpu_count: match &host.resources.gpu {
+                crate::backend::config::GpuRequest::None => String::new(),
+                crate::backend::config::GpuRequest::Any { count }
+                | crate::backend::config::GpuRequest::Typed { count, .. } => count.to_string(),
+            },
+            default_gpu_type: match &host.resources.gpu {
+                crate::backend::config::GpuRequest::Typed { gpu_type, .. } => gpu_type.clone(),
+                _ => String::new(),
+            },
+            gpu_syntax: match &host.scheduler {
+                crate::backend::config::SchedulerConfig::Slurm(profile) => match profile.gpu_syntax
+                {
+                    crate::backend::config::SlurmGpuSyntax::Gpus => "gpus",
+                    crate::backend::config::SlurmGpuSyntax::CustomTemplate { .. } => "custom",
+                    _ => "gres",
+                }
+                .to_string(),
+                _ => "gres".to_string(),
+            },
+            gres_name: match &host.scheduler {
+                crate::backend::config::SchedulerConfig::Slurm(profile) => {
+                    match &profile.gpu_syntax {
+                        crate::backend::config::SlurmGpuSyntax::Gres { resource_name } => {
+                            resource_name.clone()
+                        }
+                        _ => "gpu".to_string(),
+                    }
+                }
+                _ => "gpu".to_string(),
+            },
+            custom_gpu_argument: match &host.scheduler {
+                crate::backend::config::SchedulerConfig::Slurm(profile) => {
+                    match &profile.gpu_syntax {
+                        crate::backend::config::SlurmGpuSyntax::CustomTemplate { argument } => {
+                            argument.clone()
+                        }
+                        _ => String::new(),
+                    }
+                }
+                _ => String::new(),
+            },
+            extra_args: match &host.scheduler {
+                crate::backend::config::SchedulerConfig::Slurm(profile) => {
+                    profile.extra_args.join("\n")
+                }
+                _ => String::new(),
+            },
         }
+    }
+}
+
+fn slurm_value(
+    host: &crate::backend::config::RemoteHost,
+    get: impl FnOnce(&crate::backend::config::SlurmProfile) -> Option<&str>,
+) -> String {
+    match &host.scheduler {
+        crate::backend::config::SchedulerConfig::Slurm(profile) => {
+            get(profile).unwrap_or_default().to_string()
+        }
+        _ => String::new(),
     }
 }
 

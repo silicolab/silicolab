@@ -277,6 +277,8 @@ pub(crate) fn render_qm_task_panel(
             &mut prompt.prefs,
             crate::frontend::state::ExecutionCaps {
                 cores: true,
+                memory: true,
+                walltime: true,
                 ..Default::default()
             },
             &hosts,
@@ -440,7 +442,11 @@ pub(crate) fn render_docking_task_panel(
         crate::frontend::ui::execution_section(
             ui,
             &mut prompt.prefs,
-            crate::frontend::state::ExecutionCaps::default(),
+            crate::frontend::state::ExecutionCaps {
+                memory: true,
+                walltime: true,
+                ..Default::default()
+            },
             &hosts,
             actions,
         );

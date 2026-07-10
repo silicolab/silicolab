@@ -89,7 +89,8 @@ pub(crate) fn start_material_md_build(
                 max_duration: Duration::from_secs(60 * 60),
             },
         );
-        relay_gromacs_job(state, host, "GROMACS", job);
+        let resources = prompt.prefs.job_resources();
+        relay_gromacs_job(state, host, "GROMACS", job, resources);
         return true;
     }
 
@@ -178,7 +179,8 @@ pub(crate) fn start_gromacs_md_build(
                 max_duration: Duration::from_secs(60 * 60),
             },
         );
-        relay_gromacs_job(state, host, "GROMACS", job);
+        let resources = prompt.prefs.job_resources();
+        relay_gromacs_job(state, host, "GROMACS", job, resources);
         return true;
     }
 

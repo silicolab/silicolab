@@ -89,6 +89,7 @@ fn direct_remote_qm_matches_in_process_within_tolerance() {
         engines: Default::default(),
         engine_versions: Default::default(),
         resources: Default::default(),
+        scheduler: Default::default(),
     };
     let run_uuid = uuid::Uuid::new_v4().to_string();
     let target = RemoteTarget::for_run(&host, &run_uuid);
@@ -104,6 +105,8 @@ fn direct_remote_qm_matches_in_process_within_tolerance() {
         launcher: Launcher::Direct,
         working_dir: working_dir.clone(),
         worker_path: deployed.remote_path,
+        resources: Default::default(),
+        slurm_profile: None,
     };
 
     let EngineOutcome::Qm(remote) = drain(run_job(

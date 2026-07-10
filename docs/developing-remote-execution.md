@@ -237,6 +237,18 @@ Run the direct QM parity test:
 cargo test -p compute-core --features dev-worker --test remote_direct -- --ignored --nocapture
 ```
 
+For a Slurm fixture, also set the host/user variables and run:
+
+```text
+cargo test -p compute-core --features dev-worker --test remote_slurm -- --ignored --nocapture
+```
+
+The Slurm test deploys the same current-source worker, submits through the shared
+bundle launcher, checks CPU, memory, and typed GPU TRES, retrieves a real QM
+outcome, and confirms cancellation. It expects the configured partition to be
+`debug`, the GPU type to be `rtx4070`, and `sacct` to be unavailable so the
+`scontrol` terminal-state fallback is exercised.
+
 The detached frontend tests exercise QM, docking, and GROMACS:
 
 ```text
@@ -288,6 +300,18 @@ redeployment also fails, inspect SSH permissions and free space under the
 host's configured work root.
 
 **SSH setup or host-key verification fails.** Follow the end-user
-[remote host setup](../docs-site/src/content/docs/getting-started/remote-execution.md#set-up-a-host).
+[remote host setup](../docs-site/src/content/docs/getting-started/remote-execution.md#set-up-ssh).
 The development path reuses the same hardened SSH/SCP transport and does not
 weaken host-key checks.
+
+**A Slurm job stays queued.** Inspect the task monitor's scheduler reason, then
+verify the partition, account, QOS, constraint, and requested GPU type. The
+capability refresh is a suggestion cache; the scheduler remains authoritative.
+
+**The scheduler test reports that the worker is not visible.** Configure a work
+root on a filesystem shared by the login and compute nodes. Deployment through
+the login node cannot make a node-local path visible elsewhere.
+
+**`sacct` is unavailable.** This is supported. Active state comes from `squeue`,
+and terminal state falls back to `scontrol` for as long as the controller retains
+the job record.
