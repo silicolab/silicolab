@@ -329,14 +329,14 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
             with_md_run_prompt(state, |prompt| prompt.toggle_stage_expanded(index))
         }
         AppAction::RefreshEngineRegistry => reprobe_engines(state),
-        AppAction::DetectEngineVersions => detect_engine_versions(state),
-        AppAction::ApplyEngineOverride(id) => apply_engine_override(state, id),
-        AppAction::ClearEngineOverride(id) => clear_engine_override(state, id),
+        AppAction::VerifyEngine { target, engine } => verify_engine(state, target, engine),
+        AppAction::ClearEngineLaunch { target, engine } => {
+            clear_engine_launch(state, target, engine)
+        }
         AppAction::BrowseEngineProgram(id) => browse_engine_program(state, id),
         AppAction::AddRemoteHost => add_remote_host(state),
         AppAction::SaveRemoteHost(id) => save_remote_host(state, id),
         AppAction::RemoveRemoteHost(id) => remove_remote_host(state, id),
-        AppAction::DetectRemoteGromacs(id) => detect_remote_gromacs(state, id),
         AppAction::DetectRemoteSlurm(id) => detect_remote_slurm(state, id),
         AppAction::RefreshSlurmCapabilities(id) => refresh_slurm_capabilities(state, id),
         AppAction::TestRemoteSlurm(id) => test_remote_slurm(state, id),

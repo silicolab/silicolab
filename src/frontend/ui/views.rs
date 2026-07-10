@@ -1,5 +1,6 @@
 use super::*;
 
+mod engine_row;
 mod engines;
 mod remote;
 

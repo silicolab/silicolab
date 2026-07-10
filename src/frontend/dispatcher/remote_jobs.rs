@@ -129,20 +129,14 @@ pub(crate) fn poll_remote_submit(state: &mut AppState, ctx: &egui::Context) {
                 detected_launches,
             } = *submitted;
             if let Some(host) = state.config.remote_hosts.get_mut(&host_id) {
-                host.engine_versions.insert(
-                    crate::engines::remote::deploy::WORKER_DEPLOYMENT_KEY.to_string(),
-                    deployment_id,
-                );
+                host.worker_deployment = Some(deployment_id);
                 // Cache launches the submission had to probe, so the next one skips
                 // the SSH round trip. `cache_detected` never clobbers a configured
-                // launch — and a probe only ran because none was configured.
+                // launch — and a probe only ran because none was configured. A probe
+                // verifies what it finds, so its version is a proof of that launch.
                 for detected in detected_launches {
                     host.engines
-                        .cache_detected(detected.engine, detected.launch);
-                    if let Some(version) = detected.version {
-                        host.engine_versions
-                            .insert(detected.engine.as_str().to_string(), version);
-                    }
+                        .cache_detected(detected.engine, detected.launch, detected.version);
                 }
                 if let Err(error) = save_config(&state.config) {
                     state.output_log.push(format!(

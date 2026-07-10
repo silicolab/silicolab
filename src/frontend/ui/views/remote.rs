@@ -51,16 +51,82 @@ fn remote_status_indicator(
     }
 }
 
-/// The Remote Hosts editor (Settings → Engines → Remote Hosts). Lists configured
-/// hosts with editable connection fields, a Detect/Test/Set-up-passwordless row,
-/// and an "add host" form. Network actions run on worker threads (see the
-/// dispatcher), so the panel stays responsive.
+/// One launch editor per external engine on `id`, the same widget this machine's
+/// engines use. The stored host supplies the status (and its verification); the
+/// draft supplies what is being edited.
+fn render_host_engines(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    id: &str,
+    actions: &mut Vec<AppAction>,
+) {
+    use crate::backend::config::ComputeTarget;
+    use crate::engines::registry::{EngineStatus, external_engine_specs};
+    use crate::frontend::ui::views::engine_row::{EngineRow, engine_row};
+
+    let target = ComputeTarget::Remote(id.to_string());
+    for spec in external_engine_specs() {
+        let status = match state
+            .config
+            .remote_hosts
+            .get(id)
+            .and_then(|host| host.engines.entry(spec.id))
+        {
+            Some(entry) => match &entry.verified {
+                Some(verified) => EngineStatus::Verified {
+                    launch: entry.launch.clone(),
+                    version: verified.version.clone(),
+                    checked_at: verified.checked_at,
+                },
+                None => EngineStatus::Unverified {
+                    launch: entry.launch.clone(),
+                },
+            },
+            None => EngineStatus::NotConfigured,
+        };
+        let probe = state
+            .ui
+            .settings
+            .engine_probe
+            .get(&(target.clone(), spec.id.as_str()))
+            .cloned();
+        let Some(draft) = state.ui.settings.remote_host_drafts.get_mut(id) else {
+            return;
+        };
+        let draft = draft
+            .engines
+            .entry(spec.id.as_str().to_string())
+            .or_default();
+
+        engine_row(
+            ui,
+            EngineRow {
+                target: target.clone(),
+                engine: spec.id,
+                name: spec.name,
+                description: spec.description,
+                status,
+                probe,
+                // A remote path is not on this filesystem; there is nothing to browse.
+                browsable: false,
+            },
+            draft,
+            actions,
+        );
+    }
+}
+
+/// The Remote Hosts editor (Settings → Compute → Remote hosts). Lists configured
+/// hosts with editable connection fields, each host's engine launches, a
+/// Test/Set-up-passwordless row, and an "add host" form. Every action here commits
+/// the host's draft first, so what it contacts is what the user is looking at.
+/// Network work runs on worker threads (see the dispatcher), so the panel stays
+/// responsive.
 pub(crate) fn render_remote_hosts_settings(
     state: &mut AppState,
     ui: &mut egui::Ui,
     actions: &mut Vec<AppAction>,
 ) {
-    use crate::engines::registry::EngineId;
     use crate::frontend::state::RemoteHostDraft;
 
     let pal = crate::frontend::theme::palette(ui);
@@ -111,12 +177,6 @@ pub(crate) fn render_remote_hosts_settings(
             Some((bid, cmd)) if bid == id => Some(cmd.clone()),
             _ => None,
         };
-        let version = state.config.remote_hosts.get(id).and_then(|host| {
-            host.engine_versions
-                .get(EngineId::GROMACS.as_str())
-                .cloned()
-        });
-
         ui.separator();
         ui.horizontal(|ui| {
             ui.label(RichText::new(label).strong());
@@ -140,7 +200,6 @@ pub(crate) fn render_remote_hosts_settings(
                     .desired_rows(2)
                     .desired_width(f32::INFINITY),
             );
-            remote_host_field(ui, "GROMACS path:", &mut draft.gmx_program);
             ui.horizontal(|ui| {
                 ui.label("Execution backend:");
                 ui.selectable_value(&mut draft.slurm, false, "Direct SSH");
@@ -193,19 +252,12 @@ pub(crate) fn render_remote_hosts_settings(
                 });
             }
         }
-        if let Some(version) = &version {
-            ui.label(caption_text(
-                format!("Detected GROMACS {version}"),
-                pal.status_green,
-            ));
-        }
+
+        render_host_engines(state, ui, id, actions);
 
         ui.horizontal(|ui| {
             if ui.button("Save").clicked() {
                 actions.push(AppAction::SaveRemoteHost(id.clone()));
-            }
-            if ui.button("Detect GROMACS").clicked() {
-                actions.push(AppAction::DetectRemoteGromacs(id.clone()));
             }
             if ui.button("Test connection").clicked() {
                 actions.push(AppAction::CheckRemoteHost(id.clone()));
@@ -291,11 +343,8 @@ pub(crate) fn render_remote_hosts_settings(
             .desired_rows(2)
             .desired_width(f32::INFINITY),
     );
-    remote_host_field(
-        ui,
-        "GROMACS path (optional — use Detect after adding):",
-        &mut draft.gmx_program,
-    );
+    // No engine editor here: verifying one needs a host to reach, so engines are
+    // configured on the host's own card once it exists.
     ui.horizontal(|ui| {
         ui.label("Execution backend:");
         ui.selectable_value(&mut draft.slurm, false, "Direct SSH");

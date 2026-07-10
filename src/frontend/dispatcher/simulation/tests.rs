@@ -4,6 +4,11 @@ use crate::frontend::state::{MonitorSource, RemoteGpuLive};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use crate::backend::config::ComputeTarget;
+use crate::backend::engine_launch::VerifyOutcome;
+use crate::engines::registry::{EngineId, EngineLaunch};
+use crate::frontend::state::EngineDraft;
+
 /// A running-monitor handle bound to `host_id`. We never read the receiver in
 /// these tests, so a dropped sender is harmless; the returned `cancel` flag lets
 /// the caller assert whether the sampler was told to stop.
@@ -26,6 +31,49 @@ fn live(host_id: &str) -> RemoteGpuLive {
         gpus: Vec::new(),
         last_error: None,
     }
+}
+
+#[test]
+fn verification_result_does_not_overwrite_an_edited_launch() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let checked = EngineLaunch::native("old-gmx");
+    state
+        .config
+        .engine_overrides
+        .insert(EngineId::GROMACS, checked.clone());
+    state.ui.settings.engine_drafts.insert(
+        EngineId::GROMACS.as_str().to_string(),
+        EngineDraft::from_launch(&EngineLaunch::native("new-gmx")),
+    );
+
+    apply_verify_outcome(
+        &mut state,
+        ComputeTarget::Local,
+        EngineId::GROMACS,
+        Some(checked.clone()),
+        VerifyOutcome::Verified {
+            launch: checked,
+            version: "2026.2".to_string(),
+        },
+    );
+
+    let draft = state
+        .ui
+        .settings
+        .engine_drafts
+        .get(EngineId::GROMACS.as_str())
+        .and_then(EngineDraft::to_launch)
+        .expect("edited launch remains in the draft");
+    assert_eq!(draft.program, "new-gmx");
+    assert!(
+        state
+            .config
+            .engine_overrides
+            .entry(EngineId::GROMACS)
+            .and_then(|entry| entry.verified.as_ref())
+            .is_none(),
+        "the stale result must not be attached to persisted config"
+    );
 }
 
 #[test]

@@ -53,16 +53,11 @@ fn host() -> Option<RemoteHost> {
         label: "Slurm test".into(),
         hostname,
         username,
-        port: 22,
-        work_root: "~/.silicolab".into(),
-        prelude: Vec::new(),
-        engines: Default::default(),
-        engine_versions: Default::default(),
-        resources: Default::default(),
         scheduler: SchedulerConfig::Slurm(SlurmProfile {
             partition: Some("debug".into()),
             ..Default::default()
         }),
+        ..Default::default()
     })
 }
 

@@ -7,14 +7,14 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Result, bail};
 
 use crate::engines::gromacs::topology::TopologySource;
 use crate::{
     domain::Structure,
     engines::{
         gromacs::{AnalysisContext, render_top},
-        registry::{EngineId, EngineLaunch, EngineRegistry},
+        registry::{EngineId, EngineLaunch},
     },
     frontend::{
         md_support::{
@@ -29,14 +29,16 @@ use crate::{
 pub const STAGE_TIMEOUT: Duration = Duration::from_secs(6 * 60 * 60);
 pub const ANALYSIS_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
+/// The `gmx` launch for a console-driven MD command on this machine. Delegates to
+/// the one resolver, so a console command finds GROMACS exactly where a panel run
+/// does — including a WSL install, which this used to miss.
 pub fn resolve_launch(state: &AppState) -> Result<EngineLaunch> {
-    let registry = EngineRegistry::probe(&state.config.engine_overrides);
-    registry.launch(EngineId::GROMACS).cloned().ok_or_else(|| {
-        anyhow!(
-            "Could not find GROMACS. Install it and ensure `gmx` is on PATH, or configure its \
-             launch (including WSL) in Settings -> Engines."
-        )
-    })
+    use crate::backend::engine_launch::{LaunchTarget, resolve_engine_launch};
+    Ok(resolve_engine_launch(
+        LaunchTarget::Local(&state.config.engine_overrides),
+        EngineId::GROMACS,
+    )?
+    .launch)
 }
 
 /// Load the MD system context recorded by the active entry's build, or derive a

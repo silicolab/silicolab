@@ -7,16 +7,11 @@ fn host_with_cores(cores: Option<usize>) -> crate::backend::config::RemoteHost {
         label: "H".into(),
         hostname: "example.com".into(),
         username: "alice".into(),
-        port: 22,
-        work_root: "~/.silicolab".into(),
-        prelude: Vec::new(),
-        engines: Default::default(),
-        engine_versions: Default::default(),
         resources: ResourceSpec {
             cpus_per_task: cores.map(|value| value as u32),
             ..Default::default()
         },
-        scheduler: Default::default(),
+        ..Default::default()
     }
 }
 

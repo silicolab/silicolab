@@ -4,9 +4,9 @@ use eframe::egui;
 
 use crate::frontend::actions::ResidueSelectionMode;
 use crate::frontend::state::{
-    DisorderedSystemPrompt, DockingPrompt, EngineDraft, EntryListState, LayoutState, MdRunPrompt,
-    MdSystemPrompt, OptimizationPrompt, PendingPtm, ProteinPrepPrompt, QmPrompt, RemoteHostDraft,
-    RemoteHostStatus, SupercellPrompt,
+    DisorderedSystemPrompt, DockingPrompt, EngineDraft, EngineProbeState, EntryListState,
+    LayoutState, MdRunPrompt, MdSystemPrompt, OptimizationPrompt, PendingPtm, ProteinPrepPrompt,
+    QmPrompt, RemoteHostDraft, RemoteHostStatus, SupercellPrompt,
 };
 use crate::frontend::{
     AtomSelection, BuildingBlockEditor, CommandConsoleState, NanosheetBuilderPanel,
@@ -16,16 +16,24 @@ use crate::frontend::{
 
 use super::monitor::{MonitorHistory, RemoteGpuLive};
 
-/// State backing the Settings primary view. The engine registry is probed
-/// lazily (probing spawns `--version` subprocesses) and cached here.
+/// State backing the Settings primary view. The engine registry is a cheap,
+/// cached resolve of what is *configured*; what actually runs is only ever
+/// established by an explicit Verify, tracked in `engine_probe`.
 #[derive(Debug, Clone, Default)]
 pub struct SettingsState {
     pub engine_registry: Option<crate::engines::registry::EngineRegistry>,
+    /// This machine's per-engine editable drafts, keyed by engine id. A remote
+    /// host's live in its own [`RemoteHostDraft`].
     pub engine_drafts: BTreeMap<String, EngineDraft>,
-    /// When engine `--version` strings were last detected. Detection is slow
-    /// (a WSL launch cold-starts the VM), so it runs only on explicit user
-    /// request; the panel shows this so the displayed versions can be judged.
-    pub engine_versions_checked_at: Option<std::time::SystemTime>,
+    /// In-flight and failed verifications, keyed by the target and engine they
+    /// concern. Successes are not here: they are persisted onto the launch they
+    /// verified. A failure is a fact about the target right now, so it lives only
+    /// for the session, and carries the launch that produced it — the panel hides
+    /// it again as soon as the user edits that launch.
+    pub engine_probe: std::collections::HashMap<
+        (crate::backend::config::ComputeTarget, &'static str),
+        EngineProbeState,
+    >,
     /// Free-text filter for the settings panel sections.
     pub search_query: String,
     /// Category selected in the Settings modal's left rail. Drives which

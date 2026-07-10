@@ -1,12 +1,12 @@
 use std::sync::{Arc, atomic::AtomicBool, mpsc::Receiver};
 
-/// What a Remote Hosts settings probe is checking on a host.
+/// What a Remote Hosts settings probe is checking on a host. Engines are not here:
+/// verifying one is a question about a compute target, asked identically of the
+/// local machine, and lives in [`spawn_engine_verify`](super::spawn_engine_verify).
 #[derive(Debug, Clone, Copy)]
 pub enum RemoteProbeKind {
     /// Whether passwordless key login already works.
     Passwordless,
-    /// Detect a GROMACS executable + version on the host.
-    DetectGromacs,
     DetectSlurm,
     SlurmCapabilities,
     TestSlurm,
@@ -15,8 +15,6 @@ pub enum RemoteProbeKind {
 /// Result of a remote-host probe (sent back from the worker thread).
 pub enum RemoteProbeOutcome {
     Passwordless(bool),
-    /// `(program, version)` when GROMACS was found, else `None`.
-    Detected(Option<(String, String)>),
     SlurmDetected(crate::engines::remote::launcher::SlurmDetection),
     SlurmCapabilities(crate::engines::remote::launcher::SlurmCapabilities),
     SlurmTested(String, String),
@@ -51,10 +49,6 @@ pub fn spawn_remote_probe(
             RemoteProbeKind::Passwordless => {
                 RemoteProbeOutcome::Passwordless(remote::check_passwordless(&target))
             }
-            RemoteProbeKind::DetectGromacs => RemoteProbeOutcome::Detected(
-                crate::engines::registry::engine_spec(crate::engines::registry::EngineId::GROMACS)
-                    .and_then(|spec| remote::detect_remote_engine(&target, spec)),
-            ),
             RemoteProbeKind::DetectSlurm => remote::launcher::detect_slurm(&target)
                 .map(RemoteProbeOutcome::SlurmDetected)
                 .unwrap_or_else(|error| RemoteProbeOutcome::Failed(error.to_string())),

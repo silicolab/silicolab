@@ -211,8 +211,9 @@ pub fn registry() -> Vec<SettingDescriptor> {
         subgroup: None,
     });
 
-    // Compute. Groups render in first-appearance order: This machine, Engines,
-    // Remote hosts, Defaults for new jobs, Monitoring.
+    // Compute. Groups render in first-appearance order: This machine, Remote hosts,
+    // Built-in engines, Defaults for new jobs, Monitoring. The two target groups
+    // each hold that target's hardware and its engine launches.
 
     // This machine — read-only detected CPU / GPU / RAM inventory.
     items.push(SettingDescriptor {
@@ -232,16 +233,17 @@ pub fn registry() -> Vec<SettingDescriptor> {
         subgroup: None,
     });
 
-    // Engines — the local engine/binary editor. Strong keywords because search on
-    // a Custom descriptor is all-or-nothing on this metadata.
+    // This machine's external engines. Strong keywords because search on a Custom
+    // descriptor is all-or-nothing on this metadata.
     items.push(SettingDescriptor {
         id: "engines.registry",
         category: SettingCategory::Compute,
-        group: "Engines",
-        title: "Compute engines",
-        description: "",
+        group: "This machine",
+        title: "Engines",
+        description: "External engines this machine can run, and whether they work.",
         keywords: &[
-            "engine", "engines", "gromacs", "lammps", "path", "binary", "wsl", "version", "detect",
+            "engine", "engines", "gromacs", "lammps", "path", "binary", "wsl", "version", "verify",
+            "detect",
         ],
         control: Control::Custom(crate::frontend::ui::render_engine_settings),
         enabled: None,
@@ -289,6 +291,26 @@ pub fn registry() -> Vec<SettingDescriptor> {
             "remote", "ssh", "host", "hardware", "cpu", "gpu", "memory", "cluster", "linux",
         ],
         control: Control::Custom(crate::frontend::ui::settings_registry::remote::render),
+        enabled: None,
+        indent: false,
+        is_default: None,
+        reset: None,
+        subgroup: None,
+    });
+
+    // Built-in engines — compiled in, so they belong to no compute target and have
+    // nothing to configure. Read-only, and kept out of the launch editors above so
+    // a green check there always means "this launch was run and it worked".
+    items.push(SettingDescriptor {
+        id: "engines.builtin",
+        category: SettingCategory::Compute,
+        group: "Built-in engines",
+        title: "Included with SilicoLab",
+        description: "Always available; no setup and no external binary.",
+        keywords: &[
+            "builtin", "built-in", "hartree", "uff", "docking", "vina", "engine", "engines",
+        ],
+        control: Control::Custom(crate::frontend::ui::render_builtin_engines),
         enabled: None,
         indent: false,
         is_default: None,

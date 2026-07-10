@@ -270,9 +270,20 @@ pub enum AppAction {
     /// Open or close the detail view of the stage at the given index.
     ToggleMdRunStageExpanded(usize),
     RefreshEngineRegistry,
-    DetectEngineVersions,
-    ApplyEngineOverride(crate::engines::registry::EngineId),
-    ClearEngineOverride(crate::engines::registry::EngineId),
+    /// Commit this target's engine draft, then run the engine to confirm the launch
+    /// works (worker thread). With no program configured, it probes the target and
+    /// fills the field in with what it found.
+    VerifyEngine {
+        target: crate::backend::config::ComputeTarget,
+        engine: crate::engines::registry::EngineId,
+    },
+    /// Forget this target's configured launch, falling back to auto-detection.
+    ClearEngineLaunch {
+        target: crate::backend::config::ComputeTarget,
+        engine: crate::engines::registry::EngineId,
+    },
+    /// Pick this target's engine program with a file dialog (local targets only —
+    /// a remote path is not browsable from here).
     BrowseEngineProgram(crate::engines::registry::EngineId),
     /// Add a new remote host from the "add host" draft.
     AddRemoteHost,
@@ -280,8 +291,6 @@ pub enum AppAction {
     SaveRemoteHost(String),
     /// Remove the host with this id.
     RemoveRemoteHost(String),
-    /// Detect GROMACS on the host with this id (worker thread).
-    DetectRemoteGromacs(String),
     DetectRemoteSlurm(String),
     RefreshSlurmCapabilities(String),
     TestRemoteSlurm(String),
