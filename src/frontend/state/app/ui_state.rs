@@ -41,6 +41,14 @@ pub struct SettingsState {
     pub selected_category: crate::frontend::ui::settings_registry::SettingCategory,
     /// Per-host editable drafts (keyed by host id) for the Remote Hosts panel.
     pub remote_host_drafts: BTreeMap<String, RemoteHostDraft>,
+    /// Whether the add-host form is showing at the end of the target list. Adding a
+    /// host is an action, not a form that is always present; this is what the
+    /// action produces.
+    pub adding_host: bool,
+    /// One-shot: scroll the add-host form into view on the next render. The picker
+    /// that asks for the form can be in a different settings group, or in a task
+    /// panel, so the form it summons is often off-screen.
+    pub scroll_to_add_host: bool,
     /// The "add a host" form draft.
     pub new_remote_host: RemoteHostDraft,
     /// Per-host connection status (keyed by host id).

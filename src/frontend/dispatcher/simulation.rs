@@ -10,9 +10,9 @@ mod tests;
 
 pub(crate) use md_build::{FRAMEWORK_C_FLOOR_ANGSTROM, build_md_system};
 pub(crate) use remote::{
-    add_remote_host, check_remote_host, commit_remote_host_draft, detect_remote_slurm,
-    fetch_remote_hardware, refresh_slurm_capabilities, remove_remote_host, save_remote_host,
-    set_monitor_source, setup_remote_host_key, test_remote_slurm,
+    add_remote_host, cancel_add_remote_host, check_remote_host, commit_remote_host_draft,
+    detect_remote_slurm, fetch_remote_hardware, refresh_slurm_capabilities, remove_remote_host,
+    save_remote_host, set_monitor_source, setup_remote_host_key, test_remote_slurm,
 };
 
 pub(crate) fn start_pending_md_run(state: &mut AppState) {

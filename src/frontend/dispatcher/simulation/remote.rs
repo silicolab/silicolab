@@ -173,10 +173,18 @@ pub(crate) fn add_remote_host(state: &mut AppState) {
             let label = host.label.clone();
             state.config.remote_hosts.insert(id, host);
             state.ui.settings.new_remote_host = Default::default();
+            state.ui.settings.adding_host = false;
             persist_engine_config(state, &format!("Added remote host {label}"));
         }
+        // The form stays open with the draft intact, beside the field to fix.
         Err(error) => state.set_message(error.to_string()),
     }
+}
+
+/// Abandon the add-host form and its draft.
+pub(crate) fn cancel_add_remote_host(state: &mut AppState) {
+    state.ui.settings.new_remote_host = Default::default();
+    state.ui.settings.adding_host = false;
 }
 
 /// Validate the host's draft, store it, and hand back the committed host.

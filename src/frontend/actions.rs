@@ -299,9 +299,12 @@ pub enum AppAction {
     /// Generate the dedicated key (if needed) and show the one-line install
     /// command for the host with this id.
     SetupRemoteHostKey(String),
-    /// Open the Settings dialog at the Remote Hosts section (from the per-task
-    /// target picker's "Add host…" button).
-    OpenRemoteHostsSettings,
+    /// Show the add-host form in Compute targets, opening Settings there if it is
+    /// not already the visible pane. Emitted by the target picker's "Add a host…"
+    /// item and by the button at the end of the target list.
+    BeginAddRemoteHost,
+    /// Abandon the add-host form and its draft.
+    CancelAddRemoteHost,
     /// Set the global default compute target that new task panels seed from (each
     /// panel can still override it per run). Written to the settings file by the
     /// dispatcher.

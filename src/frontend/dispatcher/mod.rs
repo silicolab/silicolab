@@ -342,7 +342,8 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::TestRemoteSlurm(id) => test_remote_slurm(state, id),
         AppAction::CheckRemoteHost(id) => check_remote_host(state, id),
         AppAction::SetupRemoteHostKey(id) => setup_remote_host_key(state, id),
-        AppAction::OpenRemoteHostsSettings => open_remote_hosts_settings(state),
+        AppAction::BeginAddRemoteHost => begin_add_remote_host(state),
+        AppAction::CancelAddRemoteHost => cancel_add_remote_host(state),
         AppAction::SetDefaultComputeTarget(target) => set_default_compute_target(state, target),
         AppAction::SetDefaultTaskPanelPlacement(placement) => {
             set_default_task_panel_placement(state, placement)

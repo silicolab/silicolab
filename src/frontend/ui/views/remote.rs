@@ -222,13 +222,6 @@ pub(crate) fn render_remote_hosts_settings(
         .collect();
     hosts.sort_by_key(|host| host.1.to_lowercase());
 
-    if hosts.is_empty() {
-        ui.label(caption_text(
-            "No remote hosts configured yet.",
-            pal.text_muted,
-        ));
-    }
-
     for (id, label) in &hosts {
         // Seed the editable draft from the stored host on first show.
         if !state.ui.settings.remote_host_drafts.contains_key(id)
@@ -414,9 +407,22 @@ pub(crate) fn render_remote_hosts_settings(
         });
     }
 
-    egui::CollapsingHeader::new(RichText::new("Add a host").strong())
+    // Adding a host is an action, not a form that is always sitting here. Until it
+    // is asked for, the list ends with the button that asks.
+    ui.separator();
+    if !state.ui.settings.adding_host {
+        if ui
+            .button(format!("{}  Add a host", egui_phosphor::regular::PLUS))
+            .clicked()
+        {
+            actions.push(AppAction::BeginAddRemoteHost);
+        }
+        return;
+    }
+
+    let form = egui::CollapsingHeader::new(RichText::new("New host").strong())
         .id_salt("compute_target_add_host")
-        .default_open(false)
+        .default_open(true)
         .show(ui, |ui| {
             let draft = &mut state.ui.settings.new_remote_host;
             remote_host_field(ui, "Label:", &mut draft.label);
@@ -479,10 +485,20 @@ pub(crate) fn render_remote_hosts_settings(
                     remote_host_field(ui, "GPU argument template:", &mut draft.custom_gpu_argument);
                 }
             }
-            if ui.button("Add host").clicked() {
-                actions.push(AppAction::AddRemoteHost);
-            }
+            ui.horizontal(|ui| {
+                if ui.button("Add host").clicked() {
+                    actions.push(AppAction::AddRemoteHost);
+                }
+                if ui.button("Cancel").clicked() {
+                    actions.push(AppAction::CancelAddRemoteHost);
+                }
+            });
         });
+    // The form can be opened from a task panel's picker, with Settings scrolled
+    // somewhere else entirely.
+    if std::mem::take(&mut state.ui.settings.scroll_to_add_host) {
+        form.header_response.scroll_to_me(Some(Align::Center));
+    }
 }
 
 fn default_gpu_fields(ui: &mut egui::Ui, draft: &mut crate::frontend::state::RemoteHostDraft) {
