@@ -32,8 +32,8 @@ use crate::{
             topology::TopologySource,
         },
         process,
-        remote::{Compute, ComputeResources},
     },
+    launch::{Compute, ComputeResources},
 };
 
 #[cfg(test)]

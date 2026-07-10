@@ -28,8 +28,8 @@ use crate::engines::gromacs::{
     MaterialBuildRequest, PrepareSystemRequest, StageResult, StageSpec, TopologySource,
     build_material_system, build_system, prepare_system, run_pipeline,
 };
-use crate::engines::registry::detect_local_gromacs;
-use crate::engines::remote::{Compute, ComputeResources, GMX_REMOTE_CANDIDATES};
+use crate::engines::registry::{detect_local_gromacs, engine_spec};
+use crate::launch::{Compute, ComputeResources};
 use crate::workflows::molecular_dynamics::{
     FrameworkMode, MdSystemConfig, MdSystemContext, SolvationOptions, WaterModel,
 };
@@ -195,7 +195,12 @@ pub fn run_gromacs_calculation(
     progress: impl FnMut(GromacsProgress),
 ) -> Result<GromacsOutcome> {
     let launch = detect_local_gromacs().ok_or_else(|| {
-        anyhow!("no working `gmx` found on this host (tried {GMX_REMOTE_CANDIDATES:?}); check the host prelude")
+        let candidates = engine_spec(crate::engines::registry::EngineId::GROMACS)
+            .map(|spec| spec.candidate_executables)
+            .unwrap_or_default();
+        anyhow!(
+            "no working `gmx` found on this host (tried {candidates:?}); check the host prelude"
+        )
     })?;
     let working_dir = std::env::current_dir().context("resolving the run working directory")?;
     match job {

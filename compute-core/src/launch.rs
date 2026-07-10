@@ -4,7 +4,9 @@
 //! [`EngineLaunch`] is plain, serializable launch data with no dependency on the
 //! engine machinery, so it sits at a leaf layer that both `engines` (which builds
 //! a `ProcessConfig` from it) and `hosts` (which stores one per engine) can use
-//! without either having to import the other.
+//! without either having to import the other. [`Compute`] pairs a launch with the
+//! CPU/GPU envelope the engine subprocess may use; an engine translates that
+//! envelope into its own flags.
 
 use serde::{Deserialize, Serialize};
 
@@ -43,5 +45,50 @@ impl EngineLaunch {
         } else {
             format!("{} {}", self.command_prefix.join(" "), self.program)
         }
+    }
+}
+
+/// CPU/GPU resources an engine subprocess may use. `0` means "let the engine
+/// decide" (its own default — all cores / detected GPUs). Engine-neutral: the
+/// GROMACS runner maps this onto `mdrun` flags, another engine maps it onto its
+/// own. Serializable so a relayed remote job carries the request to the worker.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComputeResources {
+    /// CPU threads for the engine; `0` = engine default (all available cores).
+    pub cores: u32,
+    /// GPUs to offload to; `0` = none / engine auto-detect.
+    pub gpu: u32,
+}
+
+/// How to invoke an external engine: the launch descriptor plus the resource
+/// envelope, threaded through an engine pipeline so a run and its launch travel
+/// together. The engine always runs as a local subprocess of whichever host
+/// executes the pipeline — the laptop for a local run, the compute node for a
+/// relayed remote run — so there is no transport here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Compute {
+    pub launch: EngineLaunch,
+    pub resources: ComputeResources,
+}
+
+impl Compute {
+    /// Run the engine with this launch, letting it pick its own CPU/GPU defaults.
+    pub fn local(launch: EngineLaunch) -> Self {
+        Self {
+            launch,
+            resources: ComputeResources::default(),
+        }
+    }
+
+    /// Run the engine with an explicit CPU/GPU resource request.
+    pub fn local_with_resources(launch: EngineLaunch, resources: ComputeResources) -> Self {
+        Self { launch, resources }
+    }
+}
+
+impl From<EngineLaunch> for Compute {
+    /// Keeps existing call sites terse (`launch.into()`).
+    fn from(launch: EngineLaunch) -> Self {
+        Self::local(launch)
     }
 }

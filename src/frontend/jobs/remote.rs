@@ -52,7 +52,8 @@ pub fn spawn_remote_probe(
                 RemoteProbeOutcome::Passwordless(remote::check_passwordless(&target))
             }
             RemoteProbeKind::DetectGromacs => RemoteProbeOutcome::Detected(
-                remote::detect_remote_engine(&target, remote::GMX_REMOTE_CANDIDATES),
+                crate::engines::registry::engine_spec(crate::engines::registry::EngineId::GROMACS)
+                    .and_then(|spec| remote::detect_remote_engine(&target, spec)),
             ),
             RemoteProbeKind::DetectSlurm => remote::launcher::detect_slurm(&target)
                 .map(RemoteProbeOutcome::SlurmDetected)

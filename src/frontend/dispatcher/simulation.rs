@@ -90,7 +90,7 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
                 stages,
                 max_duration_per_stage: Duration::from_secs(60 * 60),
                 freeze: framework_freeze,
-                resources: crate::engines::remote::ComputeResources {
+                resources: crate::launch::ComputeResources {
                     cores: prompt.prefs.cores_per_subtask,
                     gpu: prompt.prefs.gpu.count(),
                 },
@@ -110,7 +110,7 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
         }
     };
     // Local run: apply the panel's CPU/GPU request to the mdrun stages.
-    compute.resources = crate::engines::remote::ComputeResources {
+    compute.resources = crate::launch::ComputeResources {
         cores: prompt.prefs.cores_per_subtask,
         gpu: prompt.prefs.gpu.count(),
     };
@@ -235,10 +235,10 @@ pub(crate) fn resolve_md_engine_launch(
 pub(crate) fn resolve_md_compute(
     state: &mut AppState,
     engine: crate::frontend::state::MdEngineChoice,
-) -> anyhow::Result<crate::engines::remote::Compute> {
-    Ok(crate::engines::remote::Compute::local(
-        resolve_md_engine_launch(state, engine)?,
-    ))
+) -> anyhow::Result<crate::launch::Compute> {
+    Ok(crate::launch::Compute::local(resolve_md_engine_launch(
+        state, engine,
+    )?))
 }
 
 /// Cache an auto-detected engine launch into `engine_overrides` and save the

@@ -7,10 +7,10 @@ use crate::engines::gromacs::{
     BuildRequest, GromacsProgress, MaterialBuildRequest, StageResult, StageSpec, TopologySource,
     build_material_system, build_system, prepare_system, run_pipeline,
 };
-use crate::engines::remote::Compute;
 use crate::frontend::md_support::{
     FrameworkRunMetadata, MD_FRAMEWORK_FILE, write_md_system_context,
 };
+use crate::launch::Compute;
 
 use super::optimization::OPTIMIZATION_POLL_FRAME;
 

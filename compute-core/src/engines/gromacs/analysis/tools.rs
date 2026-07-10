@@ -20,8 +20,8 @@ use crate::engines::{
         runner::{GromacsProgress, subprocess_failure},
     },
     registry::EngineLaunch,
-    remote::Compute,
 };
+use crate::launch::Compute;
 
 /// Shared context for an analysis invocation.
 #[derive(Debug, Clone)]

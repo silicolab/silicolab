@@ -36,7 +36,7 @@ impl EngineId {
     }
 }
 
-pub use crate::launch::EngineLaunch;
+pub use crate::launch::{Compute, ComputeResources, EngineLaunch};
 
 impl EngineLaunch {
     /// Build a [`ProcessConfig`] that runs this engine with `engine_args` in
@@ -93,24 +93,40 @@ impl EngineCapability {
     }
 }
 
-/// A specification of how to detect a specific engine and what its primary
-/// executable is called on each operating system.
+/// How to detect one external engine: what its executable may be called, how to
+/// ask it for a version, and how to tell its answer apart from an unrelated
+/// binary's. The single source of truth for every probe — local PATH, WSL, and
+/// SSH to a remote host all read this.
 #[derive(Debug, Clone, Copy)]
-struct EngineSpec {
-    id: EngineId,
-    name: &'static str,
-    description: &'static str,
-    candidate_executables: &'static [&'static str],
-    version_arg: Option<&'static str>,
+pub struct EngineSpec {
+    pub id: EngineId,
+    pub name: &'static str,
+    pub description: &'static str,
+    /// Programs to try, in priority order: bare names (resolved through PATH, or
+    /// through a remote host's prelude) then conventional absolute install paths.
+    /// An absolute POSIX path is inert on a native Windows probe — it simply is
+    /// not a file — so one list serves every platform.
+    pub candidate_executables: &'static [&'static str],
+    pub version_arg: Option<&'static str>,
+    /// A substring the engine's own `version_arg` output always contains. Guards
+    /// against a same-named binary that is not this engine, and against a missing
+    /// binary whose error text would otherwise look like output.
+    pub identity_marker: &'static str,
 }
 
 const ENGINE_SPECS: &[EngineSpec] = &[EngineSpec {
     id: EngineId::GROMACS,
     name: "GROMACS",
     description: "Molecular dynamics and minimization (gmx).",
-    candidate_executables: &["gmx", "gmx_mpi", "gmx_d"],
+    candidate_executables: &["gmx", "/usr/local/gromacs/bin/gmx", "gmx_mpi", "gmx_d"],
     version_arg: Some("--version"),
+    identity_marker: "GROMACS",
 }];
+
+/// The detection spec for `id`, or `None` for a built-in engine (no executable).
+pub fn engine_spec(id: EngineId) -> Option<&'static EngineSpec> {
+    ENGINE_SPECS.iter().find(|spec| spec.id == id)
+}
 
 /// Snapshot of detected engines. Re-run [`EngineRegistry::probe`] to refresh
 /// availability (for example, after the user edits an override).
@@ -230,11 +246,6 @@ fn probe_native(spec: &EngineSpec) -> Option<String> {
     })
 }
 
-/// GROMACS programs to try inside WSL, in priority order. Bare names rely on the
-/// WSL login PATH; the absolute path is the conventional install location, used
-/// when GROMACS isn't on a non-interactive shell's PATH (GMXRC not sourced).
-const WSL_GMX_CANDIDATES: &[&str] = &["gmx", "/usr/local/gromacs/bin/gmx", "gmx_mpi", "gmx_d"];
-
 /// Best-effort auto-detection of a GROMACS launch through WSL — the conventional
 /// way GROMACS runs on Windows. Returns `None` when `wsl.exe` is not present
 /// (no WSL) or when no candidate `gmx` responds inside it (WSL without GROMACS),
@@ -247,42 +258,42 @@ const WSL_GMX_CANDIDATES: &[&str] = &["gmx", "/usr/local/gromacs/bin/gmx", "gmx_
 pub fn detect_wsl_gromacs_launch() -> Option<EngineLaunch> {
     // No WSL on this machine: nothing to detect.
     process::find_on_path("wsl.exe")?;
-    WSL_GMX_CANDIDATES.iter().find_map(|candidate| {
+    let spec = engine_spec(EngineId::GROMACS)?;
+    spec.candidate_executables.iter().find_map(|candidate| {
         let launch = EngineLaunch {
             command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
             program: (*candidate).to_string(),
         };
-        gromacs_responds(&launch).then_some(launch)
+        engine_responds(&launch, spec).then_some(launch)
     })
 }
 
-/// Best-effort auto-detection of a native GROMACS launch, trying the shared
-/// [`GMX_REMOTE_CANDIDATES`](crate::engines::remote::GMX_REMOTE_CANDIDATES) in
-/// priority order via the local PATH (bare names) or the conventional install
-/// path. Returns `None` when none responds. The headless worker calls this after
-/// the host prelude has set PATH/modules, so a bare `gmx` resolves the way the
-/// interactive shell would.
+/// Best-effort auto-detection of a native GROMACS launch, trying the spec's
+/// candidates in priority order via the local PATH (bare names) or the
+/// conventional install path. Returns `None` when none responds.
 pub fn detect_local_gromacs() -> Option<EngineLaunch> {
-    crate::engines::remote::GMX_REMOTE_CANDIDATES
-        .iter()
-        .find_map(|candidate| {
-            let launch = EngineLaunch::native(*candidate);
-            gromacs_responds(&launch).then_some(launch)
-        })
+    let spec = engine_spec(EngineId::GROMACS)?;
+    spec.candidate_executables.iter().find_map(|candidate| {
+        let launch = EngineLaunch::native(*candidate);
+        engine_responds(&launch, spec).then_some(launch)
+    })
 }
 
-/// Whether `<launch> --version` actually runs GROMACS: exits cleanly and
-/// identifies itself as GROMACS. The identity check rejects false positives
-/// from a missing binary, whose error text would otherwise look like output.
-fn gromacs_responds(launch: &EngineLaunch) -> bool {
+/// Whether `<launch> <version_arg>` actually runs this engine: exits cleanly and
+/// prints the spec's identity marker.
+pub fn engine_responds(launch: &EngineLaunch, spec: &EngineSpec) -> bool {
+    let Some(version_arg) = spec.version_arg else {
+        return false;
+    };
     let config = launch.to_process_config(
         std::env::temp_dir(),
-        ["--version".to_string()],
+        [version_arg.to_string()],
         Some(Duration::from_secs(20)),
     );
     match process::run(config) {
         Ok(result) => {
-            result.success() && format!("{}{}", result.stdout, result.stderr).contains("GROMACS")
+            result.success()
+                && format!("{}{}", result.stdout, result.stderr).contains(spec.identity_marker)
         }
         Err(_) => false,
     }
@@ -466,8 +477,10 @@ mod tests {
     fn wsl_gromacs_autodetect_finds_a_working_launch() {
         let launch = detect_wsl_gromacs_launch().expect("WSL GROMACS should auto-detect");
         assert_eq!(launch.command_prefix, vec!["wsl.exe", "-e"]);
+        let spec = engine_spec(EngineId::GROMACS).expect("gromacs spec");
         assert!(
-            WSL_GMX_CANDIDATES.contains(&launch.program.as_str()),
+            spec.candidate_executables
+                .contains(&launch.program.as_str()),
             "detected program should be one of the candidates, got {:?}",
             launch.program
         );

@@ -450,7 +450,7 @@ fn gromacs_run_request_round_trips_through_the_payload_bridge() {
             group: "Framework".to_string(),
             atom_indices: vec![0, 1],
         }),
-        resources: crate::engines::remote::ComputeResources { cores: 4, gpu: 1 },
+        resources: crate::launch::ComputeResources { cores: 4, gpu: 1 },
     })));
     let json = serde_json::to_vec(&request).unwrap();
     let back: EngineRequest = serde_json::from_slice(&json).unwrap();
