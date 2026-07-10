@@ -55,16 +55,26 @@ pub fn recommend(eff: &EffectiveContext) -> Recommendation {
     let mut notes = Vec::new();
     let mut warnings = Vec::new();
 
-    // Force-field family → nonbonded treatment + conventional water + Standard.
+    // Force-field family -> nonbonded treatment and the recorded solvent state.
     let family = eff.force_field_family();
     if family.is_biomolecular() {
-        let water = eff.water_token().unwrap_or("the family's conventional");
+        let intent = eff.water_token().map_or_else(
+            || {
+                format!(
+                    "apply the {} nonbonded treatment; no water model is recorded",
+                    family.label()
+                )
+            },
+            |water| {
+                format!(
+                    "apply the {} nonbonded treatment with {water} water",
+                    family.label()
+                )
+            },
+        );
         notes.push(RecNote::new(
             format!("Force field is {}", family.label()),
-            format!(
-                "apply the {} nonbonded treatment with {water} water",
-                family.label()
-            ),
+            intent,
         ));
     }
 
@@ -206,6 +216,24 @@ mod tests {
         assert!(rec.warnings.is_empty());
         // The ff-family note is present.
         assert!(rec.notes.iter().any(|n| n.reason.contains("AMBER")));
+    }
+
+    #[test]
+    fn dry_protein_note_does_not_claim_a_water_model() {
+        let mut c = ctx();
+        c.water_token = None;
+        let rec = recommend(&c.with_overrides(SystemTypeOverrides::default()));
+
+        assert!(
+            rec.notes
+                .iter()
+                .any(|note| note.intent.contains("no water model is recorded"))
+        );
+        assert!(
+            rec.notes
+                .iter()
+                .all(|note| !note.intent.contains("conventional water"))
+        );
     }
 
     #[test]

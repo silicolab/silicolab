@@ -54,6 +54,21 @@ pub fn validate(stages: &[MdStage], eff: &EffectiveContext) -> Vec<ValidationIss
         return issues;
     }
 
+    let dry_biomolecule = eff.water_token().is_none()
+        && !eff.is_framework()
+        && (eff.has_protein() || eff.has_nucleic() || eff.has_ligand() || eff.has_membrane());
+    let dry_pressure_or_production = stages.iter().any(|stage| {
+        stage.pressure.is_some() || matches!(stage.kind, StageKind::Produce | StageKind::Extend)
+    });
+    if dry_biomolecule && dry_pressure_or_production {
+        issues.push(ValidationIssue::warning(
+            None,
+            "No solvent was recorded for this biomolecular system. NPT or production MD is \
+             usually inappropriate without water and ions; rebuild a solvated system unless \
+             this dry simulation is intentional.",
+        ));
+    }
+
     let mut npt_equilibrated = false;
 
     for stage in stages {
@@ -179,6 +194,37 @@ mod tests {
         let stages = PresetId::StandardBiomolecule.build(&eff, &PresetParams::default());
         let issues = validate(&stages, &eff);
         assert!(!has_errors(&issues), "unexpected errors: {issues:?}");
+    }
+
+    #[test]
+    fn dry_biomolecule_warns_for_npt_or_production() {
+        let mut c = ctx(false, true);
+        c.water_token = None;
+        let eff = c.with_overrides(SystemTypeOverrides::default());
+        let stages = PresetId::StandardBiomolecule.build(&eff, &PresetParams::default());
+        let issues = validate(&stages, &eff);
+
+        assert!(!has_errors(&issues));
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.message.contains("No solvent was recorded"))
+        );
+    }
+
+    #[test]
+    fn dry_biomolecule_minimization_only_has_no_solvent_warning() {
+        let mut c = ctx(false, true);
+        c.water_token = None;
+        let eff = c.with_overrides(SystemTypeOverrides::default());
+        let stages = PresetId::EnergyMinimization.build(&eff, &PresetParams::default());
+        let issues = validate(&stages, &eff);
+
+        assert!(
+            issues
+                .iter()
+                .all(|issue| !issue.message.contains("No solvent was recorded"))
+        );
     }
 
     #[test]

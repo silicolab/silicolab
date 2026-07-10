@@ -387,6 +387,28 @@ mod tests {
         }
     }
 
+    #[test]
+    fn dry_biomolecular_preset_renders_only_the_system_coupling_group() {
+        let mut ctx = amber_protein_context();
+        ctx.water_token = None;
+        let eff = ctx.with_overrides(SystemTypeOverrides::default());
+        let stages = PresetId::StandardBiomolecule.build(&eff, &PresetParams::default());
+        let specs = stage_specs_from_md_stages(&stages, ForceFieldFamily::Amber, None);
+
+        for spec in specs
+            .iter()
+            .filter(|spec| !spec.settings.integrator.is_minimization())
+        {
+            let mdp = render_mdp(&spec.settings);
+            assert!(
+                mdp.contains("tc-grps                  = System"),
+                "dry stage '{}' must couple the whole system, got:\n{mdp}",
+                spec.stage_name
+            );
+            assert!(!mdp.contains("Non-Protein"));
+        }
+    }
+
     /// The legacy path is preserved: a non-biomolecular (framework / generic)
     /// system still realizes to plain cut-off, never PME. PME is a new path, not a
     /// rewrite of the old one.
