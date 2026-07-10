@@ -619,7 +619,7 @@ pub fn inspect(state: &AppState, _query: Option<&str>) -> String {
             // Provenance: mark MD-run / QM-run outputs and trajectory availability.
             if active.origin.trajectory().is_some() {
                 let _ = writeln!(out, "provenance: MD-run output (trajectory available)");
-            } else if active.origin.qm_output().is_some() {
+            } else if active.origin.is_qm_run() {
                 let _ = writeln!(out, "provenance: QM-run output (report saved)");
             }
         }

@@ -434,9 +434,13 @@ pub enum AppAction {
     SetTrajectoryFrame(usize),
     /// Close trajectory playback, returning the viewport to the static entry.
     StopTrajectory,
-    /// Open the saved QM output report of the given QM-produced entry in a
-    /// viewer window (triggered by clicking the entry's "QM" badge).
+    /// Open the saved QM output report belonging to the given entry in a viewer
+    /// window (triggered by clicking the entry's "QM" badge). The entry may be
+    /// the run's output, or the structure a single-point run was computed from.
     ShowQmOutput(u64),
+    /// Open the saved multi-pose `.pdbqt` of the given docking-pose entry in a
+    /// viewer window (triggered by clicking the entry's "Dock" badge).
+    ShowDockPoses(u64),
     /// Load a run's saved series data into the Plot panel and reveal it. The
     /// target is an entry (chart button on a QM-produced entry row) or a task
     /// run (completed-task panels; single-point runs produce no entry).

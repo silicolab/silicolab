@@ -325,6 +325,29 @@ fn drain_docking(state: &mut AppState, running: &RunningDockingJob) -> Option<(S
     completion
 }
 
+/// Write an agent-driven QM run's report and series into its run directory,
+/// creating the directory on demand. The agent registers its task run without an
+/// active-task binding, so the run dir is resolved by id rather than through
+/// `ensure_active_task_run_dir`.
+fn save_agent_qm_artifacts(
+    state: &mut AppState,
+    task_run_id: u64,
+    outcome: &crate::engines::qm::QmOutcome,
+) {
+    let Some(kind) = state.tasks.task_run(task_run_id).map(|task| task.kind) else {
+        return;
+    };
+    if !kind.is_qm() {
+        return;
+    }
+    match crate::frontend::dispatcher::ensure_task_run_dir(state, task_run_id, kind, None) {
+        Ok(run_dir) => crate::frontend::dispatcher::save_qm_artifacts(state, &run_dir, outcome),
+        Err(error) => state
+            .output_log
+            .push(format!("failed to create QM run directory: {error}")),
+    }
+}
+
 fn drain_qm(
     state: &mut AppState,
     running: &mut RunningQmJob,
@@ -343,19 +366,25 @@ fn drain_qm(
                     continue;
                 }
                 let outcome = *outcome;
+                // Persist the report and series into the run directory before any
+                // new entry is added, so the run anchors to the input structure —
+                // the same ordering, and the same writer, as the local and remote
+                // QM paths. Without this an agent-driven run had no artifacts at
+                // all, and so no report or chart on either surface.
+                save_agent_qm_artifacts(state, task_run_id, &outcome);
                 if let Some(optimized) = outcome.optimized_structure {
                     let save_path = default_structure_save_path(&optimized, None);
                     let entry_id = state.entries.add_entry(optimized, None, save_path);
                     state.show_entry(entry_id);
-                    state
-                        .entries
-                        .set_entry_origin(entry_id, EntryOrigin::QmRun { output: None });
+                    state.entries.set_entry_origin(entry_id, EntryOrigin::QmRun);
                     crate::frontend::dispatcher::record_task_result_entry(
                         state,
                         task_run_id,
                         entry_id,
                     );
                 }
+                state.ui.chart_availability.clear();
+                state.ui.task_chart_thumbnails.remove(&task_run_id);
                 state.set_message(outcome.summary.clone());
                 completion = Some((outcome.summary, false));
             }

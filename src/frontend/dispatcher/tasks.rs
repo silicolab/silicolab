@@ -106,6 +106,19 @@ pub(crate) fn ensure_active_task_run_dir(
     let task_run_id = state
         .active_task_run
         .ok_or_else(|| anyhow!("no active task run"))?;
+    ensure_task_run_dir(state, task_run_id, kind, desired_name)
+}
+
+/// Create (once) the run directory of a specific task run and record the entry it
+/// was launched from. Both are written only on first creation, so the run stays
+/// anchored to the structure that was actually computed even if the user
+/// activates a different entry while it is still running.
+pub(crate) fn ensure_task_run_dir(
+    state: &mut AppState,
+    task_run_id: u64,
+    kind: TaskKind,
+    desired_name: Option<&str>,
+) -> anyhow::Result<PathBuf> {
     let task = state
         .tasks
         .task_run(task_run_id)

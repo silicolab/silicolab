@@ -138,13 +138,14 @@ pub struct LauncherObservation {
     pub console: ConsoleChunk,
 }
 
+/// Pull a finished job's `outcome.json` (and its exit marker) into `working_dir`.
+///
+/// The console is deliberately **not** downloaded: the caller accumulates it
+/// incrementally from each poll's byte offset, and overwriting that file with the
+/// remote copy would replay bytes the caller then appends again — the final chunk
+/// of a successful run ended up in the local console twice.
 pub fn retrieve_outcome(target: &RemoteTarget, working_dir: &Path) -> Result<Vec<u8>> {
-    super::sync_down(
-        target,
-        working_dir,
-        &[OUTCOME_FILE],
-        &[CONSOLE_FILE, EXIT_FILE],
-    )?;
+    super::sync_down(target, working_dir, &[OUTCOME_FILE], &[EXIT_FILE])?;
     let path = working_dir.join(OUTCOME_FILE);
     std::fs::read(&path).with_context(|| format!("read {}", path.display()))
 }
