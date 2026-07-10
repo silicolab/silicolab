@@ -30,6 +30,22 @@ Machine-specific acceptance tests â€” those that need an external tool inst
 are gated with `#[ignore]` so the default `cargo test` run stays hermetic. Run
 them explicitly, as shown above.
 
+## Remote execution development
+
+When a change affects the remote worker, a remote-capable engine, or the wire
+contract, run the current checkout through the development worker path:
+
+```powershell
+cargo xtask remote-dev
+```
+
+For an IDE pre-launch task, use `cargo xtask build-dev-worker`. Ordinary builds
+remain pinned to published, checksum-verified workers and cannot test
+unpublished source changes. See
+[Developing remote execution](docs/developing-remote-execution.md) for platform
+prerequisites, artifact overrides, IDE setup, deployment identities, and the
+opt-in SSH integration tests.
+
 ## Commit discipline
 
 Everything syncs straight to `main`. As a result:

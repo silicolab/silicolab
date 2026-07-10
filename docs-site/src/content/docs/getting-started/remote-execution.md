@@ -17,13 +17,19 @@ On first use, SilicoLab deploys a small self-contained worker to the host. The
 worker is pinned to the app version and verified against its published checksum
 before it runs.
 
+Testing remote changes from source is a contributor workflow; follow the
+[remote execution development guide](https://github.com/silicolab/silicolab/blob/main/docs/developing-remote-execution.md).
+Released builds always use the version-pinned, checksum-verified worker described
+above.
+
 ## Set up a host
 
 Open **Settings > Engines > Remote Hosts**.
 
 1. Select **Add host** and enter a label, hostname or IP address, username, and
    optionally a port and remote work directory. The default work directory is
-   `~/.silicolab`.
+   `~/.silicolab`. A custom work directory must be an absolute Linux path or
+   start with `~/`.
 2. Under **Setup commands**, enter the commands a fresh non-interactive SSH
    shell needs before engine commands are available. For example, use
    `module load gromacs` or `source /opt/gromacs/bin/GMXRC` to make `gmx`

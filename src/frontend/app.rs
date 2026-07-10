@@ -45,6 +45,7 @@ pub fn run(structure: Structure, source_path: Option<PathBuf>) -> Result<()> {
             // Kick off the once-per-launch release check (a single background
             // HTTP request); `poll_jobs` drains the result. Honors the
             // "Check for updates" setting, on by default.
+            #[cfg(not(feature = "dev-worker"))]
             if app.state.config.check_updates {
                 app.state.jobs.update_check = Some(crate::frontend::jobs::spawn_update_check());
             }

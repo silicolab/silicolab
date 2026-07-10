@@ -12,8 +12,10 @@
 //! detached [`launcher`] drives to deploy and run the pre-deployed headless worker
 //! on a host. A GROMACS launch travels with [`Compute`].
 
+#[cfg(any(feature = "network", feature = "dev-worker"))]
+mod artifact;
 pub mod bootstrap;
-#[cfg(feature = "network")]
+#[cfg(any(feature = "network", feature = "dev-worker"))]
 pub mod deploy;
 pub mod hardware;
 pub mod launcher;
@@ -269,6 +271,15 @@ pub fn validate_work_root(work_root: &str) -> Result<()> {
     let trimmed = work_root.trim();
     if trimmed.is_empty() {
         bail!("remote work directory cannot be empty");
+    }
+    if trimmed != work_root {
+        bail!("remote work directory cannot have leading or trailing whitespace");
+    }
+    if !(trimmed == "~"
+        || trimmed.starts_with("~/")
+        || (trimmed.starts_with('/') && trimmed.len() > 1))
+    {
+        bail!("remote work directory must be an absolute path or start with `~/`");
     }
     let ok = trimmed
         .chars()
@@ -574,7 +585,11 @@ mod tests {
     fn validate_work_root_rejects_metacharacters() {
         assert!(validate_work_root("~/.silicolab").is_ok());
         assert!(validate_work_root("/scratch/alice/sl").is_ok());
+        assert!(validate_work_root("~/scratch/sl/").is_ok());
         assert!(validate_work_root("").is_err());
+        assert!(validate_work_root("scratch/sl").is_err());
+        assert!(validate_work_root("/").is_err());
+        assert!(validate_work_root(" ~/.silicolab").is_err());
         assert!(validate_work_root("/scratch/my proj").is_err());
         assert!(validate_work_root("/scratch; rm -rf ~").is_err());
         assert!(validate_work_root("/scratch/$(whoami)").is_err());

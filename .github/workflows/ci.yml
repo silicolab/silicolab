@@ -99,12 +99,13 @@ jobs:
           components: clippy
           linux-deps: 'true'
           cache: 'true'
-      - run: cargo clippy --workspace --all-targets --all-features
+      - name: Lint default-feature production build
+        run: cargo clippy --workspace --all-targets
+      - name: Lint workspace with all features
+        run: cargo clippy --workspace --all-targets --all-features
 
-  # Guard the worker's "self-contained static musl, pure Rust" invariant with a
-  # cheap dependency-graph query (no compilation). The real musl build runs only
-  # at release time; the common regression — a C dependency sneaking in — is
-  # exactly what this catches.
+  # Guard dependency purity separately from the cross-platform build matrix.
+  # This graph query identifies which native dependency caused the regression.
   worker-pure-rust:
     name: Worker is pure Rust
     needs: changes
@@ -124,6 +125,27 @@ jobs:
             echo "::error::silicolab-compute pulls a C-toolchain / native build dependency; keep it pure Rust"
             exit 1
           fi
+
+  worker-build:
+    name: Worker build (${{ matrix.os }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup-rust
+        with:
+          targets: x86_64-unknown-linux-musl
+          cache: 'true'
+      - name: Build and validate the development worker ELF
+        run: cargo xtask build-dev-worker
+      - name: Smoke-test the worker version command
+        if: runner.os == 'Linux'
+        run: ./target/x86_64-unknown-linux-musl/release/silicolab-compute --version
 
   # Enforce the .rules size cap: every Rust source file stays under 800 physical
   # lines. Plain line counting, no toolchain — keeps files small enough for an
@@ -168,6 +190,9 @@ jobs:
           linux-deps: 'true'
           cache: 'true'
       - run: cargo test --workspace --all-features
+      - name: Test production worker artifact path
+        if: runner.os == 'Linux'
+        run: cargo test --package compute-core --lib engines::remote::artifact
 
   # The single required status check; the branch ruleset requires only this
   # context. It decouples the merge gate from the job matrix: docs-only PRs skip
@@ -179,7 +204,7 @@ jobs:
   ci-complete:
     name: CI complete
     if: always()
-    needs: [changes, fmt, clippy, worker-pure-rust, file-size, test]
+    needs: [changes, fmt, clippy, worker-pure-rust, worker-build, file-size, test]
     runs-on: ubuntu-latest
     steps:
       - name: Require every upstream job to have succeeded or been skipped

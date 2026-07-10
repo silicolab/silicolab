@@ -16,12 +16,17 @@ OpenSSH Client** 中启用。
 首次使用时，SilicoLab 会向主机部署一个小型自包含 worker。worker 会绑定到
 当前应用版本，并在运行前用发布的校验和验证。
 
+如需从源码测试远程执行变更，请参阅
+[远程执行开发指南](https://github.com/silicolab/silicolab/blob/main/docs/developing-remote-execution.md)。
+正式发布的版本始终使用与应用版本绑定并经过校验和验证的 worker。
+
 ## 配置主机
 
 打开 **Settings > Engines > Remote Hosts**。
 
 1. 选择 **Add host**，填写标签、主机名或 IP、用户名，并可选填写端口和远程
-   工作目录。默认工作目录是 `~/.silicolab`。
+   工作目录。默认工作目录是 `~/.silicolab`。自定义目录必须是 Linux 绝对路径，
+   或以 `~/` 开头。
 2. 在 **Setup commands** 中填写非交互 SSH shell 启动后需要执行的命令，让
    引擎命令可用。例如可用 `module load gromacs` 或
    `source /opt/gromacs/bin/GMXRC` 让 `gmx` 可运行。每行填写一条命令。

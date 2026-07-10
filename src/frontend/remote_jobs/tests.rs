@@ -74,27 +74,24 @@ fn remote_memory_rejection_names_host_and_advises() {
     assert!(remote_qm_memory_rejection(&MemoryVerdict::Ok, "cluster").is_none());
 }
 
-/// End-to-end check of the detached frontend path (deploy fast-path → submit
-/// → opt-in refresh → retrieve) against a real SSH host. `#[ignore]`: a
+/// End-to-end check of the detached frontend path (deploy → submit → opt-in
+/// refresh → retrieve) against a real SSH host. `#[ignore]`: a
 /// developer-occasional test requiring an SSH host (e.g. a local WSL) with
-/// the worker pre-placed at `~/.silicolab/bin/silicolab-compute` and
-/// passwordless login configured. Run with:
+/// passwordless login configured. Build the current worker first, then run:
 ///
 /// ```text
+/// cargo xtask build-dev-worker
 /// SILICOLAB_TEST_SSH_HOST=<ip> SILICOLAB_TEST_SSH_USER=<user> \
-/// cargo test -p silicolab --lib -- --ignored remote_qm_submit_then_refresh
+/// cargo test -p silicolab --features dev-worker --lib -- --ignored remote_qm_submit_then_refresh
 /// ```
-///
-/// The host records the current worker version, so `ensure_worker_deployed`
-/// takes its no-network fast path (the GitHub asset only exists post-release).
+#[cfg(feature = "dev-worker")]
 #[test]
-#[ignore = "requires an SSH host with a pre-placed worker (set SILICOLAB_TEST_SSH_HOST)"]
+#[ignore = "requires an SSH host (set SILICOLAB_TEST_SSH_HOST)"]
 fn remote_qm_submit_then_refresh_against_ssh_host() {
     use crate::backend::config::RemoteHost;
     use crate::backend::storage::jobs::{RemoteJob, RemoteJobStatus};
     use crate::domain::{Atom, Structure};
     use crate::engines::qm::{QmKind, QmMethod, QmOptions, QmRequest};
-    use crate::engines::remote::deploy::WORKER_VERSION_KEY;
     use nalgebra::Point3;
     use std::time::Duration;
 
@@ -104,11 +101,6 @@ fn remote_qm_submit_then_refresh_against_ssh_host() {
     };
     let username = std::env::var("SILICOLAB_TEST_SSH_USER").unwrap_or_else(|_| "root".to_string());
 
-    let mut engine_versions = std::collections::HashMap::new();
-    engine_versions.insert(
-        WORKER_VERSION_KEY.to_string(),
-        env!("CARGO_PKG_VERSION").to_string(),
-    );
     let host = RemoteHost {
         id: "wsl".to_string(),
         label: "WSL".to_string(),
@@ -118,7 +110,7 @@ fn remote_qm_submit_then_refresh_against_ssh_host() {
         work_root: "~/.silicolab".to_string(),
         prelude: Vec::new(),
         engines: Default::default(),
-        engine_versions,
+        engine_versions: Default::default(),
         resources: Default::default(),
     };
 
@@ -164,6 +156,10 @@ fn remote_qm_submit_then_refresh_against_ssh_host() {
         RemoteSubmitOutcome::Submitted(submitted) => *submitted,
         RemoteSubmitOutcome::Failed(error) => panic!("remote submit failed: {error}"),
     };
+    assert!(
+        submitted.deployment_id.starts_with("dev:"),
+        "the dev-worker test must never fall back to a release artifact"
+    );
 
     let row = RemoteJob {
         run_uuid: submitted.run_uuid,
@@ -208,20 +204,21 @@ fn remote_qm_submit_then_refresh_against_ssh_host() {
 /// The detached docking path against a real SSH host, mirroring the QM E2E
 /// above: submit a `ScoreOnly` job (one fast evaluation), refresh until it
 /// finishes, and assert a pose came back through the payload bridge. `#[ignore]`
-/// for the same reason — it needs a host with a pre-placed worker. Run with:
+/// requires an SSH host. Build the current worker first, then run:
 ///
 /// ```text
+/// cargo xtask build-dev-worker
 /// SILICOLAB_TEST_SSH_HOST=<ip> SILICOLAB_TEST_SSH_USER=<user> \
-/// cargo test -p silicolab --lib -- --ignored remote_docking_submit_then_refresh
+/// cargo test -p silicolab --features dev-worker --lib -- --ignored remote_docking_submit_then_refresh
 /// ```
+#[cfg(feature = "dev-worker")]
 #[test]
-#[ignore = "requires an SSH host with a pre-placed worker (set SILICOLAB_TEST_SSH_HOST)"]
+#[ignore = "requires an SSH host (set SILICOLAB_TEST_SSH_HOST)"]
 fn remote_docking_submit_then_refresh_against_ssh_host() {
     use crate::backend::config::RemoteHost;
     use crate::backend::storage::jobs::{RemoteJob, RemoteJobStatus};
     use crate::domain::{Atom, Bond, BondType, Structure};
     use crate::engines::docking::{DockingConfig, DockingInput, DockingKind, DockingRequest};
-    use crate::engines::remote::deploy::WORKER_VERSION_KEY;
     use nalgebra::Point3;
     use std::time::Duration;
 
@@ -231,11 +228,6 @@ fn remote_docking_submit_then_refresh_against_ssh_host() {
     };
     let username = std::env::var("SILICOLAB_TEST_SSH_USER").unwrap_or_else(|_| "root".to_string());
 
-    let mut engine_versions = std::collections::HashMap::new();
-    engine_versions.insert(
-        WORKER_VERSION_KEY.to_string(),
-        env!("CARGO_PKG_VERSION").to_string(),
-    );
     let host = RemoteHost {
         id: "wsl".to_string(),
         label: "WSL".to_string(),
@@ -245,7 +237,7 @@ fn remote_docking_submit_then_refresh_against_ssh_host() {
         work_root: "~/.silicolab".to_string(),
         prelude: Vec::new(),
         engines: Default::default(),
-        engine_versions,
+        engine_versions: Default::default(),
         resources: Default::default(),
     };
 
@@ -295,6 +287,10 @@ fn remote_docking_submit_then_refresh_against_ssh_host() {
         RemoteSubmitOutcome::Submitted(submitted) => *submitted,
         RemoteSubmitOutcome::Failed(error) => panic!("remote docking submit failed: {error}"),
     };
+    assert!(
+        submitted.deployment_id.starts_with("dev:"),
+        "the dev-worker test must never fall back to a release artifact"
+    );
 
     let row = RemoteJob {
         run_uuid: submitted.run_uuid,
@@ -340,23 +336,24 @@ fn remote_docking_submit_then_refresh_against_ssh_host() {
 /// submit a tiny single-stage `gmx` Run (energy-minimize a hermetic 8-atom
 /// argon box with an inline topology), let the worker run the whole pipeline in
 /// one allocation, then refresh until it finishes and assert the structure +
-/// stage report came back in `EngineOutcome::Gromacs`. `#[ignore]` — it needs a
-/// host with a pre-placed worker AND a working `gmx`. Set the optional
+/// stage report came back in `EngineOutcome::Gromacs`. `#[ignore]` — it needs an
+/// SSH host with a working `gmx`. Set the optional
 /// `SILICOLAB_TEST_GMX_PRELUDE` to a shell line (e.g. `. /usr/local/gromacs/bin/GMXRC`)
-/// when `gmx` needs its environment sourced first. Run with:
+/// when `gmx` needs its environment sourced first. Build the current worker, then run:
 ///
 /// ```text
+/// cargo xtask build-dev-worker
 /// SILICOLAB_TEST_SSH_HOST=<ip> SILICOLAB_TEST_SSH_USER=<user> \
-/// cargo test -p silicolab --lib -- --ignored remote_gromacs_submit_then_refresh
+/// cargo test -p silicolab --features dev-worker --lib -- --ignored remote_gromacs_submit_then_refresh
 /// ```
+#[cfg(feature = "dev-worker")]
 #[test]
-#[ignore = "requires an SSH host with a pre-placed worker and a working gmx (set SILICOLAB_TEST_SSH_HOST)"]
+#[ignore = "requires an SSH host with a working gmx (set SILICOLAB_TEST_SSH_HOST)"]
 fn remote_gromacs_submit_then_refresh_against_ssh_host() {
     use crate::backend::config::RemoteHost;
     use crate::backend::storage::jobs::{RemoteJob, RemoteJobStatus};
     use crate::domain::{Atom, Structure, UnitCell};
     use crate::engines::gromacs::{MdpSettings, StageLinks, StageSpec};
-    use crate::engines::remote::deploy::WORKER_VERSION_KEY;
     use crate::workflows::gromacs::{GromacsJob, GromacsRunRequest, WireTopology};
     use nalgebra::Point3;
     use std::time::Duration;
@@ -393,11 +390,6 @@ AR  8
         .map(|line| vec![line])
         .unwrap_or_default();
 
-    let mut engine_versions = std::collections::HashMap::new();
-    engine_versions.insert(
-        WORKER_VERSION_KEY.to_string(),
-        env!("CARGO_PKG_VERSION").to_string(),
-    );
     let host = RemoteHost {
         id: "wsl".to_string(),
         label: "WSL".to_string(),
@@ -407,7 +399,7 @@ AR  8
         work_root: "~/.silicolab".to_string(),
         prelude,
         engines: Default::default(),
-        engine_versions,
+        engine_versions: Default::default(),
         resources: Default::default(),
     };
 
@@ -462,6 +454,10 @@ AR  8
         RemoteSubmitOutcome::Submitted(submitted) => *submitted,
         RemoteSubmitOutcome::Failed(error) => panic!("remote GROMACS submit failed: {error}"),
     };
+    assert!(
+        submitted.deployment_id.starts_with("dev:"),
+        "the dev-worker test must never fall back to a release artifact"
+    );
 
     let row = RemoteJob {
         run_uuid: submitted.run_uuid,
