@@ -1,3 +1,8 @@
+//! Run the `wsl_gromacs_*` acceptance tests with `--test-threads=1`. Each spawns a
+//! `gmx mdrun` that helps itself to every core, so running them concurrently makes
+//! them fight for the machine and time out — a failure that looks like a bug in the
+//! pipeline and is not one.
+
 use nalgebra::Point3;
 
 use super::*;
@@ -129,6 +134,33 @@ fn wsl_gmx_launch() -> EngineLaunch {
     EngineLaunch {
         command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
         program: "/usr/local/gromacs/bin/gmx".to_string(),
+    }
+}
+
+/// Steps every acceptance stage is capped at.
+const ACCEPTANCE_STEPS: u64 = 500;
+
+/// Cap each realized stage at [`ACCEPTANCE_STEPS`] and rewrite its trajectory
+/// cadence to match.
+///
+/// The protocol's equilibration lengths are the ones a real run wants (100 ps of
+/// NVT and NPT apiece), so shortening has to happen here rather than in the
+/// protocol. These tests assert the pipeline's *shape* — stage linking, checkpoint
+/// threading, a decodable `.xtc` per dynamics stage — none of which needs more
+/// than a few hundred steps of eight argon atoms. Leaving the lengths alone cost
+/// minutes per run and bought no coverage.
+///
+/// The cadence must be rewritten too: it is derived from the full step count, so a
+/// shortened stage would write zero frames and the trajectory assertions would
+/// fail for a reason that has nothing to do with the code under test.
+fn shorten_for_acceptance(stages: &mut [StageSpec]) {
+    for spec in stages {
+        spec.settings.nsteps = spec.settings.nsteps.min(ACCEPTANCE_STEPS);
+        if let Some(output) = spec.settings.output.as_mut()
+            && output.nstxout_compressed > 0
+        {
+            output.nstxout_compressed = (ACCEPTANCE_STEPS / 10) as u32;
+        }
     }
 }
 
@@ -404,8 +436,7 @@ fn wsl_gromacs_full_md_pipeline_runs_end_to_end() {
     })
     .expect("system preparation should succeed");
 
-    // Short production so the acceptance run completes quickly. Trajectory
-    // saving is on by default, so every stage writes a compressed `.xtc`.
+    // Trajectory saving is on by default, so every stage writes a compressed `.xtc`.
     let options = MdProtocolOptions {
         production_ps: 20.0,
         timestep_ps: 0.002,
@@ -413,12 +444,14 @@ fn wsl_gromacs_full_md_pipeline_runs_end_to_end() {
         relax_before_production: true,
         save_trajectory: true,
     };
+    let mut stages = full_protocol(&options);
+    shorten_for_acceptance(&mut stages);
 
     let results = run_pipeline(
         system,
-        full_protocol(&options),
+        stages,
         wsl_gmx_launch().into(),
-        Duration::from_secs(600),
+        Duration::from_secs(120),
         Arc::new(AtomicBool::new(false)),
         |_| {},
     )
@@ -515,12 +548,14 @@ fn wsl_gromacs_generated_topology_runs_full_md() {
         relax_before_production: true,
         save_trajectory: true,
     };
+    let mut stages = full_protocol(&options);
+    shorten_for_acceptance(&mut stages);
 
     let results = run_pipeline(
         system,
-        full_protocol(&options),
+        stages,
         wsl_gmx_launch().into(),
-        Duration::from_secs(600),
+        Duration::from_secs(120),
         Arc::new(AtomicBool::new(false)),
         |_| {},
     )
