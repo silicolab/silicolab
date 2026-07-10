@@ -322,7 +322,6 @@ pub(crate) fn fetch_remote_hardware(state: &mut AppState, id: String) {
             return;
         }
     };
-    state.ui.settings.remote_hardware_host = Some(id);
     state.jobs.remote_hardware = Some(crate::frontend::jobs::spawn_remote_hardware_fetch(host));
     state.set_message("Fetching remote hardware…".to_string());
 }

@@ -47,10 +47,9 @@ pub struct SettingsState {
     pub remote_status: BTreeMap<String, RemoteHostStatus>,
     /// When a host's passwordless setup is being shown: `(host_id, install_cmd)`.
     pub remote_bootstrap: Option<(String, String)>,
-    /// Cached remote hardware inventory, keyed by host id (Hardware ▸ Remote).
+    /// Cached remote hardware inventory, keyed by host id, shown on each host's
+    /// card in Compute targets.
     pub remote_hardware: BTreeMap<String, crate::engines::remote::hardware::RemoteHardwareInfo>,
-    /// Remote host currently selected in the remote-hardware panel.
-    pub remote_hardware_host: Option<String>,
     pub slurm_capabilities: BTreeMap<String, crate::engines::remote::launcher::SlurmCapabilities>,
     /// Live remote-GPU monitoring data for the host currently being watched
     /// (Hardware ▸ Remote host ▸ Live GPU). `None` when no monitor is running.

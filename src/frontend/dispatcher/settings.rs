@@ -329,9 +329,9 @@ pub(crate) fn import_settings(state: &mut AppState, ctx: &egui::Context) {
     }
 }
 
-/// Open the Settings dialog at the Compute category, which contains the Remote
-/// hosts editor. Invoked from the per-task target picker's "Add host…" button so
-/// users can configure a host without hunting for the section.
+/// Open the Settings dialog at the Compute category, whose Compute targets group
+/// holds the remote hosts. Invoked from the per-task target picker's "Add host…"
+/// button so users can configure a host without hunting for the section.
 pub(crate) fn open_remote_hosts_settings(state: &mut AppState) {
     state.ui.layout.settings_open = true;
     state.ui.settings.search_query.clear();

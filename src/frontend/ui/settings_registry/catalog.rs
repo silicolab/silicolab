@@ -211,86 +211,48 @@ pub fn registry() -> Vec<SettingDescriptor> {
         subgroup: None,
     });
 
-    // Compute. Groups render in first-appearance order: This machine, Remote hosts,
-    // Built-in engines, Defaults for new jobs, Monitoring. The two target groups
-    // each hold that target's hardware and its engine launches.
-
-    // This machine — read-only detected CPU / GPU / RAM inventory.
-    items.push(SettingDescriptor {
-        id: "hardware.compute",
-        category: SettingCategory::Compute,
-        group: "This machine",
-        title: "Compute hardware",
-        description: "Detected CPU, GPU, and memory.",
-        keywords: &[
-            "cpu", "gpu", "cores", "threads", "ram", "memory", "hardware", "parallel",
-        ],
-        control: Control::Custom(crate::frontend::ui::settings_registry::hardware::render),
-        enabled: None,
-        indent: false,
-        is_default: None,
-        reset: None,
-        subgroup: None,
-    });
-
-    // This machine's external engines. Strong keywords because search on a Custom
+    // Compute targets — this machine and each configured remote host, each a
+    // collapser owning that target's hardware and engine launches. Hosts are added
+    // at runtime, so per-target sections cannot be static descriptors; the whole
+    // group is one Custom body. Strong keywords because search over a Custom
     // descriptor is all-or-nothing on this metadata.
     items.push(SettingDescriptor {
-        id: "engines.registry",
+        id: "compute.targets",
         category: SettingCategory::Compute,
-        group: "This machine",
-        title: "Engines",
-        description: "External engines this machine can run, and whether they work.",
+        group: "Compute targets",
+        title: "Compute targets",
+        description: "",
         keywords: &[
-            "engine", "engines", "gromacs", "lammps", "path", "binary", "wsl", "version", "verify",
-            "detect",
-        ],
-        control: Control::Custom(crate::frontend::ui::render_engine_settings),
-        enabled: None,
-        indent: false,
-        is_default: None,
-        reset: None,
-        subgroup: None,
-    });
-
-    // Remote hosts — SSH execution targets, with the hardware probe beside the
-    // editor that configures them.
-    items.push(SettingDescriptor {
-        id: "engines.remote_hosts",
-        category: SettingCategory::Compute,
-        group: "Remote hosts",
-        title: "Remote hosts (SSH)",
-        description: "SSH targets jobs can run on; passwordless key auth is recommended.",
-        keywords: &[
+            "this machine",
+            "local",
             "remote",
             "ssh",
             "host",
             "hpc",
             "cluster",
-            "scp",
-            "submit",
-            "compute",
+            "hardware",
+            "cpu",
+            "gpu",
+            "cores",
+            "threads",
+            "ram",
+            "memory",
+            "engine",
+            "engines",
             "gromacs",
+            "lammps",
+            "path",
+            "binary",
+            "wsl",
+            "version",
+            "verify",
+            "detect",
             "passwordless",
             "key",
+            "slurm",
+            "scheduler",
         ],
-        control: Control::Custom(crate::frontend::ui::render_remote_hosts_settings),
-        enabled: None,
-        indent: false,
-        is_default: None,
-        reset: None,
-        subgroup: None,
-    });
-    items.push(SettingDescriptor {
-        id: "hardware.remote",
-        category: SettingCategory::Compute,
-        group: "Remote hosts",
-        title: "Remote hardware",
-        description: "Detected CPU, memory, and GPU on a configured remote host, fetched over SSH.",
-        keywords: &[
-            "remote", "ssh", "host", "hardware", "cpu", "gpu", "memory", "cluster", "linux",
-        ],
-        control: Control::Custom(crate::frontend::ui::settings_registry::remote::render),
+        control: Control::Custom(crate::frontend::ui::render_compute_targets),
         enabled: None,
         indent: false,
         is_default: None,
