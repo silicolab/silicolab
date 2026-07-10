@@ -206,6 +206,7 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     poll_self_update(state, ctx);
     poll_metrics(state, ctx);
     poll_remote_probe(state, ctx);
+    poll_engine_verify(state, ctx);
     poll_remote_hardware(state, ctx);
     poll_remote_gpu_monitor(state, ctx);
     ensure_remote_jobs_loaded(state);
@@ -227,12 +228,41 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     }
 }
 
-/// Drain a finished Remote Hosts probe (passwordless check / GROMACS detect) and
-/// apply it: connection status, or the detected engine launch + version cached
-/// onto the host. Runs off the UI thread, so the panel stays responsive while a
-/// slow or dead host is probed.
+/// Drain a finished engine verification and record what it proved. Engines are
+/// verified the same way on every target, so this handles the local machine and a
+/// remote host alike.
+pub(crate) fn poll_engine_verify(state: &mut AppState, ctx: &egui::Context) {
+    let Some(probe) = state.jobs.engine_verify.take() else {
+        return;
+    };
+    match probe.receiver.try_recv() {
+        Ok(outcome) => {
+            super::super::apply_verify_outcome(
+                state,
+                probe.target,
+                probe.engine,
+                probe.checked_launch,
+                outcome,
+            );
+        }
+        Err(std::sync::mpsc::TryRecvError::Empty) => {
+            state.jobs.engine_verify = Some(probe);
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
+        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+            state
+                .ui
+                .settings
+                .engine_probe
+                .remove(&(probe.target, probe.engine.as_str()));
+        }
+    }
+}
+
+/// Drain a finished Remote Hosts probe (passwordless check / Slurm) and apply it.
+/// Runs off the UI thread, so the panel stays responsive while a slow or dead host
+/// is probed.
 pub(crate) fn poll_remote_probe(state: &mut AppState, ctx: &egui::Context) {
-    use crate::engines::registry::EngineLaunch;
     use crate::frontend::jobs::RemoteProbeOutcome;
     use crate::frontend::state::RemoteHostStatus;
 
@@ -264,28 +294,6 @@ pub(crate) fn poll_remote_probe(state: &mut AppState, ctx: &egui::Context) {
                     .to_string(),
             );
         }
-        Ok(RemoteProbeOutcome::Detected(Some((program, version)))) => {
-            if let Some(host) = state.config.remote_hosts.get_mut(&probe.host_id) {
-                host.engines
-                    .insert(EngineId::GROMACS, EngineLaunch::native(&program));
-                host.engine_versions
-                    .insert(EngineId::GROMACS.as_str().to_string(), version.clone());
-            }
-            if let Some(draft) = state.ui.settings.remote_host_drafts.get_mut(&probe.host_id) {
-                draft.gmx_program = program;
-            }
-            if let Err(error) = save_config(&state.config) {
-                state.set_message(format!("Detected GROMACS, but could not save: {error}"));
-            } else {
-                state.set_message(format!("Detected GROMACS {version} on the remote host"));
-            }
-        }
-        Ok(RemoteProbeOutcome::Detected(None)) => {
-            state.set_message(
-                "No GROMACS found on the remote host — set its path manually, or check the prelude."
-                    .to_string(),
-            );
-        }
         Ok(RemoteProbeOutcome::SlurmDetected(detection)) => {
             let accounting = if detection.sacct_available {
                 "sacct terminal history available"
@@ -304,10 +312,7 @@ pub(crate) fn poll_remote_probe(state: &mut AppState, ctx: &egui::Context) {
         }
         Ok(RemoteProbeOutcome::SlurmTested(console, deployment_id)) => {
             if let Some(host) = state.config.remote_hosts.get_mut(&probe.host_id) {
-                host.engine_versions.insert(
-                    crate::engines::remote::deploy::WORKER_DEPLOYMENT_KEY.to_string(),
-                    deployment_id,
-                );
+                host.worker_deployment = Some(deployment_id);
                 let _ = save_config(&state.config);
             }
             state.output_log.push(console);

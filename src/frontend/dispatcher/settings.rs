@@ -329,14 +329,19 @@ pub(crate) fn import_settings(state: &mut AppState, ctx: &egui::Context) {
     }
 }
 
-/// Open the Settings dialog at the Compute category, which contains the Remote
-/// hosts editor. Invoked from the per-task target picker's "Add host…" button so
-/// users can configure a host without hunting for the section.
-pub(crate) fn open_remote_hosts_settings(state: &mut AppState) {
+/// Open the Settings dialog at the Compute category, whose Compute targets group
+/// holds the remote hosts. Invoked from the per-task target picker's "Add host…"
+/// button so users can configure a host without hunting for the section.
+/// Reveal the add-host form, bringing Settings to it. Navigating alone is not
+/// enough: the picker that emits this also renders *inside* Settings, where every
+/// other step here is already true and the click would do nothing visible.
+pub(crate) fn begin_add_remote_host(state: &mut AppState) {
     state.ui.layout.settings_open = true;
     state.ui.settings.search_query.clear();
     state.ui.settings.selected_category =
         crate::frontend::ui::settings_registry::SettingCategory::Compute;
+    state.ui.settings.adding_host = true;
+    state.ui.settings.scroll_to_add_host = true;
 }
 
 /// Resize the primary (left) sidebar. The right sidebar and bottom panel are

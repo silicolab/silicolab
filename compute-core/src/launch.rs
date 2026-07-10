@@ -67,6 +67,39 @@ impl EngineLaunch {
     }
 }
 
+/// Proof that a specific [`EngineLaunch`] ran and identified itself as the engine
+/// it is configured for.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Verification {
+    pub version: String,
+    /// Seconds since the Unix epoch, so the record survives serialization.
+    pub checked_at: u64,
+}
+
+impl Verification {
+    pub fn now(version: impl Into<String>) -> Self {
+        Self {
+            version: version.into(),
+            checked_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|since| since.as_secs())
+                .unwrap_or_default(),
+        }
+    }
+}
+
+/// One engine's launch on one target, together with the verification of *that*
+/// launch. The two live in one struct so a verification can never outlive the
+/// launch it describes: replacing the launch replaces the entry, and the proof
+/// goes with it. Nothing has to remember to invalidate a cached version.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EngineEntry {
+    #[serde(flatten)]
+    pub launch: EngineLaunch,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verified: Option<Verification>,
+}
+
 /// The per-engine launches configured for one compute target — the local machine
 /// (`AppConfig::engine_overrides`) or a remote host (`RemoteHost::engines`). One
 /// type for both, so "how do I launch engine E on target T" has a single answer
@@ -76,32 +109,79 @@ impl EngineLaunch {
 /// one when the user clears the field.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct EngineLaunches(HashMap<String, EngineLaunch>);
+pub struct EngineLaunches(HashMap<String, EngineEntry>);
 
 impl EngineLaunches {
     pub fn new() -> Self {
         Self::default()
     }
 
+    pub fn entry(&self, id: EngineId) -> Option<&EngineEntry> {
+        self.0
+            .get(id.as_str())
+            .filter(|entry| !entry.launch.is_empty())
+    }
+
     pub fn get(&self, id: EngineId) -> Option<&EngineLaunch> {
-        self.0.get(id.as_str()).filter(|launch| !launch.is_empty())
+        self.entry(id).map(|entry| &entry.launch)
     }
 
     pub fn contains(&self, id: EngineId) -> bool {
-        self.get(id).is_some()
+        self.entry(id).is_some()
     }
 
+    /// Configure `launch`, discarding any verification of the launch it replaces.
     pub fn insert(&mut self, id: EngineId, launch: EngineLaunch) {
-        self.0.insert(id.as_str().to_string(), launch);
+        self.0.insert(
+            id.as_str().to_string(),
+            EngineEntry {
+                launch,
+                verified: None,
+            },
+        );
+    }
+
+    /// Configure `launch` together with the version it just reported.
+    pub fn insert_verified(
+        &mut self,
+        id: EngineId,
+        launch: EngineLaunch,
+        version: impl Into<String>,
+    ) {
+        self.insert_verification(id, launch, Verification::now(version));
+    }
+
+    /// Configure `launch` with an existing proof, preserving when it was checked.
+    pub fn insert_verification(
+        &mut self,
+        id: EngineId,
+        launch: EngineLaunch,
+        verification: Verification,
+    ) {
+        self.0.insert(
+            id.as_str().to_string(),
+            EngineEntry {
+                launch,
+                verified: Some(verification),
+            },
+        );
     }
 
     /// Record an auto-detected launch, leaving a configured one untouched.
     /// Returns `true` when it was newly inserted, so the caller knows to persist.
-    pub fn cache_detected(&mut self, id: EngineId, launch: EngineLaunch) -> bool {
+    pub fn cache_detected(
+        &mut self,
+        id: EngineId,
+        launch: EngineLaunch,
+        version: Option<String>,
+    ) -> bool {
         if self.contains(id) {
             return false;
         }
-        self.insert(id, launch);
+        match version {
+            Some(version) => self.insert_verified(id, launch, version),
+            None => self.insert(id, launch),
+        }
         true
     }
 
@@ -170,14 +250,14 @@ mod tests {
             command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
             program: "/usr/local/gromacs/bin/gmx".to_string(),
         };
-        assert!(launches.cache_detected(EngineId::GROMACS, detected));
+        assert!(launches.cache_detected(EngineId::GROMACS, detected, Some("2026.2".into())));
         assert_eq!(
             launches.get(EngineId::GROMACS).map(|l| l.program.as_str()),
             Some("/usr/local/gromacs/bin/gmx")
         );
 
         // A later detection must not overwrite a launch already configured.
-        assert!(!launches.cache_detected(EngineId::GROMACS, EngineLaunch::native("gmx")));
+        assert!(!launches.cache_detected(EngineId::GROMACS, EngineLaunch::native("gmx"), None));
         assert_eq!(
             launches.get(EngineId::GROMACS).map(|l| l.program.as_str()),
             Some("/usr/local/gromacs/bin/gmx")
@@ -193,6 +273,47 @@ mod tests {
         assert!(!launches.contains(EngineId::GROMACS));
         assert!(launches.get(EngineId::GROMACS).is_none());
         // …and a real detection still caches over it.
-        assert!(launches.cache_detected(EngineId::GROMACS, EngineLaunch::native("gmx")));
+        assert!(launches.cache_detected(EngineId::GROMACS, EngineLaunch::native("gmx"), None));
+    }
+
+    /// The invariant the whole verification model rests on: a proof belongs to the
+    /// launch it was taken against. Re-pointing the program at another binary must
+    /// leave nothing behind that could be shown beside the new path.
+    #[test]
+    fn reconfiguring_a_launch_discards_its_verification() {
+        let mut launches = EngineLaunches::new();
+        launches.insert_verified(
+            EngineId::GROMACS,
+            EngineLaunch::native("/usr/local/gromacs/bin/gmx"),
+            "2026.2",
+        );
+        assert!(
+            launches
+                .entry(EngineId::GROMACS)
+                .unwrap()
+                .verified
+                .is_some()
+        );
+
+        launches.insert(
+            EngineId::GROMACS,
+            EngineLaunch::native("/opt/gromacs-2022.5/bin/gmx"),
+        );
+        let entry = launches.entry(EngineId::GROMACS).expect("entry");
+        assert_eq!(entry.launch.program, "/opt/gromacs-2022.5/bin/gmx");
+        assert!(
+            entry.verified.is_none(),
+            "the 2026.2 proof must not survive onto the 2022.5 path"
+        );
+    }
+
+    /// A launch authored before verification existed loads as configured-but-unverified.
+    #[test]
+    fn a_legacy_launch_without_verification_parses() {
+        let json = r#"{"gromacs":{"command_prefix":["wsl.exe","-e"],"program":"gmx"}}"#;
+        let launches: EngineLaunches = serde_json::from_str(json).expect("legacy launches parse");
+        let entry = launches.entry(EngineId::GROMACS).expect("entry");
+        assert_eq!(entry.launch.program, "gmx");
+        assert!(entry.verified.is_none());
     }
 }

@@ -8,7 +8,7 @@
 //!
 //! [`RemoteTarget`], the hardened SSH option block, the incremental
 //! [`sync_up`]/[`sync_down`] file transfer, and the host probes
-//! ([`detect_remote_engine`], [`run_probe_command`]) are the shared spine the
+//! ([`verify_remote_launch`], [`probe_remote`], [`run_probe_command`]) are the shared spine the
 //! detached [`launcher`] drives to deploy and run the pre-deployed headless worker
 //! on a host. How to *launch* an engine is not this module's business: an
 //! [`crate::launch::EngineLaunch`] rides in the job's `request.json`.
@@ -36,6 +36,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::engines::process::{self, ProcessConfig};
 use crate::hosts::RemoteHost;
+use crate::launch::EngineLaunch;
 
 /// Plain-data SSH connection target plus the per-run remote scratch dir. Built
 /// fresh per job by [`RemoteTarget::for_run`]; cheaply `Clone`.
@@ -273,35 +274,65 @@ pub fn check_passwordless(target: &RemoteTarget) -> bool {
     matches!(process::run(config), Ok(result) if result.success())
 }
 
-/// SSH-run each of `spec`'s candidate executables as
-/// `<prelude && candidate> <version_arg>` and return the first that identifies as
-/// that engine, with its parsed version. Used by the settings "Detect" button and
-/// by remote launch resolution at submit time (always off the UI thread).
-pub fn detect_remote_engine(
+/// SSH-run `<prelude && launch> <version_arg>` and decide whether it *is* this
+/// engine. The remote twin of [`crate::engines::registry::verify_launch`]: same
+/// question, same two failure modes told apart ("would not start" vs "started, but
+/// is not this engine"), only the transport differs. Always off the UI thread.
+pub fn verify_remote_launch(
+    target: &RemoteTarget,
+    launch: &EngineLaunch,
+    spec: &crate::engines::registry::EngineSpec,
+) -> Result<String, String> {
+    let Some(version_arg) = spec.version_arg else {
+        return Err(format!("{} has no version check", spec.name));
+    };
+    let command = launch
+        .command_prefix
+        .iter()
+        .map(String::as_str)
+        .chain([launch.program.as_str()])
+        .map(sh_quote)
+        .collect::<Vec<_>>()
+        .join(" ");
+    let script = format!(
+        "{}{command} {}",
+        target.prelude_prefix(),
+        sh_quote(version_arg)
+    );
+    let config = ssh_config(target, &script, Some(Duration::from_secs(30)));
+    let result = process::run(config).map_err(|error| format!("ssh failed: {error}"))?;
+    let blob = format!("{}{}", result.stdout, result.stderr);
+    if !result.success() {
+        let detail = blob
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .unwrap_or("no output");
+        return Err(format!("`{command} {version_arg}` failed: {detail}"));
+    }
+    if !blob.contains(spec.identity_marker) {
+        return Err(format!(
+            "it runs, but does not identify itself as {}",
+            spec.name
+        ));
+    }
+    Ok(crate::engines::registry::extract_version(&blob).unwrap_or_else(|| spec.name.to_string()))
+}
+
+/// Find a working launch for `spec` on `target` when none is configured: verify
+/// each of the spec's candidate executables in turn, first hit wins. Used by remote
+/// launch resolution at submit time and by the settings panel's Verify when the
+/// program field is empty.
+pub fn probe_remote(
     target: &RemoteTarget,
     spec: &crate::engines::registry::EngineSpec,
-) -> Option<(String, String)> {
-    let version_arg = spec.version_arg?;
-    for candidate in spec.candidate_executables {
-        let script = format!(
-            "{}{} {}",
-            target.prelude_prefix(),
-            sh_quote(candidate),
-            sh_quote(version_arg)
-        );
-        let config = ssh_config(target, &script, Some(Duration::from_secs(30)));
-        let Ok(result) = process::run(config) else {
-            continue;
-        };
-        let blob = format!("{}{}", result.stdout, result.stderr);
-        if result.success()
-            && blob.contains(spec.identity_marker)
-            && let Some(version) = crate::engines::registry::extract_version(&blob)
-        {
-            return Some((candidate.to_string(), version));
-        }
-    }
-    None
+) -> Option<(EngineLaunch, String)> {
+    spec.candidate_executables.iter().find_map(|candidate| {
+        let launch = EngineLaunch::native(*candidate);
+        verify_remote_launch(target, &launch, spec)
+            .ok()
+            .map(|version| (launch, version))
+    })
 }
 
 /// SSH-run `script` on `target` and return its stdout. Errors only when the SSH
@@ -592,17 +623,10 @@ mod tests {
     fn remote_target_anchors_dir_at_run_uuid() {
         use crate::hosts::RemoteHost;
         let host = RemoteHost {
-            id: "h".to_string(),
-            label: "H".to_string(),
             hostname: "example.edu".to_string(),
             username: "bob".to_string(),
-            port: 22,
             work_root: "~/.silicolab/".to_string(), // trailing slash trimmed
-            prelude: Vec::new(),
-            engines: crate::launch::EngineLaunches::new(),
-            engine_versions: HashMap::new(),
-            resources: Default::default(),
-            scheduler: Default::default(),
+            ..Default::default()
         };
         let target = RemoteTarget::for_run(&host, "abc-123");
         assert_eq!(target.remote_dir, "~/.silicolab/runs/abc-123");

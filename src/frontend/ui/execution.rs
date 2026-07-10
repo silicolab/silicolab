@@ -35,11 +35,12 @@ pub(crate) fn remote_host_options(state: &AppState) -> Vec<(String, String)> {
 }
 
 /// The compute-target picker: "This machine" plus every configured remote host,
-/// and an always-visible "Add host…" button that opens the Remote Hosts settings
-/// so a user can discover host configuration without already knowing where it
-/// lives. Mutates `target` in place; `actions` carries the open-settings request.
-/// `id_salt` distinguishes instances that can be on screen at once (e.g. a task
-/// panel's picker and the Settings default-target picker over it).
+/// and a trailing "Add a host…" item that opens Settings with the add-host form
+/// showing. The item sits inside the dropdown because that is where a user learns
+/// the host they wanted is not there; it does not change `target`. Mutates `target`
+/// in place; `actions` carries the open-settings request. `id_salt` distinguishes
+/// instances that can be on screen at once (e.g. a task panel's picker and the
+/// Settings default-target picker over it).
 pub(crate) fn compute_target_picker(
     ui: &mut egui::Ui,
     target: &mut ComputeTarget,
@@ -65,14 +66,17 @@ pub(crate) fn compute_target_picker(
                 for (id, label) in hosts {
                     ui.selectable_value(target, ComputeTarget::Remote(id.clone()), label);
                 }
+                ui.separator();
+                if ui
+                    .selectable_label(
+                        false,
+                        format!("{}  Add a host…", egui_phosphor::regular::PLUS),
+                    )
+                    .clicked()
+                {
+                    actions.push(AppAction::BeginAddRemoteHost);
+                }
             });
-        if ui
-            .button(format!("{}  Add host…", egui_phosphor::regular::PLUS))
-            .on_hover_text("Add or manage remote hosts in Settings")
-            .clicked()
-        {
-            actions.push(AppAction::OpenRemoteHostsSettings);
-        }
     });
 }
 

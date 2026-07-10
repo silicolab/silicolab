@@ -6,6 +6,7 @@ use super::agent::{RunningAgentTurn, TrackedAgentJob};
 use super::disorder::RunningDisorderJob;
 use super::docking::RunningDockingJob;
 use super::engine::RunningEngineJob;
+use super::engine_verify::RunningEngineVerify;
 use super::metrics::RunningMetricsSampler;
 use super::optimization::RunningOptimization;
 use super::qm::RunningQmJob;
@@ -29,8 +30,10 @@ pub struct JobManager {
     /// In-flight one-click self-update (download + replace the executable),
     /// started when the user clicks the update badge.
     pub self_update: Option<RunningSelfUpdate>,
-    /// In-flight Remote Hosts settings probe (passwordless check / engine detect).
+    /// In-flight Remote Hosts settings probe (passwordless check / Slurm).
     pub remote_probe: Option<RunningRemoteProbe>,
+    /// In-flight engine verification for one compute target (Settings ▸ Compute).
+    pub engine_verify: Option<RunningEngineVerify>,
     /// In-flight remote hardware inventory probe (Settings ▸ Hardware ▸ Remote).
     pub remote_hardware: Option<RunningRemoteHardwareFetch>,
     /// In-flight assistant model turn (one `provider.complete()` POST). One

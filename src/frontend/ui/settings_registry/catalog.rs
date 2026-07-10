@@ -211,84 +211,68 @@ pub fn registry() -> Vec<SettingDescriptor> {
         subgroup: None,
     });
 
-    // Compute. Groups render in first-appearance order: This machine, Engines,
-    // Remote hosts, Defaults for new jobs, Monitoring.
-
-    // This machine — read-only detected CPU / GPU / RAM inventory.
+    // Compute targets — this machine and each configured remote host, each a
+    // collapser owning that target's hardware and engine launches. Hosts are added
+    // at runtime, so per-target sections cannot be static descriptors; the whole
+    // group is one Custom body. Strong keywords because search over a Custom
+    // descriptor is all-or-nothing on this metadata.
     items.push(SettingDescriptor {
-        id: "hardware.compute",
+        id: "compute.targets",
         category: SettingCategory::Compute,
-        group: "This machine",
-        title: "Compute hardware",
-        description: "Detected CPU, GPU, and memory.",
-        keywords: &[
-            "cpu", "gpu", "cores", "threads", "ram", "memory", "hardware", "parallel",
-        ],
-        control: Control::Custom(crate::frontend::ui::settings_registry::hardware::render),
-        enabled: None,
-        indent: false,
-        is_default: None,
-        reset: None,
-        subgroup: None,
-    });
-
-    // Engines — the local engine/binary editor. Strong keywords because search on
-    // a Custom descriptor is all-or-nothing on this metadata.
-    items.push(SettingDescriptor {
-        id: "engines.registry",
-        category: SettingCategory::Compute,
-        group: "Engines",
-        title: "Compute engines",
+        group: "Compute targets",
+        title: "Compute targets",
         description: "",
         keywords: &[
-            "engine", "engines", "gromacs", "lammps", "path", "binary", "wsl", "version", "detect",
-        ],
-        control: Control::Custom(crate::frontend::ui::render_engine_settings),
-        enabled: None,
-        indent: false,
-        is_default: None,
-        reset: None,
-        subgroup: None,
-    });
-
-    // Remote hosts — SSH execution targets, with the hardware probe beside the
-    // editor that configures them.
-    items.push(SettingDescriptor {
-        id: "engines.remote_hosts",
-        category: SettingCategory::Compute,
-        group: "Remote hosts",
-        title: "Remote hosts (SSH)",
-        description: "SSH targets jobs can run on; passwordless key auth is recommended.",
-        keywords: &[
+            "this machine",
+            "local",
             "remote",
             "ssh",
             "host",
             "hpc",
             "cluster",
-            "scp",
-            "submit",
-            "compute",
+            "hardware",
+            "cpu",
+            "gpu",
+            "cores",
+            "threads",
+            "ram",
+            "memory",
+            "engine",
+            "engines",
             "gromacs",
+            "lammps",
+            "path",
+            "binary",
+            "wsl",
+            "version",
+            "verify",
+            "detect",
             "passwordless",
             "key",
+            "slurm",
+            "scheduler",
         ],
-        control: Control::Custom(crate::frontend::ui::render_remote_hosts_settings),
+        control: Control::Custom(crate::frontend::ui::render_compute_targets),
         enabled: None,
         indent: false,
         is_default: None,
         reset: None,
         subgroup: None,
     });
+
+    // Built-in engines — compiled in, so they belong to no compute target and have
+    // nothing to configure. Read-only, and kept out of the launch editors above so
+    // a green check there always means "this launch was run and it worked".
     items.push(SettingDescriptor {
-        id: "hardware.remote",
+        id: "engines.builtin",
         category: SettingCategory::Compute,
-        group: "Remote hosts",
-        title: "Remote hardware",
-        description: "Detected CPU, memory, and GPU on a configured remote host, fetched over SSH.",
+        group: "Built-in engines",
+        title: "Included with SilicoLab",
+        description: "Always available; no setup and no external binary.",
         keywords: &[
-            "remote", "ssh", "host", "hardware", "cpu", "gpu", "memory", "cluster", "linux",
+            "builtin", "built-in", "hartree", "uff", "docking", "vina", "engine", "engines",
         ],
-        control: Control::Custom(crate::frontend::ui::settings_registry::remote::render),
+        control: Control::Custom(crate::frontend::ui::render_builtin_engines),
         enabled: None,
         indent: false,
         is_default: None,

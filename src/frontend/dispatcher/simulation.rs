@@ -1,5 +1,8 @@
 use super::*;
 
+use crate::backend::config::ComputeTarget;
+use crate::frontend::state::{EngineDraft, EngineProbeState};
+
 mod md_build;
 mod remote;
 #[cfg(test)]
@@ -7,9 +10,9 @@ mod tests;
 
 pub(crate) use md_build::{FRAMEWORK_C_FLOOR_ANGSTROM, build_md_system};
 pub(crate) use remote::{
-    add_remote_host, check_remote_host, detect_remote_gromacs, detect_remote_slurm,
-    fetch_remote_hardware, refresh_slurm_capabilities, remove_remote_host, save_remote_host,
-    set_monitor_source, setup_remote_host_key, test_remote_slurm,
+    add_remote_host, cancel_add_remote_host, check_remote_host, commit_remote_host_draft,
+    detect_remote_slurm, fetch_remote_hardware, refresh_slurm_capabilities, remove_remote_host,
+    save_remote_host, set_monitor_source, setup_remote_host_key, test_remote_slurm,
 };
 
 pub(crate) fn start_pending_md_run(state: &mut AppState) {
@@ -214,7 +217,12 @@ pub(crate) fn resolve_md_engine_launch(
     };
     let resolved = resolve_engine_launch(LaunchTarget::Local(&state.config.engine_overrides), id)?;
     if resolved.detected {
-        persist_detected_engine_launch(state, id, resolved.launch.clone());
+        persist_detected_engine_launch(
+            state,
+            id,
+            resolved.launch.clone(),
+            resolved.version.clone(),
+        );
     }
     Ok(resolved.launch)
 }
@@ -234,22 +242,25 @@ pub(crate) fn resolve_md_compute(
 }
 
 /// Cache an auto-detected engine launch into `engine_overrides` and save the
-/// config, so later builds reuse it without re-probing. No-op when an override
-/// already exists (set by the user or a prior detection) so a configured launch
-/// is never clobbered.
+/// config, so later builds reuse it without re-probing. No-op when a launch is
+/// already configured (by the user or a prior detection), which is never clobbered.
+///
+/// A probe verifies what it finds, so `version` is a proof of *this* launch and is
+/// stored with it — the panel can show it without re-running the engine.
 pub(crate) fn persist_detected_engine_launch(
     state: &mut AppState,
     id: EngineId,
     launch: crate::engines::registry::EngineLaunch,
+    version: Option<String>,
 ) {
-    if state.config.engine_overrides.cache_detected(id, launch) {
+    if state
+        .config
+        .engine_overrides
+        .cache_detected(id, launch, version)
+    {
         // Keep the Settings panel draft in sync so it reflects the cached launch.
         state.ui.settings.engine_drafts.remove(id.as_str());
         persist_engine_config(state, "GROMACS launch detected and saved");
-        // Refresh the Settings registry so the engine's status indicator flips to
-        // available (green) immediately — the detection just succeeded, so the
-        // user shouldn't have to click "Detect" to see it. Cheap re-probe (reads
-        // the override; no `--version` WSL cold-start).
         reprobe_engines(state);
     }
 }
@@ -317,24 +328,56 @@ pub(crate) fn set_md_run_override(
     });
 }
 
-/// Cheap availability resolve (no subprocess). Used to populate the panel on
-/// first open and after edits, without paying the WSL `--version` cost.
+/// Cheap resolve of what is *configured* (no subprocess). Used to populate the
+/// panel on first open and after edits, without paying the WSL `--version` cost.
 pub(crate) fn reprobe_engines(state: &mut AppState) {
     state.ui.settings.engine_registry = Some(EngineRegistry::probe(&state.config.engine_overrides));
 }
 
-/// Slow, user-initiated: resolve availability *and* run each engine's
-/// `--version`, then record the time so the panel can show how fresh the
-/// version strings are.
-pub(crate) fn detect_engine_versions(state: &mut AppState) {
-    state.ui.settings.engine_registry = Some(EngineRegistry::probe_with_versions(
-        &state.config.engine_overrides,
+/// Verify `engine` on `target`: commit whatever the user has typed, then run it on
+/// a worker thread. Committing first is what makes the button and the field reach
+/// each other — the launch that gets verified is the one on screen.
+///
+/// An empty program is committed as "not configured", which makes the verification
+/// a probe of the target's candidates; its result is written back into the field.
+pub(crate) fn verify_engine(state: &mut AppState, target: ComputeTarget, engine: EngineId) {
+    use crate::frontend::jobs::VerifyTarget;
+
+    if state.jobs.engine_verify.is_some() {
+        state.set_message("An engine check is already running".to_string());
+        return;
+    }
+    let launches = match &target {
+        ComputeTarget::Local => {
+            commit_local_engine_draft(state, engine);
+            VerifyTarget::Local(state.config.engine_overrides.clone())
+        }
+        ComputeTarget::Remote(id) => {
+            if let Err(error) = crate::engines::remote::ensure_ssh_available() {
+                state.set_message(error.to_string());
+                return;
+            }
+            match super::commit_remote_host_draft(state, id) {
+                Ok(host) => VerifyTarget::Remote(Box::new(host)),
+                Err(error) => {
+                    state.set_message(error.to_string());
+                    return;
+                }
+            }
+        }
+    };
+    state.ui.settings.engine_probe.insert(
+        (target.clone(), engine.as_str()),
+        EngineProbeState::Verifying,
+    );
+    state.jobs.engine_verify = Some(crate::frontend::jobs::spawn_engine_verify(
+        target, launches, engine,
     ));
-    state.ui.settings.engine_versions_checked_at = Some(std::time::SystemTime::now());
-    state.set_message("Detected engine versions".to_string());
 }
 
-pub(crate) fn apply_engine_override(state: &mut AppState, id: EngineId) {
+/// Write this machine's engine draft into `engine_overrides`. An empty program
+/// clears the launch, which is how the user asks for auto-detection back.
+fn commit_local_engine_draft(state: &mut AppState, id: EngineId) {
     let draft = state
         .ui
         .settings
@@ -342,24 +385,158 @@ pub(crate) fn apply_engine_override(state: &mut AppState, id: EngineId) {
         .entry(id.as_str().to_string())
         .or_default();
     match draft.to_launch() {
-        Some(launch) => {
-            state.config.engine_overrides.insert(id, launch);
-        }
-        None => {
-            state.config.engine_overrides.remove(id);
-        }
+        Some(launch) => state.config.engine_overrides.insert(id, launch),
+        None => state.config.engine_overrides.remove(id),
     }
-    // "Apply & Detect" is an explicit user action, so paying the version probe
-    // cost here is expected.
-    detect_engine_versions(state);
     persist_engine_config(state, "engine launch updated");
+    reprobe_engines(state);
 }
 
-pub(crate) fn clear_engine_override(state: &mut AppState, id: EngineId) {
-    state.config.engine_overrides.remove(id);
-    state.ui.settings.engine_drafts.remove(id.as_str());
-    persist_engine_config(state, "engine override cleared; using auto-detection");
+/// Record what a verification learned. A success is persisted onto the launch it
+/// proves; a failure stays in session state, beside the field that caused it.
+pub(crate) fn apply_verify_outcome(
+    state: &mut AppState,
+    target: ComputeTarget,
+    engine: EngineId,
+    checked_launch: Option<crate::engines::registry::EngineLaunch>,
+    outcome: crate::backend::engine_launch::VerifyOutcome,
+) {
+    use crate::backend::engine_launch::VerifyOutcome;
+
+    let key = (target.clone(), engine.as_str());
+    state.ui.settings.engine_probe.remove(&key);
+    if current_engine_draft_launch(state, &target, engine) != checked_launch {
+        state.set_message("Engine check ignored because the launch was edited".to_string());
+        return;
+    }
+    let message = match outcome {
+        VerifyOutcome::Verified { launch, version } => {
+            let command = launch.display_command();
+            set_engine_launch(state, &target, engine, Some((launch, version.clone())));
+            format!("{} {version} verified at {command}", engine.as_str())
+        }
+        VerifyOutcome::Failed { launch, reason } => {
+            state.ui.settings.engine_probe.insert(
+                key,
+                EngineProbeState::Failed {
+                    launch: Some(launch),
+                    reason,
+                },
+            );
+            return;
+        }
+        VerifyOutcome::NotFound { reason } => {
+            state.ui.settings.engine_probe.insert(
+                key,
+                EngineProbeState::Failed {
+                    launch: None,
+                    reason,
+                },
+            );
+            return;
+        }
+    };
+    state.set_message(message);
+}
+
+fn current_engine_draft_launch(
+    state: &AppState,
+    target: &ComputeTarget,
+    engine: EngineId,
+) -> Option<crate::engines::registry::EngineLaunch> {
+    match target {
+        ComputeTarget::Local => state
+            .ui
+            .settings
+            .engine_drafts
+            .get(engine.as_str())
+            .and_then(EngineDraft::to_launch),
+        ComputeTarget::Remote(id) => {
+            if let Some(draft) = state.ui.settings.remote_host_drafts.get(id) {
+                draft
+                    .engines
+                    .get(engine.as_str())
+                    .and_then(EngineDraft::to_launch)
+            } else {
+                state
+                    .config
+                    .remote_hosts
+                    .get(id)
+                    .and_then(|host| host.engines.get(engine))
+                    .cloned()
+            }
+        }
+    }
+}
+
+/// Store (or clear) `engine`'s launch on `target`, refreshing the draft the panel
+/// edits so the user sees what was written — a probe fills in the program it found.
+fn set_engine_launch(
+    state: &mut AppState,
+    target: &ComputeTarget,
+    engine: EngineId,
+    resolved: Option<(crate::engines::registry::EngineLaunch, String)>,
+) {
+    let launches = match target {
+        ComputeTarget::Local => Some(&mut state.config.engine_overrides),
+        ComputeTarget::Remote(id) => state
+            .config
+            .remote_hosts
+            .get_mut(id)
+            .map(|host| &mut host.engines),
+    };
+    let Some(launches) = launches else {
+        return;
+    };
+    match &resolved {
+        Some((launch, version)) => launches.insert_verified(engine, launch.clone(), version),
+        None => launches.remove(engine),
+    }
+
+    let draft = resolved
+        .as_ref()
+        .map(|(launch, _)| EngineDraft::from_launch(launch));
+    match target {
+        ComputeTarget::Local => match draft {
+            Some(draft) => {
+                state
+                    .ui
+                    .settings
+                    .engine_drafts
+                    .insert(engine.as_str().to_string(), draft);
+            }
+            None => {
+                state.ui.settings.engine_drafts.remove(engine.as_str());
+            }
+        },
+        ComputeTarget::Remote(id) => {
+            if let Some(host_draft) = state.ui.settings.remote_host_drafts.get_mut(id) {
+                match draft {
+                    Some(draft) => {
+                        host_draft
+                            .engines
+                            .insert(engine.as_str().to_string(), draft);
+                    }
+                    None => {
+                        host_draft.engines.remove(engine.as_str());
+                    }
+                }
+            }
+        }
+    }
+    persist_engine_config(state, "engine launch updated");
     reprobe_engines(state);
+}
+
+/// Forget `engine`'s configured launch on `target`, returning it to auto-detection.
+pub(crate) fn clear_engine_launch(state: &mut AppState, target: ComputeTarget, engine: EngineId) {
+    state
+        .ui
+        .settings
+        .engine_probe
+        .remove(&(target.clone(), engine.as_str()));
+    set_engine_launch(state, &target, engine, None);
+    state.set_message("Engine launch cleared; using auto-detection".to_string());
 }
 
 pub(crate) fn browse_engine_program(state: &mut AppState, id: EngineId) {

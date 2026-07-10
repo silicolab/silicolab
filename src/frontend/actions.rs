@@ -270,9 +270,20 @@ pub enum AppAction {
     /// Open or close the detail view of the stage at the given index.
     ToggleMdRunStageExpanded(usize),
     RefreshEngineRegistry,
-    DetectEngineVersions,
-    ApplyEngineOverride(crate::engines::registry::EngineId),
-    ClearEngineOverride(crate::engines::registry::EngineId),
+    /// Commit this target's engine draft, then run the engine to confirm the launch
+    /// works (worker thread). With no program configured, it probes the target and
+    /// fills the field in with what it found.
+    VerifyEngine {
+        target: crate::backend::config::ComputeTarget,
+        engine: crate::engines::registry::EngineId,
+    },
+    /// Forget this target's configured launch, falling back to auto-detection.
+    ClearEngineLaunch {
+        target: crate::backend::config::ComputeTarget,
+        engine: crate::engines::registry::EngineId,
+    },
+    /// Pick this target's engine program with a file dialog (local targets only —
+    /// a remote path is not browsable from here).
     BrowseEngineProgram(crate::engines::registry::EngineId),
     /// Add a new remote host from the "add host" draft.
     AddRemoteHost,
@@ -280,8 +291,6 @@ pub enum AppAction {
     SaveRemoteHost(String),
     /// Remove the host with this id.
     RemoveRemoteHost(String),
-    /// Detect GROMACS on the host with this id (worker thread).
-    DetectRemoteGromacs(String),
     DetectRemoteSlurm(String),
     RefreshSlurmCapabilities(String),
     TestRemoteSlurm(String),
@@ -290,9 +299,12 @@ pub enum AppAction {
     /// Generate the dedicated key (if needed) and show the one-line install
     /// command for the host with this id.
     SetupRemoteHostKey(String),
-    /// Open the Settings dialog at the Remote Hosts section (from the per-task
-    /// target picker's "Add host…" button).
-    OpenRemoteHostsSettings,
+    /// Show the add-host form in Compute targets, opening Settings there if it is
+    /// not already the visible pane. Emitted by the target picker's "Add a host…"
+    /// item and by the button at the end of the target list.
+    BeginAddRemoteHost,
+    /// Abandon the add-host form and its draft.
+    CancelAddRemoteHost,
     /// Set the global default compute target that new task panels seed from (each
     /// panel can still override it per run). Written to the settings file by the
     /// dispatcher.

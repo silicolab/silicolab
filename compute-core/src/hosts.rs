@@ -6,7 +6,6 @@
 //! directory (`~/.silicolab`) that also holds the SSH key/known-hosts the remote
 //! bootstrap writes, so the two are kept together.
 
-use std::collections::HashMap;
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
@@ -39,18 +38,18 @@ pub struct RemoteHost {
     /// non-interactive PATH.
     #[serde(default)]
     pub prelude: Vec<String>,
-    /// Per-engine launch on this host. `program` is the remote path to the engine
-    /// (or a bare name the prelude puts on PATH); `command_prefix` is normally
-    /// empty (the remote shell, not a local launcher, runs it). A job submitted to
-    /// this host carries the launch resolved from here in its `request.json` — the
-    /// worker never rediscovers the engine.
+    /// Per-engine launch on this host, each carrying the verification taken against
+    /// it. `program` is the remote path to the engine (or a bare name the prelude
+    /// puts on PATH); `command_prefix` wraps it (`apptainer exec …`, `srun`), and is
+    /// empty for a plain executable. A job submitted to this host carries the launch
+    /// resolved from here in its `request.json` — the worker never rediscovers the
+    /// engine.
     #[serde(default)]
     pub engines: EngineLaunches,
-    /// Cached `<engine> --version` strings, keyed by engine id, plus the reserved
-    /// `_worker` deployment identity. Engine entries let settings show versions
-    /// without re-probing over SSH on every open.
+    /// Identity of the worker binary last deployed here, a cache hint for
+    /// `remote::deploy`. Not an engine version: the worker is SilicoLab itself.
     #[serde(default)]
-    pub engine_versions: HashMap<String, String>,
+    pub worker_deployment: Option<String>,
     /// Per-host default resource request, resolved as per-job override → this →
     /// the app-wide core count. `cpus_per_task` caps the worker's thread pool so a
     /// job is a good citizen on a shared node; the rest render as scheduler
@@ -59,6 +58,25 @@ pub struct RemoteHost {
     pub resources: ResourceSpec,
     #[serde(default)]
     pub scheduler: SchedulerConfig,
+}
+
+impl Default for RemoteHost {
+    /// The same values `serde` fills in for a host record that omits them.
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            label: String::new(),
+            hostname: String::new(),
+            username: String::new(),
+            port: default_ssh_port(),
+            work_root: default_work_root(),
+            prelude: Vec::new(),
+            engines: EngineLaunches::new(),
+            worker_deployment: None,
+            resources: ResourceSpec::default(),
+            scheduler: SchedulerConfig::default(),
+        }
+    }
 }
 
 /// What a job asks the node (or a scheduler) for, launcher-agnostic. Every field
@@ -336,10 +354,41 @@ mod tests {
         assert_eq!(host.work_root, "~/.silicolab");
         assert!(host.prelude.is_empty());
         assert!(host.engines.is_empty());
-        assert!(host.engine_versions.is_empty());
+        assert!(host.worker_deployment.is_none());
         assert_eq!(host.resources, ResourceSpec::default());
         assert_eq!(host.resources.cpus_per_task, None);
         assert_eq!(host.scheduler, SchedulerConfig::Direct);
+    }
+
+    /// A host authored before the `engine_versions` pocket was split keeps its
+    /// launches, and the now-unknown field is simply ignored. Rescuing the worker
+    /// identity out of it is `backend::config`'s job, not this struct's.
+    #[test]
+    fn a_host_with_the_old_engine_versions_pocket_still_parses() {
+        let json = r#"{
+            "id": "h1",
+            "label": "Box",
+            "hostname": "example.com",
+            "username": "alice",
+            "engines": {"gromacs": {"program": "/opt/g/bin/gmx"}},
+            "engine_versions": {"_worker": "dev:abc", "gromacs": "2026.2"}
+        }"#;
+        let host: RemoteHost = serde_json::from_str(json).expect("legacy host parses");
+
+        let entry = host
+            .engines
+            .entry(crate::launch::EngineId::GROMACS)
+            .expect("the launch itself survives");
+        assert_eq!(entry.launch.program, "/opt/g/bin/gmx");
+        assert!(
+            entry.verified.is_none(),
+            "an unattributable version must not read as a verification"
+        );
+        assert!(
+            !serde_json::to_string(&host)
+                .unwrap()
+                .contains("engine_versions")
+        );
     }
 
     #[test]

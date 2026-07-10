@@ -1,6 +1,8 @@
-/// Editable draft for one engine's launch override in the Settings panel.
-/// `command_prefix` is held as a single whitespace-separated line for easy
-/// editing (e.g. `wsl.exe -e`); it is split on apply.
+use std::collections::BTreeMap;
+
+/// Editable draft for one engine's launch on one compute target. `command_prefix`
+/// is held as a single whitespace-separated line for easy editing (e.g.
+/// `wsl.exe -e`); it is split on apply.
 #[derive(Debug, Clone, Default)]
 pub struct EngineDraft {
     pub command_prefix: String,
@@ -33,9 +35,34 @@ impl EngineDraft {
     }
 }
 
+/// A verification that has not (yet) produced a proof. A success is never here —
+/// it is persisted onto the launch it verified.
+#[derive(Debug, Clone)]
+pub enum EngineProbeState {
+    Verifying,
+    /// The verification did not produce a proof. `launch` is the one that was run,
+    /// or `None` when nothing was configured and no candidate answered. Holding the
+    /// launch lets the panel drop the message the moment the user edits it.
+    Failed {
+        launch: Option<crate::engines::registry::EngineLaunch>,
+        reason: String,
+    },
+}
+
+impl EngineProbeState {
+    /// Whether this failure still describes `current`. An edited launch has not
+    /// been tried, so its predecessor's failure must stop being shown.
+    pub fn describes(&self, current: Option<&crate::engines::registry::EngineLaunch>) -> bool {
+        match self {
+            Self::Verifying => true,
+            Self::Failed { launch, .. } => launch.as_ref() == current,
+        }
+    }
+}
+
 /// Editable draft for one remote host in the Settings panel. All fields are held
-/// as text for direct editing and parsed/validated on save (`port`, `prelude`,
-/// and `gmx_program` in particular). Mirrors [`EngineDraft`].
+/// as text for direct editing and parsed/validated on save (`port` and `prelude`
+/// in particular).
 #[derive(Debug, Clone, Default)]
 pub struct RemoteHostDraft {
     pub label: String,
@@ -45,8 +72,10 @@ pub struct RemoteHostDraft {
     pub work_root: String,
     /// One shell setup line per text row (`module load gromacs`, `source GMXRC`).
     pub prelude: String,
-    /// Remote path to `gmx` (or a bare name resolved via the prelude/PATH).
-    pub gmx_program: String,
+    /// Per-engine launch drafts on this host, keyed by engine id — the same editor
+    /// this machine's engines use, so a remote engine can carry a `command_prefix`
+    /// (`apptainer exec image.sif`, `srun`) exactly as a local one can.
+    pub engines: BTreeMap<String, EngineDraft>,
     pub slurm: bool,
     pub scheduler_prelude: String,
     pub partition: String,
@@ -68,11 +97,12 @@ pub struct RemoteHostDraft {
 
 impl RemoteHostDraft {
     pub fn from_host(host: &crate::backend::config::RemoteHost) -> Self {
-        let gmx_program = host
-            .engines
-            .get(crate::engines::registry::EngineId::GROMACS)
-            .map(|launch| launch.program.clone())
-            .unwrap_or_default();
+        let engines = crate::engines::registry::external_engine_ids()
+            .filter_map(|id| {
+                let launch = host.engines.get(id)?;
+                Some((id.as_str().to_string(), EngineDraft::from_launch(launch)))
+            })
+            .collect();
         Self {
             label: host.label.clone(),
             hostname: host.hostname.clone(),
@@ -80,7 +110,7 @@ impl RemoteHostDraft {
             port: host.port.to_string(),
             work_root: host.work_root.clone(),
             prelude: host.prelude.join("\n"),
-            gmx_program,
+            engines,
             slurm: matches!(
                 host.scheduler,
                 crate::backend::config::SchedulerConfig::Slurm(_)

@@ -9,10 +9,10 @@
 //! closures), so they cannot capture and smuggle in a mutation path.
 //!
 //! The whole Settings panel is sourced here: a two-level category → group
-//! structure (General ▸ Appearance / Startup & Projects; Compute ▸ This machine /
-//! Engines / Remote hosts / Defaults for new jobs / Monitoring; Representation ▸
-//! Base / Cartoon / Surface / Color Schemes; Assistant; Advanced ▸
-//! Configuration). The engines editor, remote-host editor, and Advanced
+//! structure (General ▸ Appearance / Startup & Projects; Compute ▸ Compute
+//! targets / Built-in engines / Defaults for new jobs / Monitoring; Representation
+//! ▸ Base / Cartoon / Surface / Color Schemes; Assistant; Advanced ▸
+//! Configuration). The compute-targets editor, built-in engines, and Advanced
 //! meta-settings are wrapped wholesale as [`Control::Custom`] rather than
 //! rebuilt; the Representation page lives in `settings_representation`. A group
 //! may nest a collapsible [`Subgroup`] (e.g. Advanced's "Danger zone"). The modal
@@ -30,8 +30,7 @@
 mod accessors;
 mod catalog;
 mod custom;
-mod hardware;
-mod remote;
+pub(crate) mod hardware;
 mod render;
 mod schema;
 

@@ -13,7 +13,7 @@ use std::fmt::Write;
 use serde_json::{Value, json};
 
 use crate::backend::config::ApprovalMode;
-use crate::engines::registry::{EngineId, EngineRegistry};
+use crate::engines::registry::{EngineId, EngineRegistry, EngineStatus};
 use crate::frontend::console::{RiskLevel, command_risk};
 use crate::frontend::state::AppState;
 use crate::io::llm::types::{ToolCall, ToolDef};
@@ -660,10 +660,11 @@ pub fn inspect(state: &AppState, _query: Option<&str>) -> String {
     let _ = writeln!(
         out,
         "engines: GROMACS {}",
-        if registry.available(EngineId::GROMACS) {
-            "available"
-        } else {
-            "not configured"
+        match registry.status(EngineId::GROMACS) {
+            Some(EngineStatus::Verified { version, .. }) => format!("{version} (verified)"),
+            Some(EngineStatus::Unverified { launch }) =>
+                format!("configured at {}, not verified", launch.display_command()),
+            _ => "not configured".to_string(),
         }
     );
 

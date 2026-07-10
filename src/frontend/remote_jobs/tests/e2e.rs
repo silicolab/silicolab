@@ -35,13 +35,9 @@ fn test_host(engines: EngineLaunches) -> Option<RemoteHost> {
         label: "WSL".to_string(),
         hostname,
         username,
-        port: 22,
-        work_root: "~/.silicolab".to_string(),
         prelude,
         engines,
-        engine_versions: Default::default(),
-        resources: Default::default(),
-        scheduler: Default::default(),
+        ..Default::default()
     })
 }
 
@@ -393,4 +389,73 @@ fn remote_gromacs_honors_a_configured_non_standard_gmx() {
             "the run silently used the conventional install instead of `{program}`:\n{log}"
         );
     }
+}
+
+/// Verify checks the launch that is configured, not one it goes looking for.
+///
+/// The old Detect only ever walked the spec's candidate list, so the very paths
+/// that need typing by hand — the ones no candidate list can know — were the paths
+/// it could never confirm. The button and the field could not reach each other.
+/// `SILICOLAB_TEST_GMX_PROGRAM` names exactly such a path.
+#[test]
+#[ignore = "requires an SSH host with a non-standard gmx (set SILICOLAB_TEST_GMX_PROGRAM)"]
+fn verify_confirms_a_remote_gmx_no_candidate_list_would_find() {
+    use crate::backend::engine_launch::{LaunchTarget, VerifyOutcome, verify_engine};
+
+    let Ok(program) = std::env::var("SILICOLAB_TEST_GMX_PROGRAM") else {
+        eprintln!("skip: set SILICOLAB_TEST_GMX_PROGRAM to a non-standard gmx path");
+        return;
+    };
+    let spec = crate::engines::registry::engine_spec(EngineId::GROMACS).expect("gromacs spec");
+    assert!(
+        !spec.candidate_executables.contains(&program.as_str()),
+        "this test is only meaningful for a path auto-detection would never try"
+    );
+
+    let mut engines = EngineLaunches::new();
+    engines.insert(EngineId::GROMACS, EngineLaunch::native(&program));
+    let Some(host) = test_host(engines) else {
+        eprintln!("skip: set SILICOLAB_TEST_SSH_HOST to run the remote verify test");
+        return;
+    };
+
+    let outcome =
+        verify_engine(LaunchTarget::Remote(&host), EngineId::GROMACS).expect("gromacs has a spec");
+    let VerifyOutcome::Verified { launch, version } = outcome else {
+        panic!("the configured `{program}` should verify");
+    };
+    assert_eq!(
+        launch.program, program,
+        "verify must check what is configured"
+    );
+    assert!(
+        !version.is_empty(),
+        "a verification carries the reported version"
+    );
+}
+
+/// With nothing configured, Verify probes the host and hands back the launch it
+/// found, so the panel can fill the field in rather than detect invisibly.
+#[test]
+#[ignore = "requires an SSH host with a working gmx (set SILICOLAB_TEST_SSH_HOST)"]
+fn verify_with_no_program_probes_and_returns_the_launch_it_found() {
+    use crate::backend::engine_launch::{LaunchTarget, VerifyOutcome, verify_engine};
+
+    let Some(host) = test_host(EngineLaunches::new()) else {
+        eprintln!("skip: set SILICOLAB_TEST_SSH_HOST to run the remote verify test");
+        return;
+    };
+
+    let outcome =
+        verify_engine(LaunchTarget::Remote(&host), EngineId::GROMACS).expect("gromacs has a spec");
+    let VerifyOutcome::Verified { launch, .. } = outcome else {
+        panic!("the host should have a discoverable gmx");
+    };
+    let spec = crate::engines::registry::engine_spec(EngineId::GROMACS).expect("gromacs spec");
+    assert!(
+        spec.candidate_executables
+            .contains(&launch.program.as_str()),
+        "a probe returns one of the candidates, got {:?}",
+        launch.program
+    );
 }

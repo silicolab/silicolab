@@ -13,7 +13,7 @@
 //! 5. atomically replace the stable symlink, retaining prior binaries so an
 //!    in-flight job keeps the executable it launched against.
 //!
-//! The recorded deployment identity in [`RemoteHost::engine_versions`] is a cache
+//! The recorded deployment identity in [`RemoteHost::worker_deployment`] is a cache
 //! hint. Even on a match, the remote binary must run and report this package
 //! version before it is reused.
 
@@ -24,11 +24,6 @@ use super::{RemoteTarget, artifact::WorkerArtifact, validate_work_root};
 use crate::engines::process::{self, ProcessConfig};
 use crate::hosts::RemoteHost;
 use anyhow::{Context, Result, bail};
-
-/// `engine_versions` key recording the worker deployment identity. A leading
-/// underscore can never collide with an `EngineId` string (`uff` / `hartree` /
-/// `gromacs` / `docking`, and any future engine, are bare lowercase words).
-pub const WORKER_DEPLOYMENT_KEY: &str = "_worker";
 
 /// A worker confirmed present on the remote host for a deployment identity.
 #[derive(Debug, Clone)]
@@ -49,7 +44,7 @@ pub fn ensure_worker_deployed(host: &RemoteHost, target: &RemoteTarget) -> Resul
     let qualifier = artifact.remote_qualifier();
     let qualified = worker_qualified_path(host, &qualifier)?;
 
-    if recorded_identity(&host.engine_versions) == Some(deployment_id.as_str()) {
+    if host.worker_deployment.as_deref() == Some(deployment_id.as_str()) {
         let reported = run_checked(target, &format!("{qualified} --version")).ok();
         if cache_hit_is_usable(
             Some(deployment_id.as_str()),
@@ -87,12 +82,6 @@ pub fn ensure_worker_deployed(host: &RemoteHost, target: &RemoteTarget) -> Resul
         deployment_id,
         remote_path: qualified,
     })
-}
-
-fn recorded_identity(engine_versions: &std::collections::HashMap<String, String>) -> Option<&str> {
-    engine_versions
-        .get(WORKER_DEPLOYMENT_KEY)
-        .map(String::as_str)
 }
 
 fn cache_hit_is_usable(
@@ -211,15 +200,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn worker_deployment_key_cannot_collide_with_engine_ids() {
-        // The reserved key must never be a real EngineId string.
-        for id in ["uff", "hartree", "gromacs", "docking"] {
-            assert_ne!(WORKER_DEPLOYMENT_KEY, id);
-        }
-        assert!(WORKER_DEPLOYMENT_KEY.starts_with('_'));
-    }
-
-    #[test]
     fn arch_refusal_names_the_bad_arch_and_requires_x86_64() {
         let message = arch_refusal_message("Cluster", "aarch64");
         assert!(message.contains("aarch64"));
@@ -264,17 +244,8 @@ mod tests {
     #[test]
     fn worker_paths_anchor_at_work_root_bin() {
         let host = RemoteHost {
-            id: "h".into(),
-            label: "H".into(),
-            hostname: "example.edu".into(),
-            username: "bob".into(),
-            port: 22,
             work_root: "~/.silicolab/".into(),
-            prelude: Vec::new(),
-            engines: crate::launch::EngineLaunches::new(),
-            engine_versions: std::collections::HashMap::new(),
-            resources: Default::default(),
-            scheduler: Default::default(),
+            ..Default::default()
         };
         assert_eq!(worker_bin_dir(&host).unwrap(), "~/.silicolab/bin");
         assert_eq!(

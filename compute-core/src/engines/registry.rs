@@ -55,27 +55,59 @@ impl EngineLaunch {
     }
 }
 
-/// One engine's metadata and the result of probing it on the current system.
+/// What is known about one engine on one target. The distinction the UI lives or
+/// dies by is [`EngineStatus::Unverified`] vs [`EngineStatus::Verified`]: a launch
+/// exists either way, but only the latter has been run and answered for itself.
+///
+/// A failed verification is deliberately absent. It is a fact about the target
+/// *right now*, it decays faster than a success, and replaying a week-old failure
+/// on app start is worse than admitting the launch is simply unverified. Failures
+/// live in the caller's session state, keyed by the launch that produced them.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EngineStatus {
+    /// Compiled into SilicoLab; nothing to configure and nothing to verify.
+    BuiltIn { version: Option<String> },
+    /// No launch configured, and none found on the target.
+    NotConfigured,
+    /// A launch exists (configured, or found on the target's PATH) but has never
+    /// been run. Whether it works is unknown.
+    Unverified { launch: EngineLaunch },
+    /// This exact launch ran and identified itself as this engine.
+    Verified {
+        launch: EngineLaunch,
+        version: String,
+        checked_at: u64,
+    },
+}
+
+impl EngineStatus {
+    pub fn launch(&self) -> Option<&EngineLaunch> {
+        match self {
+            Self::Unverified { launch } | Self::Verified { launch, .. } => Some(launch),
+            Self::BuiltIn { .. } | Self::NotConfigured => None,
+        }
+    }
+
+    pub fn version(&self) -> Option<&str> {
+        match self {
+            Self::BuiltIn { version } => version.as_deref(),
+            Self::Verified { version, .. } => Some(version),
+            Self::NotConfigured | Self::Unverified { .. } => None,
+        }
+    }
+
+    pub fn built_in(&self) -> bool {
+        matches!(self, Self::BuiltIn { .. })
+    }
+}
+
+/// One engine's metadata and what is known about it on the current system.
 #[derive(Debug, Clone)]
 pub struct EngineCapability {
     pub id: EngineId,
     pub name: &'static str,
     pub description: &'static str,
-    /// How to run the engine, if a launch could be resolved (override or
-    /// PATH probe). `None` means the engine was not found and is not built in.
-    pub launch: Option<EngineLaunch>,
-    pub version: Option<String>,
-    pub built_in: bool,
-}
-
-impl EngineCapability {
-    pub fn available(&self) -> bool {
-        self.built_in
-            || self
-                .launch
-                .as_ref()
-                .is_some_and(|launch| !launch.is_empty())
-    }
+    pub status: EngineStatus,
 }
 
 /// How to detect one external engine: what its executable may be called, how to
@@ -113,6 +145,17 @@ pub fn engine_spec(id: EngineId) -> Option<&'static EngineSpec> {
     ENGINE_SPECS.iter().find(|spec| spec.id == id)
 }
 
+/// Every engine that has an executable to configure, in panel order. Built-ins are
+/// not here: there is nothing to point at and nothing to verify.
+pub fn external_engine_ids() -> impl Iterator<Item = EngineId> {
+    ENGINE_SPECS.iter().map(|spec| spec.id)
+}
+
+/// The external engine specs, for a panel that renders one editor per engine.
+pub fn external_engine_specs() -> &'static [EngineSpec] {
+    ENGINE_SPECS
+}
+
 /// Snapshot of detected engines. Re-run [`EngineRegistry::probe`] to refresh
 /// availability (for example, after the user edits an override).
 #[derive(Debug, Clone, Default)]
@@ -121,89 +164,50 @@ pub struct EngineRegistry {
 }
 
 impl EngineRegistry {
-    /// Resolve which engines are available, applying the supplied per-engine
-    /// launch overrides from configuration.
+    /// Resolve what is known about each engine, reading the supplied per-engine
+    /// launches from configuration.
     ///
-    /// This is cheap: it only resolves launches (an override check, or a PATH
-    /// lookup for native installs) and never spawns a subprocess. Version
-    /// strings are left empty — call [`EngineRegistry::detect_versions`] (or
-    /// [`EngineRegistry::probe_with_versions`]) to fill them, which is slow
-    /// because it runs each engine's `--version` (a WSL launch can take
-    /// seconds to cold-start).
+    /// Cheap: it resolves launches (a config lookup, or a PATH lookup for native
+    /// installs) and never spawns a subprocess. It therefore never reports
+    /// [`EngineStatus::Verified`] on its own — a verification can only come from
+    /// running the engine, which [`crate::engines::registry::verify_launch`] does
+    /// on an explicit user action, off the UI thread.
     pub fn probe(overrides: &EngineLaunches) -> Self {
-        let mut capabilities = Vec::with_capacity(ENGINE_SPECS.len() + 2);
+        let mut capabilities = Vec::with_capacity(ENGINE_SPECS.len() + 3);
         capabilities.push(EngineCapability {
             id: EngineId::UFF,
             name: "Universal Force Field",
             description: "Molecular-mechanics geometry optimizer using generic UFF parameters.",
-            launch: None,
-            version: None,
-            built_in: true,
+            status: EngineStatus::BuiltIn { version: None },
         });
         capabilities.push(EngineCapability {
             id: EngineId::HARTREE,
             name: "hartree",
             description: "Pure-Rust quantum chemistry: molecular HF, DFT, MP2, and coupled cluster, plus periodic (crystalline) DFT.",
-            launch: None,
-            version: Some(hartree::VERSION.to_string()),
-            built_in: true,
+            status: EngineStatus::BuiltIn { version: Some(hartree::VERSION.to_string()) },
         });
         capabilities.push(EngineCapability {
             id: EngineId::DOCKING,
             name: "Vina docking",
             description: "Pure-Rust molecular docking: an AutoDock Vina reimplementation for ligand-receptor pose search and scoring.",
-            launch: None,
-            version: Some(format!(
-                "AutoDock Vina {} compatible",
-                docking::REFERENCE_VINA_VERSION
-            )),
-            built_in: true,
+            status: EngineStatus::BuiltIn {
+                version: Some(format!(
+                    "AutoDock Vina {} compatible",
+                    docking::REFERENCE_VINA_VERSION
+                )),
+            },
         });
 
         for spec in ENGINE_SPECS {
-            let launch = match overrides.get(spec.id) {
-                Some(launch) => Some(launch.clone()),
-                None => probe_native(spec).map(EngineLaunch::native),
-            };
-
             capabilities.push(EngineCapability {
                 id: spec.id,
                 name: spec.name,
                 description: spec.description,
-                launch,
-                version: None,
-                built_in: false,
+                status: local_status(overrides, spec),
             });
         }
 
         Self { capabilities }
-    }
-
-    /// [`EngineRegistry::probe`] followed by [`EngineRegistry::detect_versions`].
-    /// Slow — spawns each available engine's `--version`. Run only on explicit
-    /// user request, not on every settings-panel open.
-    pub fn probe_with_versions(overrides: &EngineLaunches) -> Self {
-        let mut registry = Self::probe(overrides);
-        registry.detect_versions();
-        registry
-    }
-
-    /// Fill in each available engine's version string by running its
-    /// `--version`. Slow; a WSL-hosted engine cold-starts the VM.
-    pub fn detect_versions(&mut self) {
-        for cap in &mut self.capabilities {
-            let Some(launch) = cap.launch.clone() else {
-                continue;
-            };
-            let version = ENGINE_SPECS
-                .iter()
-                .find(|spec| spec.id == cap.id)
-                .and_then(|spec| spec.version_arg)
-                .and_then(|arg| query_version(&launch, arg));
-            if version.is_some() {
-                cap.version = version;
-            }
-        }
     }
 
     pub fn capabilities(&self) -> &[EngineCapability] {
@@ -215,13 +219,36 @@ impl EngineRegistry {
     }
 
     pub fn launch(&self, id: EngineId) -> Option<&EngineLaunch> {
-        self.get(id).and_then(|cap| cap.launch.as_ref())
+        self.get(id).and_then(|cap| cap.status.launch())
     }
 
-    pub fn available(&self, id: EngineId) -> bool {
-        self.get(id)
-            .map(EngineCapability::available)
-            .unwrap_or(false)
+    pub fn status(&self, id: EngineId) -> Option<&EngineStatus> {
+        self.get(id).map(|cap| &cap.status)
+    }
+}
+
+/// What configuration alone can say about `spec` on this machine: a configured
+/// launch (with its verification, if that verification was taken against the launch
+/// still configured), else a PATH hit, else nothing.
+fn local_status(overrides: &EngineLaunches, spec: &EngineSpec) -> EngineStatus {
+    if let Some(entry) = overrides.entry(spec.id) {
+        return match &entry.verified {
+            Some(verified) => EngineStatus::Verified {
+                launch: entry.launch.clone(),
+                version: verified.version.clone(),
+                checked_at: verified.checked_at,
+            },
+            None => EngineStatus::Unverified {
+                launch: entry.launch.clone(),
+            },
+        };
+    }
+    // A binary sitting on PATH is a launch, not a proof: it has not been run.
+    match probe_native(spec) {
+        Some(program) => EngineStatus::Unverified {
+            launch: EngineLaunch::native(program),
+        },
+        None => EngineStatus::NotConfigured,
     }
 }
 
@@ -233,64 +260,81 @@ pub fn probe_native(spec: &EngineSpec) -> Option<String> {
     })
 }
 
-/// Best-effort auto-detection of a GROMACS launch through WSL — the conventional
-/// way GROMACS runs on Windows. Returns `None` when `wsl.exe` is not present
-/// (no WSL) or when no candidate `gmx` responds inside it (WSL without GROMACS),
-/// letting the caller distinguish those from a working install.
-///
-/// Slow: spawns `wsl.exe -e <candidate> --version` until one answers (the first
-/// call cold-starts the WSL VM). Only call from explicit user actions, never on
-/// a settings-panel open. Off Windows this is a cheap no-op (`wsl.exe` is not on
-/// PATH).
-pub fn detect_wsl_gromacs_launch() -> Option<EngineLaunch> {
-    // No WSL on this machine: nothing to detect.
+/// Choose a plausible launch without running the engine. Native candidates are
+/// preferred; on Windows, an available WSL launcher falls back to the first
+/// conventional engine command inside the distribution.
+pub fn local_launch_candidate(spec: &EngineSpec) -> Option<EngineLaunch> {
+    if let Some(program) = probe_native(spec) {
+        return Some(EngineLaunch::native(program));
+    }
     process::find_on_path("wsl.exe")?;
-    let spec = engine_spec(EngineId::GROMACS)?;
-    spec.candidate_executables.iter().find_map(|candidate| {
-        let launch = EngineLaunch {
+    spec.candidate_executables
+        .first()
+        .map(|program| EngineLaunch {
             command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
-            program: (*candidate).to_string(),
-        };
-        engine_responds(&launch, spec).then_some(launch)
-    })
+            program: (*program).to_string(),
+        })
 }
 
-/// Whether `<launch> <version_arg>` actually runs this engine: exits cleanly and
-/// prints the spec's identity marker.
-pub fn engine_responds(launch: &EngineLaunch, spec: &EngineSpec) -> bool {
+/// Run `<launch> <version_arg>` on this machine and decide whether it *is* this
+/// engine: it must exit cleanly and print the spec's identity marker. On success
+/// returns the version it reported; on failure, a reason phrased for the settings
+/// panel, distinguishing "would not start" from "started, but is not this engine".
+///
+/// Slow — a WSL-prefixed launch cold-starts the VM. Never call from the UI thread.
+/// The remote twin of this is `engines::remote::verify_remote_launch`.
+pub fn verify_launch(launch: &EngineLaunch, spec: &EngineSpec) -> Result<String, String> {
     let Some(version_arg) = spec.version_arg else {
-        return false;
+        return Err(format!("{} has no version check", spec.name));
     };
     let config = launch.to_process_config(
         std::env::temp_dir(),
         [version_arg.to_string()],
         Some(Duration::from_secs(20)),
     );
-    match process::run(config) {
-        Ok(result) => {
-            result.success()
-                && format!("{}{}", result.stdout, result.stderr).contains(spec.identity_marker)
-        }
-        Err(_) => false,
+    let result = process::run(config).map_err(|error| format!("could not run it: {error}"))?;
+    let blob = format!("{}{}", result.stdout, result.stderr);
+    if !result.success() {
+        return Err(format!(
+            "`{} {version_arg}` failed: {}",
+            launch.display_command(),
+            first_line(&blob).unwrap_or("no output")
+        ));
     }
+    if !blob.contains(spec.identity_marker) {
+        return Err(format!(
+            "it runs, but does not identify itself as {}",
+            spec.name
+        ));
+    }
+    Ok(extract_version(&blob).unwrap_or_else(|| spec.name.to_string()))
 }
 
-/// Run `<launch> <version_arg>` and return the most informative line. Used by
-/// the registry on probe and by the settings panel's "Detect" button.
-pub fn query_version(launch: &EngineLaunch, arg: &str) -> Option<String> {
-    let working_dir = std::env::temp_dir();
-    let config = launch.to_process_config(
-        working_dir,
-        [arg.to_string()],
-        Some(Duration::from_secs(15)),
-    );
-    let result = process::run(config).ok()?;
-    let blob = if result.stdout.trim().is_empty() {
-        result.stderr
-    } else {
-        result.stdout
-    };
-    extract_version(&blob)
+/// Find a working launch for `spec` on this machine when none is configured: each
+/// candidate on PATH, then each candidate behind `wsl.exe -e` (the conventional way
+/// GROMACS runs on Windows; off Windows `wsl.exe` is simply not on PATH). Every
+/// candidate is *verified*, so a hit is a launch plus the version it reported.
+///
+/// Slow, for the same reason [`verify_launch`] is. Never call from the UI thread.
+pub fn probe_local(spec: &EngineSpec) -> Option<(EngineLaunch, String)> {
+    let native = probe_native(spec)
+        .map(EngineLaunch::native)
+        .and_then(|launch| verify_launch(&launch, spec).ok().map(|v| (launch, v)));
+    if native.is_some() {
+        return native;
+    }
+    process::find_on_path("wsl.exe")?;
+    spec.candidate_executables.iter().find_map(|candidate| {
+        let launch = EngineLaunch {
+            command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
+            program: (*candidate).to_string(),
+        };
+        verify_launch(&launch, spec).ok().map(|v| (launch, v))
+    })
+}
+
+fn first_line(blob: &str) -> Option<&str> {
+    blob.lines().map(str::trim).find(|line| !line.is_empty())
 }
 
 /// Pull a version string out of a `--version` blob. Prefers a `Label: value`
@@ -323,9 +367,8 @@ mod tests {
     fn registry_always_includes_builtin_uff() {
         let registry = EngineRegistry::probe(&EngineLaunches::new());
         let uff = registry.get(EngineId::UFF).expect("uff entry");
-        assert!(uff.available());
-        assert!(uff.built_in);
-        assert!(uff.launch.is_none());
+        assert!(uff.status.built_in());
+        assert!(uff.status.launch().is_none());
     }
 
     #[test]
@@ -353,10 +396,48 @@ mod tests {
 
         let registry = EngineRegistry::probe(&overrides);
         let gmx = registry.get(EngineId::GROMACS).expect("gromacs entry");
-        assert!(gmx.available());
-        let launch = gmx.launch.as_ref().expect("launch");
+        let launch = gmx.status.launch().expect("launch");
         assert_eq!(launch.program, "/usr/local/gromacs/bin/gmx");
         assert_eq!(launch.command_prefix, vec!["wsl.exe", "-e"]);
+    }
+
+    /// Configuring a path that cannot possibly run must never read as working.
+    /// `probe` does not spawn anything, so the strongest thing it may ever say
+    /// about a configured launch is "unverified" — and `verify_launch`, which does
+    /// spawn, must reject it outright.
+    #[test]
+    fn a_nonsense_program_is_unverified_and_fails_verification() {
+        let mut overrides = EngineLaunches::new();
+        overrides.insert(EngineId::GROMACS, EngineLaunch::native("/nonsense/gmx"));
+
+        let registry = EngineRegistry::probe(&overrides);
+        let status = registry.status(EngineId::GROMACS).expect("gromacs status");
+        assert!(
+            matches!(status, EngineStatus::Unverified { .. }),
+            "a configured-but-unrun launch is unverified, got {status:?}"
+        );
+        assert!(status.version().is_none());
+
+        let spec = engine_spec(EngineId::GROMACS).expect("gromacs spec");
+        let reason = verify_launch(&EngineLaunch::native("/nonsense/gmx"), spec)
+            .expect_err("a nonexistent program cannot verify");
+        assert!(!reason.is_empty());
+    }
+
+    /// A verification taken against the configured launch is what makes it Verified —
+    /// the registry reads the proof, it never invents one.
+    #[test]
+    fn a_verified_entry_surfaces_its_version() {
+        let mut overrides = EngineLaunches::new();
+        overrides.insert_verified(EngineId::GROMACS, EngineLaunch::native("gmx"), "2026.2");
+
+        let registry = EngineRegistry::probe(&overrides);
+        assert_eq!(
+            registry
+                .status(EngineId::GROMACS)
+                .and_then(EngineStatus::version),
+            Some("2026.2")
+        );
     }
 
     #[test]
@@ -422,38 +503,50 @@ mod tests {
     /// the `wsl.exe -e <abs-gmx>` launch model end to end.
     #[test]
     #[ignore = "requires GROMACS inside WSL (Windows acceptance environment)"]
-    fn wsl_gromacs_is_detected_through_launch() {
-        let mut overrides = EngineLaunches::new();
-        overrides.insert(
-            EngineId::GROMACS,
-            EngineLaunch {
-                command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
-                program: "/usr/local/gromacs/bin/gmx".to_string(),
-            },
-        );
-
-        let registry = EngineRegistry::probe_with_versions(&overrides);
-        let gmx = registry.get(EngineId::GROMACS).expect("gromacs capability");
-        assert!(
-            gmx.available(),
-            "GROMACS should be available via WSL launch"
-        );
-        let version = gmx.version.as_deref().unwrap_or_default();
+    fn wsl_gromacs_verifies_through_its_launch() {
+        let spec = engine_spec(EngineId::GROMACS).expect("gromacs spec");
+        let launch = EngineLaunch {
+            command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
+            program: "/usr/local/gromacs/bin/gmx".to_string(),
+        };
+        let version = verify_launch(&launch, spec).expect("GROMACS should verify via WSL launch");
         assert!(
             version.contains("2026"),
             "expected a 2026.x version, got {version:?}"
         );
     }
 
-    /// Auto-detection of GROMACS-in-WSL with no override configured — the
-    /// zero-config Windows path. Ignored by default; run with
-    /// `cargo test --release -- --ignored wsl_gromacs_autodetect`.
+    /// The user types a `gmx` that is *not* one of the spec's candidates — exactly
+    /// the case auto-detection cannot reach, and therefore the case that used to be
+    /// unverifiable. Verification must check what is configured, not go looking.
+    /// Set `SILICOLAB_TEST_WSL_GMX` to such an absolute path inside WSL.
+    #[test]
+    #[ignore = "requires a non-standard GROMACS inside WSL (set SILICOLAB_TEST_WSL_GMX)"]
+    fn a_wsl_gmx_outside_the_candidate_list_still_verifies() {
+        let Ok(program) = std::env::var("SILICOLAB_TEST_WSL_GMX") else {
+            eprintln!("skip: set SILICOLAB_TEST_WSL_GMX to an absolute gmx path inside WSL");
+            return;
+        };
+        let spec = engine_spec(EngineId::GROMACS).expect("gromacs spec");
+        assert!(
+            !spec.candidate_executables.contains(&program.as_str()),
+            "this test is only meaningful for a path auto-detection would never try"
+        );
+        let launch = EngineLaunch {
+            command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
+            program,
+        };
+        verify_launch(&launch, spec).expect("a user-configured gmx must verify");
+    }
+
+    /// Auto-detection of GROMACS-in-WSL with no launch configured — the zero-config
+    /// Windows path. A hit carries the version, because probing verifies.
     #[test]
     #[ignore = "requires GROMACS inside WSL (Windows acceptance environment)"]
-    fn wsl_gromacs_autodetect_finds_a_working_launch() {
-        let launch = detect_wsl_gromacs_launch().expect("WSL GROMACS should auto-detect");
-        assert_eq!(launch.command_prefix, vec!["wsl.exe", "-e"]);
+    fn wsl_gromacs_autodetect_finds_a_verified_launch() {
         let spec = engine_spec(EngineId::GROMACS).expect("gromacs spec");
+        let (launch, version) = probe_local(spec).expect("WSL GROMACS should auto-detect");
+        assert!(!version.is_empty());
         assert!(
             spec.candidate_executables
                 .contains(&launch.program.as_str()),

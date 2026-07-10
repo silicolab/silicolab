@@ -1,13 +1,16 @@
 use super::super::*;
 
-/// Build a validated [`RemoteHost`] from a settings draft. `prior_versions` and
-/// `prior_resources` carry forward any cached `--version` strings and the per-host
-/// resource defaults on an edit, neither of which the settings draft exposes.
+/// Build a validated [`RemoteHost`] from a settings draft. `prior` is the host as
+/// stored, carrying the state the draft does not expose: the worker deployment
+/// identity, and each engine's verification.
+///
+/// A verification is carried across only when the draft still spells the *same*
+/// launch. It is not a special case — `EngineLaunches::insert` discards the proof,
+/// and this restores it exactly where it still applies.
 fn host_from_draft(
     id: String,
     draft: &crate::frontend::state::RemoteHostDraft,
-    prior_versions: std::collections::HashMap<String, String>,
-    prior_engines: &crate::engines::registry::EngineLaunches,
+    prior: Option<&crate::backend::config::RemoteHost>,
 ) -> anyhow::Result<crate::backend::config::RemoteHost> {
     let hostname = draft.hostname.trim();
     let username = draft.username.trim();
@@ -40,24 +43,22 @@ fn host_from_draft(
         .map(str::to_string)
         .collect();
     let mut engines = crate::engines::registry::EngineLaunches::new();
-    let gmx = draft.gmx_program.trim();
-    if !gmx.is_empty() {
-        engines.insert(
-            EngineId::GROMACS,
-            crate::engines::registry::EngineLaunch::native(gmx),
-        );
-    }
-    // A cached version describes the launch it was probed from, and the job now
-    // runs whatever launch is configured here — so a version whose program the
-    // user just edited is about a different binary. Drop it rather than show it
-    // beside the new path. Non-engine keys (the worker deployment identity) stay.
-    let mut engine_versions = prior_versions;
-    if engines.get(EngineId::GROMACS).map(|l| l.program.as_str())
-        != prior_engines
-            .get(EngineId::GROMACS)
-            .map(|l| l.program.as_str())
-    {
-        engine_versions.remove(EngineId::GROMACS.as_str());
+    for engine in crate::engines::registry::external_engine_ids() {
+        let Some(launch) = draft
+            .engines
+            .get(engine.as_str())
+            .and_then(crate::frontend::state::EngineDraft::to_launch)
+        else {
+            continue;
+        };
+        match prior
+            .and_then(|host| host.engines.entry(engine))
+            .filter(|entry| entry.launch == launch)
+            .and_then(|entry| entry.verified.as_ref())
+        {
+            Some(verified) => engines.insert_verification(engine, launch, verified.clone()),
+            None => engines.insert(engine, launch),
+        }
     }
     let label = {
         let label = draft.label.trim();
@@ -158,7 +159,7 @@ fn host_from_draft(
         work_root,
         prelude,
         engines,
-        engine_versions,
+        worker_deployment: prior.and_then(|host| host.worker_deployment.clone()),
         resources,
         scheduler,
     })
@@ -167,37 +168,58 @@ fn host_from_draft(
 pub(crate) fn add_remote_host(state: &mut AppState) {
     let draft = state.ui.settings.new_remote_host.clone();
     let id = uuid::Uuid::new_v4().simple().to_string();
-    match host_from_draft(
-        id.clone(),
-        &draft,
-        std::collections::HashMap::new(),
-        &Default::default(),
-    ) {
+    match host_from_draft(id.clone(), &draft, None) {
         Ok(host) => {
             let label = host.label.clone();
             state.config.remote_hosts.insert(id, host);
             state.ui.settings.new_remote_host = Default::default();
+            state.ui.settings.adding_host = false;
             persist_engine_config(state, &format!("Added remote host {label}"));
         }
+        // The form stays open with the draft intact, beside the field to fix.
         Err(error) => state.set_message(error.to_string()),
     }
 }
 
-pub(crate) fn save_remote_host(state: &mut AppState, id: String) {
-    let Some(draft) = state.ui.settings.remote_host_drafts.get(&id).cloned() else {
-        return;
+/// Abandon the add-host form and its draft.
+pub(crate) fn cancel_add_remote_host(state: &mut AppState) {
+    state.ui.settings.new_remote_host = Default::default();
+    state.ui.settings.adding_host = false;
+}
+
+/// Validate the host's draft, store it, and hand back the committed host.
+///
+/// Every action that reaches out to a host goes through here first, so the host it
+/// contacts is the one on screen. Reading `config` directly would test the values
+/// as they were before the user's edits — a hostname typed but not saved would be
+/// silently ignored by the very button meant to check it.
+pub(crate) fn commit_remote_host_draft(
+    state: &mut AppState,
+    id: &str,
+) -> anyhow::Result<crate::backend::config::RemoteHost> {
+    let Some(draft) = state.ui.settings.remote_host_drafts.get(id).cloned() else {
+        // No draft open: the stored host is already what the user sees.
+        return state
+            .config
+            .remote_hosts
+            .get(id)
+            .cloned()
+            .ok_or_else(|| anyhow!("This host no longer exists"));
     };
-    let prior = state.config.remote_hosts.get(&id);
-    let prior_versions = prior
-        .map(|host| host.engine_versions.clone())
-        .unwrap_or_default();
-    let prior_engines = prior.map(|host| host.engines.clone()).unwrap_or_default();
-    match host_from_draft(id.clone(), &draft, prior_versions, &prior_engines) {
-        Ok(host) => {
-            let label = host.label.clone();
-            state.config.remote_hosts.insert(id, host);
-            persist_engine_config(state, &format!("Saved remote host {label}"));
-        }
+    let host = host_from_draft(id.to_string(), &draft, state.config.remote_hosts.get(id))?;
+    state
+        .config
+        .remote_hosts
+        .insert(id.to_string(), host.clone());
+    if let Err(error) = save_config(&state.config) {
+        state.set_message(format!("failed to save engine settings: {error}"));
+    }
+    Ok(host)
+}
+
+pub(crate) fn save_remote_host(state: &mut AppState, id: String) {
+    match commit_remote_host_draft(state, &id) {
+        Ok(host) => state.set_message(format!("Saved remote host {}", host.label)),
         Err(error) => state.set_message(error.to_string()),
     }
 }
@@ -234,8 +256,8 @@ pub(crate) fn remove_remote_host(state: &mut AppState, id: String) {
     persist_engine_config(state, "Removed remote host");
 }
 
-/// Shared guard: ssh must exist and only one probe runs at a time. Returns the
-/// host clone on success.
+/// Shared guard: ssh must exist, only one probe runs at a time, and the draft the
+/// user is looking at is committed before we contact the host.
 fn begin_remote_probe(
     state: &mut AppState,
     id: &str,
@@ -248,18 +270,13 @@ fn begin_remote_probe(
         state.set_message(error.to_string());
         return None;
     }
-    state.config.remote_hosts.get(id).cloned()
-}
-
-pub(crate) fn detect_remote_gromacs(state: &mut AppState, id: String) {
-    let Some(host) = begin_remote_probe(state, &id) else {
-        return;
-    };
-    state.jobs.remote_probe = Some(crate::frontend::jobs::spawn_remote_probe(
-        host,
-        crate::frontend::jobs::RemoteProbeKind::DetectGromacs,
-    ));
-    state.set_message("Detecting GROMACS on the remote host…".to_string());
+    match commit_remote_host_draft(state, id) {
+        Ok(host) => Some(host),
+        Err(error) => {
+            state.set_message(error.to_string());
+            None
+        }
+    }
 }
 
 pub(crate) fn detect_remote_slurm(state: &mut AppState, id: String) {
@@ -306,10 +323,13 @@ pub(crate) fn fetch_remote_hardware(state: &mut AppState, id: String) {
         state.set_message(error.to_string());
         return;
     }
-    let Some(host) = state.config.remote_hosts.get(&id).cloned() else {
-        return;
+    let host = match commit_remote_host_draft(state, &id) {
+        Ok(host) => host,
+        Err(error) => {
+            state.set_message(error.to_string());
+            return;
+        }
     };
-    state.ui.settings.remote_hardware_host = Some(id);
     state.jobs.remote_hardware = Some(crate::frontend::jobs::spawn_remote_hardware_fetch(host));
     state.set_message("Fetching remote hardware…".to_string());
 }
@@ -430,88 +450,111 @@ pub(crate) fn setup_remote_host_key(state: &mut AppState, id: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engines::registry::{EngineLaunch, EngineLaunches};
-    use std::collections::HashMap;
+    use crate::engines::registry::EngineLaunch;
+    use crate::frontend::state::{EngineDraft, RemoteHostDraft};
+    use crate::launch::Verification;
 
-    const WORKER_KEY: &str = crate::engines::remote::deploy::WORKER_DEPLOYMENT_KEY;
-
-    fn draft_with_gmx(program: &str) -> crate::frontend::state::RemoteHostDraft {
-        crate::frontend::state::RemoteHostDraft {
+    fn draft_with_gmx(program: &str) -> RemoteHostDraft {
+        let mut draft = RemoteHostDraft {
             hostname: "login.example.edu".to_string(),
             username: "alice".to_string(),
             port: "22".to_string(),
-            gmx_program: program.to_string(),
+            ..Default::default()
+        };
+        if !program.is_empty() {
+            draft.engines.insert(
+                EngineId::GROMACS.as_str().to_string(),
+                EngineDraft {
+                    command_prefix: String::new(),
+                    program: program.to_string(),
+                },
+            );
+        }
+        draft
+    }
+
+    fn prior_host(program: &str) -> crate::backend::config::RemoteHost {
+        let mut engines = crate::engines::registry::EngineLaunches::new();
+        engines.insert_verification(
+            EngineId::GROMACS,
+            EngineLaunch::native(program),
+            Verification {
+                version: "2026.2".to_string(),
+                checked_at: 123,
+            },
+        );
+        crate::backend::config::RemoteHost {
+            id: "h".to_string(),
+            engines,
+            worker_deployment: Some("dev:abc".to_string()),
             ..Default::default()
         }
     }
 
-    fn prior_state(program: &str) -> (HashMap<String, String>, EngineLaunches) {
-        let mut versions = HashMap::new();
-        versions.insert(EngineId::GROMACS.as_str().to_string(), "2026.2".to_string());
-        versions.insert(WORKER_KEY.to_string(), "dev:abc".to_string());
-        let mut engines = EngineLaunches::new();
-        engines.insert(EngineId::GROMACS, EngineLaunch::native(program));
-        (versions, engines)
-    }
-
-    /// A cached version belongs to the program it was probed from. Editing the
-    /// path must not leave the old version beside the new binary — since the job
-    /// now runs whatever launch is configured here, that pairing would be a lie.
+    /// A verification belongs to the launch it was taken against. Editing the path
+    /// must not leave the old version beside the new binary — the job now runs
+    /// whatever is configured here, so that pairing would be a lie.
     #[test]
     fn editing_the_gmx_path_drops_its_stale_version() {
-        let (versions, engines) = prior_state("/usr/local/gromacs/bin/gmx");
+        let prior = prior_host("/usr/local/gromacs/bin/gmx");
         let host = host_from_draft(
             "h".to_string(),
             &draft_with_gmx("/opt/gromacs-2022.5/bin/gmx"),
-            versions,
-            &engines,
+            Some(&prior),
         )
         .expect("draft is valid");
 
+        let entry = host.engines.entry(EngineId::GROMACS).expect("entry");
+        assert_eq!(entry.launch.program, "/opt/gromacs-2022.5/bin/gmx");
         assert!(
-            !host
-                .engine_versions
-                .contains_key(EngineId::GROMACS.as_str()),
-            "the 2026.2 version must not survive onto the 2022.5 path"
+            entry.verified.is_none(),
+            "the 2026.2 proof must not survive onto the 2022.5 path"
         );
-        // The worker deployment identity is not an engine version; it stays.
-        assert_eq!(
-            host.engine_versions.get(WORKER_KEY).map(String::as_str),
-            Some("dev:abc")
-        );
+        // The worker deployment identity is not an engine verification; it stays.
+        assert_eq!(host.worker_deployment.as_deref(), Some("dev:abc"));
     }
 
     #[test]
     fn saving_an_unchanged_gmx_path_keeps_its_version() {
-        let (versions, engines) = prior_state("/usr/local/gromacs/bin/gmx");
+        let prior = prior_host("/usr/local/gromacs/bin/gmx");
         let host = host_from_draft(
             "h".to_string(),
             &draft_with_gmx("/usr/local/gromacs/bin/gmx"),
-            versions,
-            &engines,
+            Some(&prior),
         )
         .expect("draft is valid");
 
-        assert_eq!(
-            host.engine_versions
-                .get(EngineId::GROMACS.as_str())
-                .map(String::as_str),
-            Some("2026.2")
-        );
+        let verified = host
+            .engines
+            .entry(EngineId::GROMACS)
+            .and_then(|entry| entry.verified.as_ref())
+            .expect("an unchanged launch keeps its proof");
+        assert_eq!(verified.version, "2026.2");
+        assert_eq!(verified.checked_at, 123);
     }
 
-    /// Clearing the field un-configures the engine, so its version goes too.
+    /// Clearing the field un-configures the engine, so its verification goes too.
     #[test]
-    fn clearing_the_gmx_path_drops_its_version() {
-        let (versions, engines) = prior_state("/usr/local/gromacs/bin/gmx");
-        let host = host_from_draft("h".to_string(), &draft_with_gmx(""), versions, &engines)
-            .expect("draft is valid");
-
+    fn clearing_the_gmx_path_drops_the_engine_entirely() {
+        let prior = prior_host("/usr/local/gromacs/bin/gmx");
+        let host =
+            host_from_draft("h".to_string(), &draft_with_gmx(""), Some(&prior)).expect("valid");
         assert!(!host.engines.contains(EngineId::GROMACS));
-        assert!(
-            !host
-                .engine_versions
-                .contains_key(EngineId::GROMACS.as_str())
-        );
+    }
+
+    /// A remote engine may sit behind a launcher, exactly as a local one may.
+    #[test]
+    fn a_remote_engine_can_carry_a_command_prefix() {
+        let mut draft = draft_with_gmx("gmx");
+        draft
+            .engines
+            .get_mut(EngineId::GROMACS.as_str())
+            .expect("gromacs draft")
+            .command_prefix = "apptainer exec gromacs.sif".to_string();
+
+        let host = host_from_draft("h".to_string(), &draft, None).expect("draft is valid");
+        let launch = host.engines.get(EngineId::GROMACS).expect("launch");
+        assert_eq!(launch.command_prefix, ["apptainer", "exec", "gromacs.sif"]);
+        assert_eq!(launch.program, "gmx");
     }
 }
