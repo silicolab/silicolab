@@ -428,6 +428,7 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SetTrajectoryFrame(frame) => set_trajectory_frame(state, frame),
         AppAction::StopTrajectory => stop_trajectory(state),
         AppAction::ShowQmOutput(entry_id) => show_qm_output(state, entry_id),
+        AppAction::ShowDockPoses(entry_id) => show_dock_poses(state, entry_id),
         AppAction::OpenChart(target) => open_chart(state, target, ctx),
         AppAction::SelectChartDataset(index) => select_chart_dataset(state, index),
         AppAction::SetChartAxisLabel { axis, label } => set_chart_axis_label(state, axis, label),

@@ -54,18 +54,13 @@ pub(crate) fn datasets_from_series(series: &QmSeries) -> Vec<ChartSpec> {
     datasets
 }
 
-/// Resolve an entry's `series.json` (sibling of its saved QM output report,
-/// which is stored project-root-relative). `None` when the entry is not a QM
-/// run or never saved a report.
+/// Resolve an entry's `series.json` from the QM run its results belong to.
+/// `None` when the entry has no QM results — including a structure that has only
+/// ever been an input to a non-QM run.
 pub(crate) fn entry_series_path(state: &AppState, entry_id: u64) -> Option<(String, PathBuf)> {
-    let entry = state.entries.entry(entry_id)?;
-    let name = entry.name.clone();
-    let relative = entry.origin.qm_output()?.parent()?.join(SERIES_FILE);
-    let absolute = match state.workspace.project() {
-        Some(project) => project.root.join(&relative),
-        None => relative,
-    };
-    Some((name, absolute))
+    let name = state.entries.entry(entry_id)?.name.clone();
+    let run_dir = super::entry_qm_run_dir(state, entry_id)?;
+    Some((name, run_dir.join(SERIES_FILE)))
 }
 
 fn task_series_path(state: &AppState, task_run_id: u64) -> Option<(String, PathBuf)> {

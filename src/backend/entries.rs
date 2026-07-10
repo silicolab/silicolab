@@ -8,9 +8,18 @@ pub struct EntryGroup {
     pub name: String,
 }
 
-/// Where an entry's structure came from. Drives provenance labelling in the UI
-/// (e.g. an "MD" badge) and feature availability (trajectory playback). New
-/// provenance kinds can be added as variants without disturbing existing ones.
+/// Where an entry's structure came from — provenance, fixed when the entry is
+/// created and never rewritten afterwards. It drives the origin badge and the
+/// features a provenance implies (trajectory playback for an MD run).
+///
+/// A variant carries a path only when that path cannot be recovered from the
+/// producing task run. `MdRun` does (the trajectory's file name varies by stage)
+/// and `DockRun` does (one run yields many pose entries, but a task run records
+/// only one result entry). A QM report always lives at a fixed name inside its
+/// run directory, so `QmRun` carries nothing: the report is resolved through
+/// [`crate::backend::tasks::TaskRun::anchor_entry_id`] instead. That is also what
+/// lets a single-point energy — which produces no new entry at all — surface its
+/// report on the structure it was computed from.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub enum EntryOrigin {
     /// Imported or created by the user (the default for normal entries).
@@ -21,11 +30,10 @@ pub enum EntryOrigin {
     /// the task run directory (never copied into the project database) and is
     /// read on demand for playback.
     MdRun { trajectory: Option<PathBuf> },
-    /// Produced by a quantum-mechanics calculation. `output`, when present, is
-    /// the run's saved output report (e.g. `runs/qm-optimize-1/output.txt`)
-    /// *relative to the project root*; clicking the entry's "QM" badge opens it.
-    QmRun { output: Option<PathBuf> },
-    /// Produced by a molecular docking run. `poses`, when present, is the run's
+    /// Produced by a quantum-mechanics calculation (an optimization or a
+    /// transition-state search — the runs that yield a new geometry).
+    QmRun,
+    /// One pose of a molecular docking run. `poses`, when present, is the run's
     /// saved multi-pose `.pdbqt` artifact (e.g. `runs/dock-ligand-1/poses.pdbqt`)
     /// *relative to the project root*; clicking the entry's "Dock" badge opens it.
     DockRun { poses: Option<PathBuf> },
@@ -37,7 +45,7 @@ impl EntryOrigin {
         match self {
             Self::User => "user",
             Self::MdRun { .. } => "md",
-            Self::QmRun { .. } => "qm",
+            Self::QmRun => "qm",
             Self::DockRun { .. } => "dock",
         }
     }
@@ -46,14 +54,6 @@ impl EntryOrigin {
     pub fn trajectory(&self) -> Option<&Path> {
         match self {
             Self::MdRun { trajectory } => trajectory.as_deref(),
-            _ => None,
-        }
-    }
-
-    /// Project-relative QM output-report path, when this origin carries one.
-    pub fn qm_output(&self) -> Option<&Path> {
-        match self {
-            Self::QmRun { output } => output.as_deref(),
             _ => None,
         }
     }
@@ -67,14 +67,12 @@ impl EntryOrigin {
     }
 
     /// The path persisted alongside the kind in the `entries.origin_trajectory`
-    /// column: the MD trajectory, the QM output report, or the docking poses file,
-    /// depending on the kind.
+    /// column: the MD trajectory or the docking poses file, depending on the kind.
     pub fn stored_path(&self) -> Option<&Path> {
         match self {
             Self::MdRun { trajectory } => trajectory.as_deref(),
-            Self::QmRun { output } => output.as_deref(),
             Self::DockRun { poses } => poses.as_deref(),
-            Self::User => None,
+            Self::QmRun | Self::User => None,
         }
     }
 
@@ -84,10 +82,9 @@ impl EntryOrigin {
         matches!(self, Self::MdRun { .. })
     }
 
-    /// Whether this entry is the output of a QM calculation (used for the badge
-    /// and to open the saved output report).
+    /// Whether this entry's geometry was produced by a QM calculation.
     pub fn is_qm_run(&self) -> bool {
-        matches!(self, Self::QmRun { .. })
+        matches!(self, Self::QmRun)
     }
 
     /// Whether this entry is a docking pose (used for the badge and to open the
@@ -97,12 +94,13 @@ impl EntryOrigin {
     }
 
     /// Rebuild an origin from its persisted `(origin_kind, origin_trajectory)`
-    /// columns (the path column holds the trajectory for MD runs, the output
-    /// report for QM runs, and the poses file for docking runs).
+    /// columns (the path column holds the trajectory for MD runs and the poses
+    /// file for docking runs). A `qm` row written before the report path moved
+    /// into the task run directory still carries one; it is ignored.
     pub fn from_storage(kind: Option<&str>, path: Option<PathBuf>) -> Self {
         match kind {
             Some("md") => Self::MdRun { trajectory: path },
-            Some("qm") => Self::QmRun { output: path },
+            Some("qm") => Self::QmRun,
             Some("dock") => Self::DockRun { poses: path },
             _ => Self::User,
         }
@@ -313,8 +311,15 @@ impl EntryStore {
         id
     }
 
-    /// Record the provenance of an existing entry (e.g. mark it as the output of
-    /// an MD run once the run's trajectory path is known).
+    /// Record the provenance of an entry once its producing run is known (e.g.
+    /// mark it as the output of an MD run once the trajectory path is known).
+    ///
+    /// This overwrites unconditionally, so it must only ever be called on an entry
+    /// the run itself just created. Calling it on a pre-existing entry would
+    /// silently discard that entry's own provenance — and, for `MdRun`/`DockRun`,
+    /// the trajectory or poses path stored with it. To attach a *result* to an
+    /// existing structure, anchor a task run to it instead (see
+    /// [`crate::backend::tasks::TaskRun::anchor_entry_id`]).
     pub fn set_entry_origin(&mut self, entry_id: u64, origin: EntryOrigin) {
         if let Some(entry) = self.entry_mut(entry_id) {
             entry.origin = origin;
@@ -476,10 +481,11 @@ mod tests {
             EntryOrigin::MdRun {
                 trajectory: Some(PathBuf::from("runs/run-md-1/prod.xtc")),
             },
-            EntryOrigin::QmRun {
-                output: Some(PathBuf::from("runs/qm-optimize-1/output.txt")),
+            EntryOrigin::MdRun { trajectory: None },
+            EntryOrigin::QmRun,
+            EntryOrigin::DockRun {
+                poses: Some(PathBuf::from("runs/dock-ligand-1/poses.pdbqt")),
             },
-            EntryOrigin::QmRun { output: None },
         ] {
             let restored = EntryOrigin::from_storage(
                 Some(origin.kind_token()),
@@ -487,6 +493,20 @@ mod tests {
             );
             assert_eq!(restored, origin);
         }
+    }
+
+    #[test]
+    fn legacy_qm_row_drops_its_stored_report_path() {
+        // Projects written before the QM report moved into the task run directory
+        // persisted `('qm', 'runs/qm-optimize-1/output.txt')`. The path is now
+        // resolved from the run, so the stale column value must be ignored rather
+        // than resurrect a second source of truth.
+        let restored = EntryOrigin::from_storage(
+            Some("qm"),
+            Some(PathBuf::from("runs/qm-optimize-1/output.txt")),
+        );
+        assert_eq!(restored, EntryOrigin::QmRun);
+        assert_eq!(restored.stored_path(), None);
     }
 
     #[test]

@@ -23,6 +23,21 @@ pub enum TaskKind {
     ModifyProteinPtm,
 }
 
+impl TaskKind {
+    /// Whether this task runs the QM engine, and so writes an `output.txt`
+    /// report (and, when it has a trace to plot, a `series.json`) into its run
+    /// directory.
+    pub fn is_qm(self) -> bool {
+        matches!(
+            self,
+            Self::RunQmEnergy
+                | Self::RunQmOptimize
+                | Self::RunQmFrequencies
+                | Self::RunQmTransitionState
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskPanelKind {
     None,
@@ -442,6 +457,15 @@ pub struct TaskRun {
 }
 
 impl TaskRun {
+    /// The entry this run's artifacts describe: the entry it produced, or — for a
+    /// run that yields no new geometry, such as a single-point energy or a
+    /// frequency calculation — the entry it was launched from. This is what makes
+    /// a report reachable from the structure it belongs to without duplicating
+    /// that structure into a second entry.
+    pub fn anchor_entry_id(&self) -> Option<u64> {
+        self.result_entry_id.or(self.source_entry_id)
+    }
+
     pub fn from_controller(id: u64, controller: TaskController) -> Self {
         Self {
             id,
@@ -520,6 +544,21 @@ impl TaskManager {
     /// reconnected through), rather than the in-memory `id` handle.
     pub fn task_run_by_uuid(&self, run_uuid: &str) -> Option<&TaskRun> {
         self.tasks.iter().find(|task| task.run_uuid == run_uuid)
+    }
+
+    /// The newest completed QM run whose artifacts belong to `entry_id` (see
+    /// [`TaskRun::anchor_entry_id`]), or `None` when the entry has no QM results.
+    /// An entry that was the input to several runs surfaces the most recent one.
+    pub fn latest_qm_run_for_entry(&self, entry_id: u64) -> Option<&TaskRun> {
+        self.tasks
+            .iter()
+            .filter(|task| {
+                task.kind.is_qm()
+                    && task.status == TaskStatus::Completed
+                    && task.run_dir.is_some()
+                    && task.anchor_entry_id() == Some(entry_id)
+            })
+            .max_by_key(|task| task.finished_at_ms.unwrap_or(task.created_at_ms))
     }
 
     pub fn mark_status(&mut self, task_run_id: u64, status: TaskStatus) {

@@ -1,91 +1,23 @@
 use super::super::*;
 
-/// Persist a finished QM calculation's output report to the active task's run
-/// directory (creating it on demand) and return the written path. Failures are
-/// logged to the Output tab and reported as `None` — they never abort result
-/// handling, since the in-memory output log already holds the report.
-fn save_qm_output(state: &mut AppState, summary: &str) -> Option<PathBuf> {
-    let task_run_id = state.active_task_run?;
-    let kind = state.tasks.task_run(task_run_id)?.kind;
-    if !matches!(
-        kind,
-        TaskKind::RunQmEnergy
-            | TaskKind::RunQmOptimize
-            | TaskKind::RunQmFrequencies
-            | TaskKind::RunQmTransitionState
-    ) {
-        return None;
-    }
-    let run_dir = match ensure_active_task_run_dir(state, kind, None) {
-        Ok(run_dir) => run_dir,
-        Err(error) => {
-            state
-                .output_log
-                .push(format!("failed to create QM run directory: {error}"));
-            return None;
-        }
-    };
-    let path = run_dir.join(QM_OUTPUT_FILE);
-    let mut text = summary.to_string();
-    if !text.ends_with('\n') {
-        text.push('\n');
-    }
-    match std::fs::write(&path, text) {
-        Ok(()) => {
-            state
-                .output_log
-                .push(format!("QM output saved to {}", path.display()));
-            Some(path)
-        }
-        Err(error) => {
-            state
-                .output_log
-                .push(format!("failed to save QM output: {error}"));
-            None
-        }
-    }
-}
-
-/// Persist the machine-readable series data beside the output report so charts
-/// can be rebuilt after restart. Mirrors [`save_qm_output`]: failures are
-/// logged to the Output tab and swallowed. Outcomes with no plottable data
-/// (pre-trace workers) write nothing.
-pub(crate) fn save_qm_series(state: &mut AppState, outcome: &crate::engines::qm::QmOutcome) {
-    let series = crate::backend::runs::QmSeries::from_outcome(outcome);
-    if series.is_empty() {
-        return;
-    }
+/// Persist a locally-run QM calculation's artifacts into the active task's run
+/// directory, creating it on demand. A no-op when there is no active QM task run
+/// to anchor them to.
+pub(crate) fn save_qm_run_artifacts(state: &mut AppState, outcome: &crate::engines::qm::QmOutcome) {
     let Some(task_run_id) = state.active_task_run else {
         return;
     };
     let Some(kind) = state.tasks.task_run(task_run_id).map(|task| task.kind) else {
         return;
     };
-    if !matches!(
-        kind,
-        TaskKind::RunQmEnergy
-            | TaskKind::RunQmOptimize
-            | TaskKind::RunQmFrequencies
-            | TaskKind::RunQmTransitionState
-    ) {
+    if !kind.is_qm() {
         return;
     }
-    let run_dir = match ensure_active_task_run_dir(state, kind, None) {
-        Ok(run_dir) => run_dir,
-        Err(error) => {
-            state
-                .output_log
-                .push(format!("failed to create QM run directory: {error}"));
-            return;
-        }
-    };
-    match crate::backend::runs::save_qm_series_file(&run_dir, &series) {
-        Ok(path) => state
-            .output_log
-            .push(format!("QM series saved to {}", path.display())),
+    match ensure_active_task_run_dir(state, kind, None) {
+        Ok(run_dir) => save_qm_artifacts(state, &run_dir, outcome),
         Err(error) => state
             .output_log
-            .push(format!("failed to save QM series: {error}")),
+            .push(format!("failed to create QM run directory: {error}")),
     }
     state.ui.task_chart_thumbnails.remove(&task_run_id);
 }
@@ -302,8 +234,7 @@ pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
                 // Persist the raw report to the task's run directory before any
                 // new entry is added, so the run's source entry is the input
                 // structure, not the optimized result.
-                let output_path = save_qm_output(state, &outcome.summary);
-                save_qm_series(state, &outcome);
+                save_qm_run_artifacts(state, &outcome);
                 // A QM run is a heavy calculation; its optimized geometry is
                 // surfaced as a new entry (the original structure is preserved),
                 // matching the convention for entry-producing tasks.
@@ -313,10 +244,14 @@ pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
                     if let Some(task_run_id) = task_run_id {
                         record_task_result_entry(state, task_run_id, entry_id);
                     }
-                    set_qm_run_origin(state, entry_id, output_path);
-                    state.ui.chart_availability.remove(&entry_id);
+                    set_qm_run_origin(state, entry_id);
                     changed = true;
                 }
+                // The run just became the newest QM result of whichever entry it
+                // anchors to — the new geometry, or the input structure when there
+                // is none. Either way the memoized per-entry chart availability is
+                // now stale.
+                state.ui.chart_availability.clear();
                 state.set_message(format!(
                     "QM complete: energy {:.6} Eh{}",
                     outcome.energy_hartree,

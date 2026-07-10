@@ -68,22 +68,42 @@ pub(crate) fn render_entry_list_item(
 
         let text_rect = rect.shrink2(egui::vec2(6.0, 0.0));
 
-        // A small chip marks entries produced by a run ("MD" or "QM"). Lay
-        // them out first so the name reserves room. The QM chip is clickable
-        // (opens the saved output report); QM runs with saved series data get
-        // a second, chart chip.
-        let chip_label = state.entries.entry(entry_id).and_then(|entry| {
-            if entry.origin.is_md_run() {
-                Some("MD")
-            } else if entry.origin.is_qm_run() {
-                Some("QM")
-            } else {
-                None
-            }
-        });
-        let is_qm = chip_label == Some("QM");
+        // A chip marks an entry a run has results for; lay it out first so the name
+        // reserves room. "MD" and "Dock" are provenance — the entry *is* that run's
+        // output. "QM" is resolved from the task run, so a single-point energy,
+        // which produces no entry of its own, still marks the structure it was
+        // computed from. Provenance wins the one chip slot; a QM report on an MD or
+        // docking entry stays reachable through the context menu.
+        let has_qm_run = crate::frontend::dispatcher::entry_qm_run_dir(state, entry_id).is_some();
+        let chip_label = state
+            .entries
+            .entry(entry_id)
+            .and_then(|entry| {
+                if entry.origin.is_md_run() {
+                    Some("MD")
+                } else if entry.origin.is_dock_run() {
+                    Some("Dock")
+                } else {
+                    None
+                }
+            })
+            .or(has_qm_run.then_some("QM"));
+        // The chip doubles as a button opening the run's saved artifact.
+        let chip_action = match chip_label {
+            Some("QM") => Some((
+                "qm-output-chip",
+                "View QM output",
+                AppAction::ShowQmOutput(entry_id),
+            )),
+            Some("Dock") => Some((
+                "dock-poses-chip",
+                "View docking poses",
+                AppAction::ShowDockPoses(entry_id),
+            )),
+            _ => None,
+        };
         let chart_available =
-            is_qm && crate::frontend::dispatcher::entry_chart_available(state, entry_id);
+            has_qm_run && crate::frontend::dispatcher::entry_chart_available(state, entry_id);
         let layout_chip = |ui: &egui::Ui, label: &str| {
             let galley = ui.painter().fonts_mut(|fonts| {
                 fonts.layout_no_wrap(
@@ -144,18 +164,13 @@ pub(crate) fn render_entry_list_item(
             );
             ui.painter().galley(chip_pos, chip_galley, pal.accent);
 
-            // The QM chip doubles as a button: it opens the run's saved output
-            // report. Registered after the row, so it wins the overlap.
-            if is_qm {
+            // Registered after the row, so the chip wins the overlap.
+            if let Some((id_salt, hover, action)) = chip_action {
                 let chip_response = ui
-                    .interact(
-                        chip_rect,
-                        ui.id().with(("qm-output-chip", entry_id)),
-                        Sense::click(),
-                    )
-                    .on_hover_text("View QM output");
+                    .interact(chip_rect, ui.id().with((id_salt, entry_id)), Sense::click())
+                    .on_hover_text(hover);
                 if chip_response.clicked() {
-                    actions.push(AppAction::ShowQmOutput(entry_id));
+                    actions.push(action);
                 }
             }
         }
@@ -255,6 +270,11 @@ pub(crate) fn render_entry_list_item(
             .cloned()
             .collect();
         response.context_menu(|ui| {
+            // Reaches the report when the chip slot went to provenance instead.
+            if has_qm_run && ui.button("View QM output").clicked() {
+                actions.push(AppAction::ShowQmOutput(entry_id));
+                ui.close();
+            }
             if ui.button("Rename").clicked() {
                 state.ui.entry_list.renaming_entry_id = Some(entry_id);
                 state.ui.entry_list.rename_buffer = name.to_string();

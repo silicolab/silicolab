@@ -142,25 +142,70 @@ pub(crate) fn set_md_run_origin(state: &mut AppState, entry_id: u64, trajectory:
 /// File name of the saved QM output report inside a QM task's run directory.
 pub(crate) const QM_OUTPUT_FILE: &str = "output.txt";
 
-/// Mark an entry as the output of a QM run. Like [`set_md_run_origin`], the
-/// report path is stored relative to the project root so it survives the
-/// project being moved; the badge tracks the origin, not the path, so the
-/// entry is marked even when saving the report failed.
-pub(crate) fn set_qm_run_origin(state: &mut AppState, entry_id: u64, output: Option<PathBuf>) {
-    let project_root = state
-        .workspace
-        .project()
-        .map(|project| project.root.clone());
-    let output = output.map(|path| match project_root.as_deref() {
-        Some(root) => path
-            .strip_prefix(root)
-            .map(Path::to_path_buf)
-            .unwrap_or(path),
-        None => path,
-    });
+/// Write a finished QM calculation's report and chart series into its task run
+/// directory. Every QM path — local, detached-remote, agent-driven — goes through
+/// here, so a run's results are discoverable the same way however it was launched.
+/// Failures are logged, never fatal: the calculation itself succeeded.
+pub(crate) fn save_qm_artifacts(
+    state: &mut AppState,
+    run_dir: &Path,
+    outcome: &crate::engines::qm::QmOutcome,
+) {
+    if let Err(error) = std::fs::create_dir_all(run_dir) {
+        state
+            .output_log
+            .push(format!("failed to create QM run directory: {error}"));
+        return;
+    }
+
+    let path = run_dir.join(QM_OUTPUT_FILE);
+    let mut text = outcome.summary.clone();
+    if !text.ends_with('\n') {
+        text.push('\n');
+    }
+    match std::fs::write(&path, text) {
+        Ok(()) => state
+            .output_log
+            .push(format!("QM output saved to {}", path.display())),
+        Err(error) => state
+            .output_log
+            .push(format!("failed to save QM output: {error}")),
+    }
+
+    let series = crate::backend::runs::QmSeries::from_outcome(outcome);
+    if series.is_empty() {
+        return;
+    }
+    match crate::backend::runs::save_qm_series_file(run_dir, &series) {
+        Ok(path) => state
+            .output_log
+            .push(format!("QM series saved to {}", path.display())),
+        Err(error) => state
+            .output_log
+            .push(format!("failed to save QM series: {error}")),
+    }
+}
+
+/// Mark an entry as the output of a QM run (the provenance badge). The report
+/// itself is found through the run, so nothing is stored on the entry and a run
+/// whose report failed to save is still marked.
+pub(crate) fn set_qm_run_origin(state: &mut AppState, entry_id: u64) {
+    state.entries.set_entry_origin(entry_id, EntryOrigin::QmRun);
+}
+
+/// The run directory of the newest completed QM run whose results belong to
+/// `entry_id` — the run that produced this geometry, or, when the run produced no
+/// geometry at all (a single-point energy, a frequency calculation), the run this
+/// structure was the input to. `None` when the entry has no QM results.
+///
+/// This is the one place the entry → QM artifact link is resolved; the report,
+/// the chart series, and the badge all go through it.
+pub(crate) fn entry_qm_run_dir(state: &AppState, entry_id: u64) -> Option<PathBuf> {
     state
-        .entries
-        .set_entry_origin(entry_id, EntryOrigin::QmRun { output });
+        .tasks
+        .latest_qm_run_for_entry(entry_id)?
+        .run_dir
+        .clone()
 }
 
 /// Open the saved QM output report of `entry_id` in the shared text viewer.
@@ -172,8 +217,34 @@ pub(crate) fn show_qm_output(state: &mut AppState, entry_id: u64) {
         return;
     };
     let entry_name = entry.name.clone();
-    let Some(relative) = entry.origin.qm_output().map(Path::to_path_buf) else {
+    let Some(path) = entry_qm_run_dir(state, entry_id).map(|dir| dir.join(QM_OUTPUT_FILE)) else {
         state.set_message("This entry has no saved QM output".to_string());
+        return;
+    };
+    match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            state.ui.text_viewer = Some(crate::frontend::state::TextViewer {
+                title: format!("QM Output — {entry_name}"),
+                text,
+            });
+        }
+        Err(error) => state.set_message(format!(
+            "Could not read QM output {}: {error}",
+            path.display()
+        )),
+    }
+}
+
+/// Open the saved multi-pose `.pdbqt` of a docking pose entry in the shared text
+/// viewer. Unlike a QM report, the poses file is named on the entry: one docking
+/// run yields many pose entries, and a task run records only one of them.
+pub(crate) fn show_dock_poses(state: &mut AppState, entry_id: u64) {
+    let Some(entry) = state.entries.entry(entry_id) else {
+        return;
+    };
+    let entry_name = entry.name.clone();
+    let Some(relative) = entry.origin.dock_poses().map(Path::to_path_buf) else {
+        state.set_message("This entry has no saved docking poses".to_string());
         return;
     };
     // Stored relative to the project root (absolute when the run directory
@@ -185,12 +256,12 @@ pub(crate) fn show_qm_output(state: &mut AppState, entry_id: u64) {
     match std::fs::read_to_string(&absolute) {
         Ok(text) => {
             state.ui.text_viewer = Some(crate::frontend::state::TextViewer {
-                title: format!("QM Output — {entry_name}"),
+                title: format!("Docking Poses — {entry_name}"),
                 text,
             });
         }
         Err(error) => state.set_message(format!(
-            "Could not read QM output {}: {error}",
+            "Could not read docking poses {}: {error}",
             absolute.display()
         )),
     }
