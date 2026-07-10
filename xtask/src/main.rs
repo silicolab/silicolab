@@ -6,6 +6,8 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod dev_worker;
+
 fn main() {
     if let Err(error) = run() {
         eprintln!("error: {error}");
@@ -22,6 +24,22 @@ fn run() -> Result<(), String> {
             }
             pr_check()
         }
+        Some("build-dev-worker") => {
+            if args.next().is_some() {
+                return Err("usage: cargo xtask build-dev-worker".to_owned());
+            }
+            dev_worker::build().map(|_| ())
+        }
+        Some("remote-dev") => {
+            let app_args = match args.next() {
+                Some(separator) if separator == "--" => args.collect(),
+                Some(_) => {
+                    return Err("usage: cargo xtask remote-dev [-- <app args>]".to_owned());
+                }
+                None => Vec::new(),
+            };
+            dev_worker::run(&app_args)
+        }
         Some(command) => Err(format!("unknown xtask command: {command}")),
         None => Err("usage: cargo xtask <command>".to_owned()),
     }
@@ -36,7 +54,7 @@ fn pr_check() -> Result<(), String> {
     run_cargo_step(
         &repo_root,
         1,
-        5,
+        8,
         "fmt",
         &["fmt", "--all", "--check", "--quiet"],
         Warnings::Allow,
@@ -44,7 +62,7 @@ fn pr_check() -> Result<(), String> {
     run_cargo_step(
         &repo_root,
         2,
-        5,
+        8,
         "clippy",
         &[
             "clippy",
@@ -55,14 +73,38 @@ fn pr_check() -> Result<(), String> {
         ],
         Warnings::Deny,
     )?;
-    assert_worker_pure_rust(&repo_root, 3, 5)?;
-    assert_rust_file_sizes(&repo_root, 4, 5)?;
     run_cargo_step(
         &repo_root,
-        5,
-        5,
+        3,
+        8,
+        "default-feature clippy",
+        &["clippy", "--workspace", "--all-targets", "--quiet"],
+        Warnings::Deny,
+    )?;
+    assert_worker_pure_rust(&repo_root, 4, 8)?;
+    build_dev_worker_step(5, 8)?;
+    assert_rust_file_sizes(&repo_root, 6, 8)?;
+    run_cargo_step(
+        &repo_root,
+        7,
+        8,
         "test",
         &["test", "--workspace", "--all-features", "--quiet"],
+        Warnings::Allow,
+    )?;
+    run_cargo_step(
+        &repo_root,
+        8,
+        8,
+        "production worker deploy tests",
+        &[
+            "test",
+            "--package",
+            "compute-core",
+            "--lib",
+            "engines::remote::artifact",
+            "--quiet",
+        ],
         Warnings::Allow,
     )?;
 
@@ -70,6 +112,19 @@ fn pr_check() -> Result<(), String> {
         "ok PR checks passed ({})",
         format_duration(started_at.elapsed())
     );
+    Ok(())
+}
+
+fn build_dev_worker_step(index: usize, total: usize) -> Result<(), String> {
+    let started_at = Instant::now();
+    print_step(index, total, "development worker build");
+    println!();
+    let worker = dev_worker::build()?;
+    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+    dev_worker::smoke_test_version(&worker)?;
+    #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
+    let _ = worker;
+    println!("ok ({})", format_duration(started_at.elapsed()));
     Ok(())
 }
 

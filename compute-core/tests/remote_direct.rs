@@ -1,22 +1,25 @@
+#![cfg(feature = "dev-worker")]
+
 //! End-to-end check of the Direct remote launcher against a real SSH host.
 //!
 //! `#[ignore]` — a developer-occasional test, not run by ordinary `cargo test`
-//! or CI. To exercise it against a host (e.g. a local WSL) with the worker
-//! pre-placed at `~/.silicolab/bin/silicolab-compute` and the app's dedicated key
-//! authorized for passwordless login:
+//! or CI. Build the current worker first, then exercise it against a host (e.g. a
+//! local WSL) with the app's dedicated key authorized for passwordless login:
 //!
 //! ```text
+//! cargo xtask build-dev-worker
 //! SILICOLAB_TEST_SSH_HOST=<ip> SILICOLAB_TEST_SSH_USER=<user> \
-//! cargo test -p compute-core --test remote_direct -- --ignored --nocapture
+//! cargo test -p compute-core --features dev-worker --test remote_direct -- --ignored --nocapture
 //! ```
 //!
-//! It asserts the remote worker's energy matches the in-process run to SCF
-//! tolerance (parity is bounded, never bit-for-bit).
+//! The test deploys the local development artifact through the normal SSH/SCP
+//! path and asserts its energy matches the in-process run to SCF tolerance
+//! (parity is bounded, never bit-for-bit).
 
 use compute_core::domain::{Atom, Structure};
 use compute_core::engines::qm::{QmJob, QmKind, QmMethod, QmOptions, QmRequest};
-use compute_core::engines::remote::RemoteTarget;
 use compute_core::engines::remote::launcher::{Launcher, RemoteExecution};
+use compute_core::engines::remote::{RemoteTarget, deploy};
 use compute_core::hosts::RemoteHost;
 use compute_core::wire::{
     Engine, EngineOutcome, EngineRequest, Executor, JobUpdate, Running, run_job,
@@ -62,16 +65,13 @@ fn drain(running: Running) -> EngineOutcome {
 }
 
 #[test]
-#[ignore = "requires an SSH host with a pre-placed worker (set SILICOLAB_TEST_SSH_HOST)"]
+#[ignore = "requires an SSH host (set SILICOLAB_TEST_SSH_HOST)"]
 fn direct_remote_qm_matches_in_process_within_tolerance() {
     let Ok(hostname) = std::env::var("SILICOLAB_TEST_SSH_HOST") else {
         eprintln!("skip: set SILICOLAB_TEST_SSH_HOST to run the remote end-to-end test");
         return;
     };
     let username = std::env::var("SILICOLAB_TEST_SSH_USER").unwrap_or_else(|_| "root".to_string());
-    let worker_path = std::env::var("SILICOLAB_TEST_WORKER")
-        .unwrap_or_else(|_| "~/.silicolab/bin/silicolab-compute".to_string());
-
     // Baseline: the same job in-process.
     let EngineOutcome::Qm(local) = drain(run_job(h2_single_point(), Executor::InProcess)) else {
         panic!("expected a QM outcome");
@@ -92,12 +92,18 @@ fn direct_remote_qm_matches_in_process_within_tolerance() {
     };
     let run_uuid = uuid::Uuid::new_v4().to_string();
     let target = RemoteTarget::for_run(&host, &run_uuid);
+    let deployed = deploy::ensure_worker_deployed(&host, &target)
+        .expect("deploy the current local development worker");
+    assert!(
+        deployed.deployment_id.starts_with("dev:"),
+        "the dev-worker test must never fall back to a release artifact"
+    );
     let working_dir = std::env::temp_dir().join(format!("sl-remote-direct-{run_uuid}"));
     let execution = RemoteExecution {
         target,
         launcher: Launcher::Direct,
         working_dir: working_dir.clone(),
-        worker_path,
+        worker_path: deployed.remote_path,
     };
 
     let EngineOutcome::Qm(remote) = drain(run_job(

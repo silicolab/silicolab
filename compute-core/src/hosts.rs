@@ -44,9 +44,9 @@ pub struct RemoteHost {
     /// normally empty (the remote shell, not a local launcher, runs it).
     #[serde(default)]
     pub engines: HashMap<String, EngineLaunch>,
-    /// Cached `<engine> --version` strings, keyed by engine id. Filled by the
-    /// settings "Detect" action so the panel shows versions without re-probing over
-    /// SSH on every open.
+    /// Cached `<engine> --version` strings, keyed by engine id, plus the reserved
+    /// `_worker` deployment identity. Engine entries let settings show versions
+    /// without re-probing over SSH on every open.
     #[serde(default)]
     pub engine_versions: HashMap<String, String>,
     /// Per-host default resource request. Only `cores` is consumed today — it caps

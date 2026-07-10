@@ -163,19 +163,34 @@ locally. This is the same `compute-core` job machinery, transported:
 - A job is serialized to the **wire** contract (`compute-core/src/wire.rs`) with
   its `Structure` carried by the **payload** bridge (`payload.rs`); the host is
   described by `hosts`.
-- On first use the headless **worker** (`silicolab-compute`) is deployed to the
-  host by `engines/remote/deploy.rs`. Deployment is **fail-closed**: the binary
-  is pinned to this build's release tag, its published SHA-256 is verified
-  **before** it is made executable, and a version mismatch forces a redeploy —
-  a stale or unverifiable worker is never run.
+- The headless **worker** (`silicolab-compute`) has two explicitly separated
+  artifact sources. Ordinary builds resolve the asset from the exact GitHub
+  Release tag for their package version and verify its published SHA-256.
+  Contributor builds with `dev-worker` resolve a validated local musl binary,
+  identify its actual bytes as `dev:<sha256>`, and resolve that artifact without
+  contacting GitHub Releases or falling back to a released worker. Official
+  builds do not compile the local source path.
+- `engines/remote/deploy.rs` installs either artifact through one fail-closed
+  path: upload an identity-qualified binary, mark it executable, verify its
+  reported package version, and only then atomically replace the stable symlink.
+  The persisted `_worker` value is the deployment identity (a package version
+  for production or `dev:<sha256>` for development), not an assumption that a
+  path still exists. Even an identity cache hit is checked on the host; a
+  missing or invalid executable is redeployed and a stale or unverifiable
+  worker is never run. Jobs invoke the verified identity-qualified path rather
+  than the mutable stable symlink.
 - The worker executes the request and writes an outcome the client reads back.
   QM, docking, and GROMACS/MD all run through this path; jobs are bounded by the
   host's own CPU and RAM.
 
 **Why:** the wire/payload split keeps the GUI-free `compute-core` as the single
 implementation of each engine — local and remote runs share it, so behavior can
-not drift between them. Fail-closed deployment means a tampered or mismatched
-worker fails the job rather than silently producing wrong results.
+not drift between them. Separating production and development artifact sources
+keeps released deployment pinned and checksum-verified while allowing current
+source to be tested without weakening that invariant. Fail-closed deployment
+means a tampered, missing, or mismatched worker fails the job rather than
+silently producing wrong results. Contributor commands and host-test setup live
+in [docs/developing-remote-execution.md](docs/developing-remote-execution.md).
 
 ## Storage model
 

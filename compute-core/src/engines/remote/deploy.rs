@@ -1,72 +1,68 @@
-//! First-use deployment of the headless compute worker to a remote host.
+//! Fail-closed deployment of the headless compute worker to a remote host.
 //!
 //! The worker is **not** shipped in a job bundle; it is installed once per host
-//! and invoked by absolute path. Deployment is version- and hash-pinned and
+//! and invoked by absolute path. Production deployment is release/checksum-pinned;
+//! `dev-worker` deployment is pinned to a validated local binary's SHA-256. Both are
 //! **fail-closed**: a stale, missing, or checksum-mismatched worker is replaced,
 //! never run. The sequence is
 //!
 //! 1. probe `uname -m` — refuse anything but `x86_64` with an actionable message;
-//! 2. fetch the worker asset for this build's exact release tag, verify its
-//!    published SHA-256;
-//! 3. `scp` into `<work_root>/bin/silicolab-compute-<ver>`, `chmod +x`, then
-//!    `ln -sfn` the `silicolab-compute` symlink across atomically — retaining
-//!    prior versioned binaries so an in-flight job keeps the executable it
-//!    launched against;
-//! 4. verify the installed binary self-reports the expected `--version`.
+//! 2. resolve the selected release or local-development artifact;
+//! 3. `scp` into an identity-qualified path and `chmod +x`;
+//! 4. verify that binary self-reports the expected `--version`;
+//! 5. atomically replace the stable symlink, retaining prior binaries so an
+//!    in-flight job keeps the executable it launched against.
 //!
-//! The recorded version in [`RemoteHost::engine_versions`] is the fast path: when
-//! it already equals this build, deployment is a no-op. The SSH/SCP plumbing is
-//! the hardened layer in the parent module, reused verbatim.
+//! The recorded deployment identity in [`RemoteHost::engine_versions`] is a cache
+//! hint. Even on a match, the remote binary must run and report this package
+//! version before it is reused.
 
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
-use sha2::{Digest, Sha256};
-
-use super::{RemoteTarget, validate_work_root};
+use super::{RemoteTarget, artifact::WorkerArtifact, validate_work_root};
 use crate::engines::process::{self, ProcessConfig};
 use crate::hosts::RemoteHost;
-use crate::io::update_check;
+use anyhow::{Context, Result, bail};
 
-/// `engine_versions` key recording the deployed worker's version. A leading
+/// `engine_versions` key recording the worker deployment identity. A leading
 /// underscore can never collide with an `EngineId` string (`uff` / `hartree` /
 /// `gromacs` / `docking`, and any future engine, are bare lowercase words).
-pub const WORKER_VERSION_KEY: &str = "_worker";
+pub const WORKER_DEPLOYMENT_KEY: &str = "_worker";
 
-/// Release-asset basename for the worker, matching `release.yml`. Version-less:
-/// the release tag already pins the version.
-pub const WORKER_ASSET_NAME: &str = "silicolab-compute-x86_64-unknown-linux-musl";
-
-/// Generous cap on the downloaded worker binary.
-const MAX_WORKER_BYTES: u64 = 256 * 1024 * 1024;
-
-/// A worker confirmed present on the remote host at a known version.
+/// A worker confirmed present on the remote host for a deployment identity.
 #[derive(Debug, Clone)]
 pub struct DeployedWorker {
-    /// The version the deployed binary reports (equals this build).
-    pub version: String,
-    /// Absolute remote path of the `silicolab-compute` symlink to invoke.
+    /// Release semver or `dev:<sha256>` for the exact local binary.
+    pub deployment_id: String,
+    /// Absolute identity-qualified remote executable path to invoke.
     pub remote_path: String,
 }
 
-/// Ensure the worker on `host` matches this build, deploying it on first use and
-/// redeploying on any version mismatch. Fail-closed: never returns success while
-/// a stale or unverifiable worker would be run.
-///
-/// When `host.engine_versions[`[`WORKER_VERSION_KEY`]`]` already equals this
-/// build, no network or SCP happens. After a fresh deploy the caller records the
-/// returned [`DeployedWorker::version`] under that key and persists the config.
+/// Ensure the selected worker is present, executable, and reports this package
+/// version. A stale, missing, or unverifiable cached worker is redeployed.
 pub fn ensure_worker_deployed(host: &RemoteHost, target: &RemoteTarget) -> Result<DeployedWorker> {
     super::ensure_ssh_available()?;
-    let current = env!("CARGO_PKG_VERSION");
-    let link = worker_link_path(host)?;
+    let artifact = WorkerArtifact::selected()?;
+    let deployment_id = artifact.deployment_id();
+    let expected_version = artifact.expected_version();
+    let qualifier = artifact.remote_qualifier();
+    let qualified = worker_qualified_path(host, &qualifier)?;
 
-    if !needs_redeploy(&host.engine_versions, current) {
-        return Ok(DeployedWorker {
-            version: current.to_string(),
-            remote_path: link,
-        });
+    if recorded_identity(&host.engine_versions) == Some(deployment_id.as_str()) {
+        let reported = run_checked(target, &format!("{qualified} --version")).ok();
+        if cache_hit_is_usable(
+            Some(deployment_id.as_str()),
+            &deployment_id,
+            reported.as_deref(),
+            expected_version,
+        ) {
+            publish_worker_link(host, target, &qualified)?;
+            return Ok(DeployedWorker {
+                deployment_id,
+                remote_path: qualified,
+            });
+        }
     }
 
     let arch = probe_arch(target)?;
@@ -74,44 +70,38 @@ pub fn ensure_worker_deployed(host: &RemoteHost, target: &RemoteTarget) -> Resul
         bail!("{}", arch_refusal_message(&host.label, &arch));
     }
 
-    let tag = format!("v{current}");
-    let bin_url = update_check::release_asset_url(&tag, WORKER_ASSET_NAME)?;
-    let sum_url = update_check::release_asset_url(&tag, &format!("{WORKER_ASSET_NAME}.sha256"))?;
-    let bytes = update_check::download_asset_bytes(&bin_url, MAX_WORKER_BYTES)?;
-    let expected = parse_sha256(&update_check::download_asset_text(&sum_url)?)?;
-    let actual = sha256_hex(&bytes);
-    if !actual.eq_ignore_ascii_case(&expected) {
-        bail!(
-            "worker checksum mismatch for {tag}: expected {expected}, got {actual}. \
-             The download is corrupt or tampered with; deployment aborted."
-        );
-    }
+    let bytes = artifact.into_bytes()?;
+    install_worker(host, target, &qualifier, &bytes)?;
 
-    install_worker(host, target, current, &bytes)?;
-
-    let reported = run_checked(target, &format!("{link} --version"))?;
+    let reported = run_checked(target, &format!("{qualified} --version"))?;
     let reported = reported.trim();
-    if reported != current {
+    if reported != expected_version {
         bail!(
-            "the deployed worker reports version `{reported}` but `{current}` was expected; \
+            "the deployed worker reports version `{reported}` but `{expected_version}` was expected; \
              refusing to run a mismatched worker."
         );
     }
+    publish_worker_link(host, target, &qualified)?;
 
     Ok(DeployedWorker {
-        version: current.to_string(),
-        remote_path: link,
+        deployment_id,
+        remote_path: qualified,
     })
 }
 
-/// Whether the worker must be (re)deployed: true when the recorded version is
-/// missing or differs from `current`. The pin is strict equality — an exact match
-/// is the only no-op; a newer recorded version still redeploys (fail-closed).
-fn needs_redeploy(
-    engine_versions: &std::collections::HashMap<String, String>,
-    current: &str,
+fn recorded_identity(engine_versions: &std::collections::HashMap<String, String>) -> Option<&str> {
+    engine_versions
+        .get(WORKER_DEPLOYMENT_KEY)
+        .map(String::as_str)
+}
+
+fn cache_hit_is_usable(
+    recorded: Option<&str>,
+    selected: &str,
+    reported: Option<&str>,
+    expected_version: &str,
 ) -> bool {
-    engine_versions.get(WORKER_VERSION_KEY).map(String::as_str) != Some(current)
+    recorded == Some(selected) && reported.map(str::trim) == Some(expected_version)
 }
 
 /// The actionable refusal for a non-x86_64 host. Names the offending arch and
@@ -123,8 +113,8 @@ fn arch_refusal_message(host_label: &str, arch: &str) -> String {
     )
 }
 
-/// `<work_root>/bin` — validated for shell-safety so the concatenated paths carry
-/// no metacharacters (the version and asset names are numeric/constant).
+/// `<work_root>/bin` — validated for shell-safety so concatenated paths carry no
+/// metacharacters. Artifact qualifiers are generated internally.
 fn worker_bin_dir(host: &RemoteHost) -> Result<String> {
     validate_work_root(&host.work_root)?;
     Ok(format!("{}/bin", host.work_root.trim_end_matches('/')))
@@ -134,9 +124,9 @@ fn worker_link_path(host: &RemoteHost) -> Result<String> {
     Ok(format!("{}/silicolab-compute", worker_bin_dir(host)?))
 }
 
-fn worker_versioned_path(host: &RemoteHost, version: &str) -> Result<String> {
+fn worker_qualified_path(host: &RemoteHost, qualifier: &str) -> Result<String> {
     Ok(format!(
-        "{}/silicolab-compute-{version}",
+        "{}/silicolab-compute-{qualifier}",
         worker_bin_dir(host)?
     ))
 }
@@ -146,30 +136,29 @@ fn probe_arch(target: &RemoteTarget) -> Result<String> {
     Ok(out.trim().to_string())
 }
 
-/// `mkdir -p` the bin dir, `scp` the bytes to the versioned path, then
-/// `chmod +x` and swap the symlink atomically (`ln -sfn`), retaining prior
-/// versioned binaries.
+/// Stage an identity-qualified binary and mark it executable. It is verified by
+/// the caller before [`publish_worker_link`] exposes it through the stable link.
 fn install_worker(
     host: &RemoteHost,
     target: &RemoteTarget,
-    version: &str,
+    qualifier: &str,
     bytes: &[u8],
 ) -> Result<()> {
     let bin_dir = worker_bin_dir(host)?;
-    let versioned = worker_versioned_path(host, version)?;
-    let link = worker_link_path(host)?;
+    let qualified = worker_qualified_path(host, qualifier)?;
 
     run_checked(target, &format!("mkdir -p {bin_dir}"))?;
 
-    let tmp = std::env::temp_dir().join(format!(
-        "silicolab-compute-{version}-{}",
-        uuid::Uuid::new_v4().simple()
-    ));
+    let nonce = uuid::Uuid::new_v4().simple();
+    let tmp = std::env::temp_dir().join(format!("silicolab-compute-{qualifier}-{nonce}"));
     std::fs::write(&tmp, bytes)
         .with_context(|| format!("failed to stage the worker at {}", tmp.display()))?;
-    let scp = scp_up(target, &tmp, &versioned);
+    let remote_stage = format!("{qualified}.upload-{nonce}");
+    let scp = scp_up(target, &tmp, &remote_stage);
     let result = process::run(scp);
-    let _ = std::fs::remove_file(&tmp);
+    if let Err(error) = std::fs::remove_file(&tmp) {
+        eprintln!("failed to remove staged worker {}: {error}", tmp.display());
+    }
     let result = result.context("failed to upload the worker binary over SSH")?;
     if !result.success() {
         bail!(
@@ -181,7 +170,21 @@ fn install_worker(
 
     run_checked(
         target,
-        &format!("chmod +x {versioned} && ln -sfn {versioned} {link}"),
+        &format!("chmod +x {remote_stage} && mv -f {remote_stage} {qualified}"),
+    )?;
+    Ok(())
+}
+
+fn publish_worker_link(host: &RemoteHost, target: &RemoteTarget, qualified: &str) -> Result<()> {
+    let link = worker_link_path(host)?;
+    let qualified_name = qualified
+        .rsplit('/')
+        .next()
+        .context("qualified worker path has no filename")?;
+    let next_link = format!("{link}.next-{}", uuid::Uuid::new_v4().simple());
+    run_checked(
+        target,
+        &format!("ln -s {qualified_name} {next_link} && mv -Tf {next_link} {link}"),
     )?;
     Ok(())
 }
@@ -203,72 +206,17 @@ fn run_checked(target: &RemoteTarget, script: &str) -> Result<String> {
     super::run_probe_command(target, script, Duration::from_secs(60))
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
-/// Parse the digest from a `sha256sum`-format line (`HEX  filename`) or a bare
-/// hex string. Rejects anything that is not a 64-hex-character SHA-256.
-fn parse_sha256(text: &str) -> Result<String> {
-    let token = text
-        .split_whitespace()
-        .next()
-        .context("checksum file is empty")?
-        .to_ascii_lowercase();
-    if token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
-        bail!("checksum file does not contain a SHA-256 digest");
-    }
-    Ok(token)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn worker_version_key_cannot_collide_with_engine_ids() {
+    fn worker_deployment_key_cannot_collide_with_engine_ids() {
         // The reserved key must never be a real EngineId string.
         for id in ["uff", "hartree", "gromacs", "docking"] {
-            assert_ne!(WORKER_VERSION_KEY, id);
+            assert_ne!(WORKER_DEPLOYMENT_KEY, id);
         }
-        assert!(WORKER_VERSION_KEY.starts_with('_'));
-    }
-
-    #[test]
-    fn sha256_matches_known_vector() {
-        // SHA-256 of the empty input.
-        assert_eq!(
-            sha256_hex(b""),
-            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-        );
-    }
-
-    #[test]
-    fn parse_sha256_accepts_sum_format_and_bare_hex() {
-        let digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
-        assert_eq!(parse_sha256(digest).unwrap(), digest);
-        assert_eq!(
-            parse_sha256(&format!(
-                "{digest}  silicolab-compute-x86_64-unknown-linux-musl"
-            ))
-            .unwrap(),
-            digest
-        );
-        // Uppercase is normalized.
-        assert_eq!(parse_sha256(&digest.to_uppercase()).unwrap(), digest);
-    }
-
-    #[test]
-    fn parse_sha256_rejects_non_digests() {
-        assert!(parse_sha256("").is_err());
-        assert!(parse_sha256("not-a-hash").is_err());
-        assert!(parse_sha256("abc123").is_err());
+        assert!(WORKER_DEPLOYMENT_KEY.starts_with('_'));
     }
 
     #[test]
@@ -280,21 +228,37 @@ mod tests {
     }
 
     #[test]
-    fn needs_redeploy_is_false_only_on_exact_match() {
-        use std::collections::HashMap;
-        let mut versions = HashMap::new();
+    fn cache_requires_matching_identity_and_successful_remote_verification() {
+        let version = "0.1.1";
+        let dev = "dev:0123456789abcdef";
 
-        // Missing key → redeploy.
-        assert!(needs_redeploy(&versions, "0.1.1"));
-
-        // Exact match → no redeploy.
-        versions.insert(WORKER_VERSION_KEY.to_string(), "0.1.1".to_string());
-        assert!(!needs_redeploy(&versions, "0.1.1"));
-
-        // Differing version (older or newer) → redeploy.
-        assert!(needs_redeploy(&versions, "0.1.2"));
-        versions.insert(WORKER_VERSION_KEY.to_string(), "0.2.0".to_string());
-        assert!(needs_redeploy(&versions, "0.1.1"));
+        assert!(cache_hit_is_usable(
+            Some(version),
+            version,
+            Some(version),
+            version
+        ));
+        assert!(cache_hit_is_usable(Some(dev), dev, Some(version), version));
+        assert!(!cache_hit_is_usable(None, version, Some(version), version));
+        assert!(!cache_hit_is_usable(
+            Some(version),
+            dev,
+            Some(version),
+            version
+        ));
+        assert!(!cache_hit_is_usable(
+            Some(dev),
+            version,
+            Some(version),
+            version
+        ));
+        assert!(!cache_hit_is_usable(Some(version), version, None, version));
+        assert!(!cache_hit_is_usable(
+            Some(version),
+            version,
+            Some("wrong"),
+            version
+        ));
     }
 
     #[test]
@@ -317,8 +281,12 @@ mod tests {
             "~/.silicolab/bin/silicolab-compute"
         );
         assert_eq!(
-            worker_versioned_path(&host, "0.1.1").unwrap(),
+            worker_qualified_path(&host, "0.1.1").unwrap(),
             "~/.silicolab/bin/silicolab-compute-0.1.1"
+        );
+        assert_eq!(
+            worker_qualified_path(&host, "dev-0123456789abcdef").unwrap(),
+            "~/.silicolab/bin/silicolab-compute-dev-0123456789abcdef"
         );
     }
 }

@@ -75,6 +75,8 @@ pollster = "0.4"
 # no-op and `nvml-wrapper` is never compiled.
 default = ["nvidia"]
 nvidia = ["dep:nvml-wrapper"]
+# Contributor-only deployment of a worker built from the current checkout.
+dev-worker = ["compute-core/dev-worker"]
 
 # Live NVIDIA GPU stats (utilization / VRAM / temperature) via NVML, surfaced in
 # the hardware monitor. Optional + Windows/Linux only: NVML doesn't exist on

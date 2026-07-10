@@ -9,7 +9,11 @@ them — read the named module for the current code.
 
 See [ARCHITECTURE.md](../ARCHITECTURE.md) for *why* the layers and the
 `AppAction → dispatch` flow exist, and [CONTRIBUTING.md](../CONTRIBUTING.md) for
-build/test/land. Layer order (lowest owns it) spans two crates: **compute-core**
+build/test/land. Changes to a remote-capable engine or the `wire`/`payload`
+contract must also follow
+[Developing remote execution](developing-remote-execution.md) so the current
+worker is rebuilt and exercised instead of a released worker. Layer order
+(lowest owns it) spans two crates: **compute-core**
 `domain → io → md → engines → workflows` (no GUI deps; also holds `hosts`/
 `payload`/`wire`; `md` is the engine-neutral molecular-dynamics model), then
 **silicolab** `backend → frontend` (depends on compute-core); the headless
@@ -23,7 +27,7 @@ below are relative to a crate: `md/`, `engines/`, `io/`, `workflows/` live under
 |---|---|---|
 | In-process pure-Rust compute | `engines/qm/` (+ `engines/forcefield/uff`) | Free functions, **no `Engine` trait**; register a built-in `EngineId` + capability in `engines/registry.rs`. |
 | External subprocess engine | `engines/gromacs/` (+ `engines/process`, `engines/remote`) | Declare an `EngineSpec` in `registry.rs`; runs on a `JobManager` thread, never the UI thread. |
-| Run an existing engine on a **remote** host | `engines/remote/` (`deploy`, `launcher`, `run_record`) + `frontend/dispatcher/` (`remote_jobs`, `builders`) | Mirror the `resolve_remote_compute_host → start_remote_engine → apply_remote_*_outcome` dispatch; the job crosses the `wire`/`payload` bridge to the deployed `silicolab-compute` worker. Reuses each engine's `compute-core` impl, so local and remote can't diverge. |
+| Run an existing engine on a **remote** host | `engines/remote/` (`deploy`, `launcher`, `run_record`) + `frontend/dispatcher/` (`remote_jobs`, `builders`) | Mirror the `resolve_remote_compute_host → start_remote_engine → apply_remote_*_outcome` dispatch; the job crosses the `wire`/`payload` bridge to the deployed `silicolab-compute` worker. Reuses each engine's `compute-core` impl, so local and remote can't diverge. Rebuild and test it with `cargo xtask remote-dev`. |
 | Background compute **task** (panel + result entries) | the `qm-energy` task, end-to-end — see the checklist | For a CPU loop that streams intermediate structures, also study `build-disordered-system`. |
 | Multi-entry picker panel | `disorder` | `SetDisorderComponentEntry`, `with_disorder_prompt`, and the `ensure_panel_form` seeding. |
 | Inline edit task (no panel, acts on the active structure) | `add-hydrogens` / `recompute-bonds` | Executor runs the op and marks the task complete; no prompt state. |
@@ -74,6 +78,12 @@ new `EntryOrigin` variant.
 
 ## Traps the compiler/tests won't catch
 
+- **A normal app launch does not test unpublished remote worker changes.** If a
+  remote-capable engine, `EngineRequest`, `EngineOutcome`, or the payload bridge
+  changes, rebuild and run the current worker with `cargo xtask remote-dev`.
+  Use `cargo xtask build-dev-worker` in an IDE pre-launch task and run the
+  relevant opt-in SSH test described in the
+  [remote development guide](developing-remote-execution.md).
 - **A new IO format = 4 sites, and one is not a `match`.** Touch
   `io/structure_format.rs` (the enum + the `READABLE_FORMATS`/`WRITABLE_FORMATS`
   arrays + `label`/`extension`/`from_extension`), `io/structure_codec.rs`,

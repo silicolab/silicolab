@@ -25,8 +25,8 @@ pub struct RemoteSubmitted {
     pub job_kind: String,
     pub project_root: Option<String>,
     pub local_run_dir: PathBuf,
-    /// The worker version `ensure_worker_deployed` confirmed on the host.
-    pub deployed_version: String,
+    /// The exact worker deployment identity confirmed on the host.
+    pub deployment_id: String,
 }
 
 /// Result of an off-thread detached remote submission. The success payload is
@@ -195,7 +195,7 @@ pub fn spawn_remote_submit(
                 job_kind,
                 project_root,
                 local_run_dir: local_run_dir.clone(),
-                deployed_version: deployed.version,
+                deployment_id: deployed.deployment_id,
             })))
         })();
         let _ = sender

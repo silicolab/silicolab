@@ -103,8 +103,8 @@ fn remote_engine_name(engine: &crate::wire::Engine) -> &'static str {
 }
 
 /// Drain a finished detached-remote submission (any engine): record the durable
-/// row in `jobs.db`, persist the deployed worker version on the host (so the next
-/// run skips redeploy), and mark the task running or failed.
+/// row in `jobs.db`, persist the worker deployment identity on the host (so the
+/// next run can verify its cache entry), and mark the task running or failed.
 pub(crate) fn poll_remote_submit(state: &mut AppState, ctx: &egui::Context) {
     use crate::frontend::remote_jobs::RemoteSubmitOutcome;
     let Some(submit) = state.jobs.remote_submit.take() else {
@@ -123,17 +123,17 @@ pub(crate) fn poll_remote_submit(state: &mut AppState, ctx: &egui::Context) {
                 job_kind,
                 project_root,
                 local_run_dir,
-                deployed_version,
+                deployment_id,
             } = *submitted;
             if let Some(host) = state.config.remote_hosts.get_mut(&host_id) {
                 host.engine_versions.insert(
-                    crate::engines::remote::deploy::WORKER_VERSION_KEY.to_string(),
-                    deployed_version,
+                    crate::engines::remote::deploy::WORKER_DEPLOYMENT_KEY.to_string(),
+                    deployment_id,
                 );
                 if let Err(error) = save_config(&state.config) {
-                    state
-                        .output_log
-                        .push(format!("could not persist worker version: {error}"));
+                    state.output_log.push(format!(
+                        "could not persist worker deployment identity: {error}"
+                    ));
                 }
             }
             let row = registry::RemoteJob {

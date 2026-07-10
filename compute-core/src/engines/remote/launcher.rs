@@ -42,9 +42,9 @@ pub struct RemoteExecution {
     pub launcher: Launcher,
     /// Local directory the bundle is staged from and outputs retrieve to.
     pub working_dir: PathBuf,
-    /// Absolute remote path of the `silicolab-compute` symlink to invoke
-    /// (`DeployedWorker::remote_path`). Safe to emit unquoted in `run.sh`: it is
-    /// `<work_root>/bin/silicolab-compute`, and `work_root` is metacharacter-free.
+    /// Absolute identity-qualified worker path (`DeployedWorker::remote_path`).
+    /// Safe to emit unquoted in `run.sh`: `work_root` is metacharacter-free and
+    /// the generated identity qualifier contains only safe ASCII characters.
     pub worker_path: String,
 }
 
