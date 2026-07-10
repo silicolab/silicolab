@@ -363,7 +363,7 @@ impl PresetId {
 /// Coupling groups appropriate to the system's composition. Group by physical
 /// phase; don't over-split.
 fn coupling_groups_for(ctx: &EffectiveContext) -> CouplingGroups {
-    if ctx.is_framework() {
+    if ctx.is_framework() || ctx.water_token().is_none() {
         CouplingGroups::WholeSystem
     } else if ctx.has_membrane() {
         CouplingGroups::SoluteLipidSolvent
@@ -472,6 +472,27 @@ mod tests {
         assert!(stages[1].restraint.is_restrained());
         assert!(stages[2].restraint.is_restrained());
         assert!(!stages[3].restraint.is_restrained());
+        assert!(
+            stages
+                .iter()
+                .filter(|stage| stage.kind.is_dynamics())
+                .all(|stage| stage.coupling_groups == CouplingGroups::SoluteSolvent)
+        );
+    }
+
+    #[test]
+    fn dry_protein_preset_couples_the_whole_system() {
+        let mut ctx = context(true, false, false, false);
+        ctx.water_token = None;
+        let eff = ctx.with_overrides(SystemTypeOverrides::default());
+        let stages = PresetId::StandardBiomolecule.build(&eff, &PresetParams::default());
+
+        assert!(
+            stages
+                .iter()
+                .filter(|stage| stage.kind.is_dynamics())
+                .all(|stage| stage.coupling_groups == CouplingGroups::WholeSystem)
+        );
     }
 
     #[test]

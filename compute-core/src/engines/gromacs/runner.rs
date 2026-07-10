@@ -301,7 +301,12 @@ where
     let mdrun = run_subprocess(
         request.compute.launch.to_process_config(
             working_dir.clone(),
-            mdrun_args(&stage, &out_name, request.compute.resources),
+            mdrun_args(
+                &stage,
+                &out_name,
+                request.compute.resources,
+                request.settings.integrator,
+            ),
             Some(remaining),
         ),
         Arc::clone(&cancel),
@@ -397,12 +402,16 @@ where
 /// Assemble the `gmx mdrun` argument vector from the requested resources. With no
 /// explicit request (`cores`/`gpu` both 0) it emits only the I/O flags and lets gmx
 /// pick its own thread/GPU defaults (its all-cores, auto-GPU behaviour). A GPU
-/// request offloads the nonbonded, PME, bonded, and update work and runs one
-/// thread-MPI rank per GPU — adding a dedicated PME rank once there is more than
-/// one (GPU PME requires `-npme 1`) and letting gmx map ranks to the available
-/// GPUs. A CPU-only core request maps to `-nt`; under a GPU rank cores map to
-/// `-ntomp`.
-fn mdrun_args(stage: &str, out_name: &str, resources: ComputeResources) -> Vec<String> {
+/// request runs one thread-MPI rank per GPU. Dynamical stages explicitly offload
+/// nonbonded, PME, bonded, and update work; minimization only forces nonbonded
+/// work onto the GPU because GPU PME does not support non-dynamical integrators.
+/// A CPU-only core request maps to `-nt`; under a GPU rank cores map to `-ntomp`.
+fn mdrun_args(
+    stage: &str,
+    out_name: &str,
+    resources: ComputeResources,
+    integrator: input::Integrator,
+) -> Vec<String> {
     let mut args = vec![
         "mdrun".to_string(),
         "-deffnm".to_string(),
@@ -412,13 +421,11 @@ fn mdrun_args(stage: &str, out_name: &str, resources: ComputeResources) -> Vec<S
     ];
     if resources.gpu >= 1 {
         args.extend(["-ntmpi".to_string(), resources.gpu.to_string()]);
-        args.extend(
-            [
-                "-nb", "gpu", "-pme", "gpu", "-bonded", "gpu", "-update", "gpu",
-            ]
-            .map(String::from),
-        );
-        if resources.gpu > 1 {
+        args.extend(["-nb".to_string(), "gpu".to_string()]);
+        if !integrator.is_minimization() {
+            args.extend(["-pme", "gpu", "-bonded", "gpu", "-update", "gpu"].map(String::from));
+        }
+        if !integrator.is_minimization() && resources.gpu > 1 {
             // GPU PME across multiple ranks needs one dedicated PME rank; gmx maps
             // the ranks onto the available GPUs itself. We deliberately do not emit
             // `-gpu_id` — its single-digit-per-device form can't express ids >= 10.

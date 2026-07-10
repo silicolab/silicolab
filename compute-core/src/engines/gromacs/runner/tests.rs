@@ -10,7 +10,14 @@ use crate::domain::{Atom, UnitCell};
 
 #[test]
 fn mdrun_args_map_resources_to_gmx_flags() {
-    let args = |cores, gpu| mdrun_args("nvt", "out.gro", ComputeResources { cores, gpu });
+    let args = |cores, gpu| {
+        mdrun_args(
+            "nvt",
+            "out.gro",
+            ComputeResources { cores, gpu },
+            input::Integrator::Leapfrog,
+        )
+    };
     let has =
         |a: &[String], flag: &str, val: &str| a.windows(2).any(|w| w[0] == flag && w[1] == val);
 
@@ -32,6 +39,8 @@ fn mdrun_args_map_resources_to_gmx_flags() {
     let gpu1 = args(8, 1);
     assert!(has(&gpu1, "-ntmpi", "1"));
     assert!(has(&gpu1, "-nb", "gpu"));
+    assert!(has(&gpu1, "-pme", "gpu"));
+    assert!(has(&gpu1, "-bonded", "gpu"));
     assert!(has(&gpu1, "-update", "gpu"));
     assert!(has(&gpu1, "-ntomp", "8"));
     assert!(!gpu1.iter().any(|a| a == "-npme"));
@@ -48,6 +57,25 @@ fn mdrun_args_map_resources_to_gmx_flags() {
     let gpu12 = args(0, 12);
     assert!(has(&gpu12, "-ntmpi", "12"));
     assert!(!gpu12.iter().any(|a| a == "-gpu_id"));
+}
+
+#[test]
+fn mdrun_args_do_not_force_unsupported_gpu_tasks_for_minimization() {
+    let args = mdrun_args(
+        "em",
+        "em_out.gro",
+        ComputeResources { cores: 16, gpu: 1 },
+        input::Integrator::SteepestDescent,
+    );
+    let has = |flag: &str, val: &str| args.windows(2).any(|w| w[0] == flag && w[1] == val);
+
+    assert!(has("-ntmpi", "1"));
+    assert!(has("-nb", "gpu"));
+    assert!(has("-ntomp", "16"));
+    assert!(!args.iter().any(|arg| arg == "-pme"));
+    assert!(!args.iter().any(|arg| arg == "-bonded"));
+    assert!(!args.iter().any(|arg| arg == "-update"));
+    assert!(!args.iter().any(|arg| arg == "-npme"));
 }
 
 #[test]

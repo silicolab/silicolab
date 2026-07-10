@@ -9,6 +9,7 @@ pub(crate) fn render_md_run_task_panel(
 ) {
     // Computed before the prompt borrow so the picker can list configured hosts.
     let hosts = remote_host_options(state);
+    let pal = crate::frontend::theme::palette(ui);
     if let Some(prompt) = &mut state.ui.pending_md_run {
         use crate::frontend::state::MdEngineChoice;
 
@@ -46,7 +47,7 @@ pub(crate) fn render_md_run_task_panel(
                         .water_token
                         .as_deref()
                         .map(|water| format!(" · water {water}"))
-                        .unwrap_or_default(),
+                        .unwrap_or_else(|| " · dry (no solvent recorded)".to_string()),
                 ))
                 .small()
                 .color(egui::Color32::GRAY),
@@ -104,7 +105,7 @@ pub(crate) fn render_md_run_task_panel(
                     ui.label(
                         RichText::new(format!("⚠ {warning}"))
                             .small()
-                            .color(egui::Color32::YELLOW),
+                            .color(pal.status_amber),
                     );
                 }
             }
@@ -281,8 +282,8 @@ pub(crate) fn render_md_run_task_panel(
                 ui.separator();
                 for issue in &issues {
                     let (color, prefix) = match issue.severity {
-                        IssueSeverity::Error => (egui::Color32::LIGHT_RED, "error"),
-                        IssueSeverity::Warning => (egui::Color32::YELLOW, "warning"),
+                        IssueSeverity::Error => (pal.status_red, "error"),
+                        IssueSeverity::Warning => (pal.status_amber, "warning"),
                     };
                     let stage = issue
                         .stage
