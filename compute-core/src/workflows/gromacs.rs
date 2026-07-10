@@ -5,8 +5,9 @@
 //! `gmx` is an external engine, so rather than ship a library result the worker
 //! relays an ENTIRE multi-stage pipeline in one allocation. A [`GromacsJob`]
 //! carries everything needed to run a run / build / material-build pipeline on the
-//! node; [`run_gromacs_calculation`] resolves a local `gmx`, reconstructs the
-//! engine request, and reuses the same [`run_pipeline`]/[`build_system`]/
+//! node; [`run_gromacs_calculation`] takes the `gmx` launch the request carried,
+//! reconstructs the engine request, and reuses the same
+//! [`run_pipeline`]/[`build_system`]/
 //! [`build_material_system`] the local path uses. A [`GromacsOutcome`] carries the
 //! produced structure, the final trajectory bytes, and — for a build — the
 //! topology and system context the client persists for later runs. Every embedded
@@ -28,8 +29,7 @@ use crate::engines::gromacs::{
     MaterialBuildRequest, PrepareSystemRequest, StageResult, StageSpec, TopologySource,
     build_material_system, build_system, prepare_system, run_pipeline,
 };
-use crate::engines::registry::{detect_local_gromacs, engine_spec};
-use crate::launch::{Compute, ComputeResources};
+use crate::launch::{Compute, ComputeResources, EngineLaunch};
 use crate::workflows::molecular_dynamics::{
     FrameworkMode, MdSystemConfig, MdSystemContext, SolvationOptions, WaterModel,
 };
@@ -39,8 +39,9 @@ use crate::workflows::molecular_dynamics::{
 const FRAMEWORK_FORCE_FIELD_TOKEN: &str = "framework";
 
 /// One of the three remote `gmx` pipelines, with the portable inputs the worker
-/// needs to run it. The non-portable bits a local pipeline carries (the `Compute`
-/// launch, absolute working-dir paths) are supplied by the worker on the node.
+/// needs to run it. Absolute working-dir paths are supplied by the worker on the
+/// node; the `gmx` launch rides in the enclosing
+/// [`EngineRequest`](crate::wire::EngineRequest).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum GromacsJob {
     Run(GromacsRunRequest),
@@ -187,21 +188,17 @@ impl WireTopology {
     }
 }
 
-/// Run a relayed GROMACS job on the executing host: resolve a local `gmx`, then
-/// reconstruct and run the requested pipeline, packaging its result for retrieval.
+/// Run a relayed GROMACS job on the executing host with the `gmx` launch the
+/// request carried: reconstruct and run the requested pipeline, packaging its
+/// result for retrieval. The worker never looks for `gmx` itself — the client
+/// resolved it against the target this job was submitted to, so a host with two
+/// GROMACS installs runs the one the user configured.
 pub fn run_gromacs_calculation(
     job: GromacsJob,
+    launch: EngineLaunch,
     cancel: Arc<AtomicBool>,
     progress: impl FnMut(GromacsProgress),
 ) -> Result<GromacsOutcome> {
-    let launch = detect_local_gromacs().ok_or_else(|| {
-        let candidates = engine_spec(crate::engines::registry::EngineId::GROMACS)
-            .map(|spec| spec.candidate_executables)
-            .unwrap_or_default();
-        anyhow!(
-            "no working `gmx` found on this host (tried {candidates:?}); check the host prelude"
-        )
-    })?;
     let working_dir = std::env::current_dir().context("resolving the run working directory")?;
     match job {
         // Only the run pipeline carries an explicit resource request (the build's

@@ -72,9 +72,7 @@ fn agent_md_simulate_runs_against_gromacs() {
 
     let mut state = AppState::scratch(Default::default(), Vec::new());
     state.config.engine_overrides.insert(
-        crate::engines::registry::EngineId::GROMACS
-            .as_str()
-            .to_string(),
+        crate::engines::registry::EngineId::GROMACS,
         EngineLaunch {
             command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
             program: "/usr/local/gromacs/bin/gmx".to_string(),

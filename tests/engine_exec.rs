@@ -14,16 +14,19 @@ use silicolab::wire::{Engine, EngineOutcome, EngineRequest, Executor, JobUpdate,
 
 fn h2_request() -> EngineRequest {
     let structure = parse_xyz("2\nh2\nH 0.0 0.0 0.0\nH 0.0 0.0 0.74\n").expect("parse h2");
-    EngineRequest::new(Engine::Qm(QmJob::Molecular(QmRequest {
-        structure,
-        method: QmMethod::Rhf,
-        basis: "sto-3g".to_string(),
-        charge: 0,
-        multiplicity: 1,
-        kind: QmKind::SinglePoint,
-        options: QmOptions::default(),
-        ts: None,
-    })))
+    EngineRequest::builtin(
+        Engine::Qm(QmJob::Molecular(QmRequest {
+            structure,
+            method: QmMethod::Rhf,
+            basis: "sto-3g".to_string(),
+            charge: 0,
+            multiplicity: 1,
+            kind: QmKind::SinglePoint,
+            options: QmOptions::default(),
+            ts: None,
+        })),
+        None,
+    )
 }
 
 fn in_process_energy(request: EngineRequest) -> f64 {

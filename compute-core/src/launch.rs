@@ -8,7 +8,26 @@
 //! CPU/GPU envelope the engine subprocess may use; an engine translates that
 //! envelope into its own flags.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
+
+/// Stable identifier used everywhere a specific engine is referenced. Lives here,
+/// at the leaf, because [`EngineLaunches`] is keyed by it and `hosts` stores one
+/// map per remote host without importing the engine machinery.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct EngineId(pub &'static str);
+
+impl EngineId {
+    pub const UFF: Self = Self("uff");
+    pub const HARTREE: Self = Self("hartree");
+    pub const GROMACS: Self = Self("gromacs");
+    pub const DOCKING: Self = Self("docking");
+
+    pub fn as_str(self) -> &'static str {
+        self.0
+    }
+}
 
 /// How to launch an external engine: a program plus an optional command
 /// prefix. Native = empty prefix; WSL = `["wsl.exe", "-e"]`; a container or
@@ -45,6 +64,53 @@ impl EngineLaunch {
         } else {
             format!("{} {}", self.command_prefix.join(" "), self.program)
         }
+    }
+}
+
+/// The per-engine launches configured for one compute target — the local machine
+/// (`AppConfig::engine_overrides`) or a remote host (`RemoteHost::engines`). One
+/// type for both, so "how do I launch engine E on target T" has a single answer
+/// and a single place to resolve it.
+///
+/// An entry with an empty `program` is treated as absent: the settings UI writes
+/// one when the user clears the field.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct EngineLaunches(HashMap<String, EngineLaunch>);
+
+impl EngineLaunches {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn get(&self, id: EngineId) -> Option<&EngineLaunch> {
+        self.0.get(id.as_str()).filter(|launch| !launch.is_empty())
+    }
+
+    pub fn contains(&self, id: EngineId) -> bool {
+        self.get(id).is_some()
+    }
+
+    pub fn insert(&mut self, id: EngineId, launch: EngineLaunch) {
+        self.0.insert(id.as_str().to_string(), launch);
+    }
+
+    /// Record an auto-detected launch, leaving a configured one untouched.
+    /// Returns `true` when it was newly inserted, so the caller knows to persist.
+    pub fn cache_detected(&mut self, id: EngineId, launch: EngineLaunch) -> bool {
+        if self.contains(id) {
+            return false;
+        }
+        self.insert(id, launch);
+        true
+    }
+
+    pub fn remove(&mut self, id: EngineId) {
+        self.0.remove(id.as_str());
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
     }
 }
 
@@ -90,5 +156,43 @@ impl From<EngineLaunch> for Compute {
     /// Keeps existing call sites terse (`launch.into()`).
     fn from(launch: EngineLaunch) -> Self {
         Self::local(launch)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn caching_a_detected_launch_inserts_once_and_never_clobbers() {
+        let mut launches = EngineLaunches::new();
+        let detected = EngineLaunch {
+            command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
+            program: "/usr/local/gromacs/bin/gmx".to_string(),
+        };
+        assert!(launches.cache_detected(EngineId::GROMACS, detected));
+        assert_eq!(
+            launches.get(EngineId::GROMACS).map(|l| l.program.as_str()),
+            Some("/usr/local/gromacs/bin/gmx")
+        );
+
+        // A later detection must not overwrite a launch already configured.
+        assert!(!launches.cache_detected(EngineId::GROMACS, EngineLaunch::native("gmx")));
+        assert_eq!(
+            launches.get(EngineId::GROMACS).map(|l| l.program.as_str()),
+            Some("/usr/local/gromacs/bin/gmx")
+        );
+    }
+
+    /// The settings UI writes an empty program when the user clears the field;
+    /// that must read back as "not configured", not as a launch of `""`.
+    #[test]
+    fn an_empty_program_reads_as_absent() {
+        let mut launches = EngineLaunches::new();
+        launches.insert(EngineId::GROMACS, EngineLaunch::native(""));
+        assert!(!launches.contains(EngineId::GROMACS));
+        assert!(launches.get(EngineId::GROMACS).is_none());
+        // …and a real detection still caches over it.
+        assert!(launches.cache_detected(EngineId::GROMACS, EngineLaunch::native("gmx")));
     }
 }

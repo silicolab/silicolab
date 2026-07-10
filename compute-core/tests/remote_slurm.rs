@@ -30,16 +30,19 @@ fn request() -> EngineRequest {
             },
         ],
     );
-    EngineRequest::new(Engine::Qm(QmJob::Molecular(QmRequest {
-        structure,
-        method: QmMethod::Rhf,
-        basis: "sto-3g".to_string(),
-        charge: 0,
-        multiplicity: 1,
-        kind: QmKind::SinglePoint,
-        options: QmOptions::default(),
-        ts: None,
-    })))
+    EngineRequest::builtin(
+        Engine::Qm(QmJob::Molecular(QmRequest {
+            structure,
+            method: QmMethod::Rhf,
+            basis: "sto-3g".to_string(),
+            charge: 0,
+            multiplicity: 1,
+            kind: QmKind::SinglePoint,
+            options: QmOptions::default(),
+            ts: None,
+        })),
+        None,
+    )
 }
 
 fn host() -> Option<RemoteHost> {

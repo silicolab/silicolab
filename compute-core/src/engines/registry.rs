@@ -17,26 +17,11 @@
 //! A command prefix covers WSL, containers, and wrapper scripts without a
 //! full transport abstraction.
 
-use std::{collections::HashMap, path::PathBuf, time::Duration};
+use std::{path::PathBuf, time::Duration};
 
 use crate::engines::process::{self, ProcessConfig};
 
-/// Stable identifier used everywhere a specific engine is referenced.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct EngineId(pub &'static str);
-
-impl EngineId {
-    pub const UFF: Self = Self("uff");
-    pub const HARTREE: Self = Self("hartree");
-    pub const GROMACS: Self = Self("gromacs");
-    pub const DOCKING: Self = Self("docking");
-
-    pub fn as_str(self) -> &'static str {
-        self.0
-    }
-}
-
-pub use crate::launch::{Compute, ComputeResources, EngineLaunch};
+pub use crate::launch::{Compute, ComputeResources, EngineId, EngineLaunch, EngineLaunches};
 
 impl EngineLaunch {
     /// Build a [`ProcessConfig`] that runs this engine with `engine_args` in
@@ -145,7 +130,7 @@ impl EngineRegistry {
     /// [`EngineRegistry::probe_with_versions`]) to fill them, which is slow
     /// because it runs each engine's `--version` (a WSL launch can take
     /// seconds to cold-start).
-    pub fn probe(overrides: &HashMap<String, EngineLaunch>) -> Self {
+    pub fn probe(overrides: &EngineLaunches) -> Self {
         let mut capabilities = Vec::with_capacity(ENGINE_SPECS.len() + 2);
         capabilities.push(EngineCapability {
             id: EngineId::UFF,
@@ -176,9 +161,9 @@ impl EngineRegistry {
         });
 
         for spec in ENGINE_SPECS {
-            let launch = match overrides.get(spec.id.as_str()) {
-                Some(launch) if !launch.is_empty() => Some(launch.clone()),
-                _ => probe_native(spec).map(EngineLaunch::native),
+            let launch = match overrides.get(spec.id) {
+                Some(launch) => Some(launch.clone()),
+                None => probe_native(spec).map(EngineLaunch::native),
             };
 
             capabilities.push(EngineCapability {
@@ -197,7 +182,7 @@ impl EngineRegistry {
     /// [`EngineRegistry::probe`] followed by [`EngineRegistry::detect_versions`].
     /// Slow — spawns each available engine's `--version`. Run only on explicit
     /// user request, not on every settings-panel open.
-    pub fn probe_with_versions(overrides: &HashMap<String, EngineLaunch>) -> Self {
+    pub fn probe_with_versions(overrides: &EngineLaunches) -> Self {
         let mut registry = Self::probe(overrides);
         registry.detect_versions();
         registry
@@ -240,7 +225,9 @@ impl EngineRegistry {
     }
 }
 
-fn probe_native(spec: &EngineSpec) -> Option<String> {
+/// The first of `spec`'s candidates that exists on PATH (or as an absolute path).
+/// A cheap filesystem lookup — it does not run the engine.
+pub fn probe_native(spec: &EngineSpec) -> Option<String> {
     spec.candidate_executables.iter().find_map(|candidate| {
         process::find_on_path(candidate).map(|path| path.to_string_lossy().into_owned())
     })
@@ -264,17 +251,6 @@ pub fn detect_wsl_gromacs_launch() -> Option<EngineLaunch> {
             command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
             program: (*candidate).to_string(),
         };
-        engine_responds(&launch, spec).then_some(launch)
-    })
-}
-
-/// Best-effort auto-detection of a native GROMACS launch, trying the spec's
-/// candidates in priority order via the local PATH (bare names) or the
-/// conventional install path. Returns `None` when none responds.
-pub fn detect_local_gromacs() -> Option<EngineLaunch> {
-    let spec = engine_spec(EngineId::GROMACS)?;
-    spec.candidate_executables.iter().find_map(|candidate| {
-        let launch = EngineLaunch::native(*candidate);
         engine_responds(&launch, spec).then_some(launch)
     })
 }
@@ -345,7 +321,7 @@ mod tests {
 
     #[test]
     fn registry_always_includes_builtin_uff() {
-        let registry = EngineRegistry::probe(&HashMap::new());
+        let registry = EngineRegistry::probe(&EngineLaunches::new());
         let uff = registry.get(EngineId::UFF).expect("uff entry");
         assert!(uff.available());
         assert!(uff.built_in);
@@ -354,7 +330,7 @@ mod tests {
 
     #[test]
     fn registry_returns_capability_for_every_spec() {
-        let registry = EngineRegistry::probe(&HashMap::new());
+        let registry = EngineRegistry::probe(&EngineLaunches::new());
         for spec in ENGINE_SPECS {
             assert!(
                 registry.get(spec.id).is_some(),
@@ -366,9 +342,9 @@ mod tests {
 
     #[test]
     fn override_launch_is_honored() {
-        let mut overrides = HashMap::new();
+        let mut overrides = EngineLaunches::new();
         overrides.insert(
-            EngineId::GROMACS.as_str().to_string(),
+            EngineId::GROMACS,
             EngineLaunch {
                 command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
                 program: "/usr/local/gromacs/bin/gmx".to_string(),
@@ -447,9 +423,9 @@ mod tests {
     #[test]
     #[ignore = "requires GROMACS inside WSL (Windows acceptance environment)"]
     fn wsl_gromacs_is_detected_through_launch() {
-        let mut overrides = HashMap::new();
+        let mut overrides = EngineLaunches::new();
         overrides.insert(
-            EngineId::GROMACS.as_str().to_string(),
+            EngineId::GROMACS,
             EngineLaunch {
                 command_prefix: vec!["wsl.exe".to_string(), "-e".to_string()],
                 program: "/usr/local/gromacs/bin/gmx".to_string(),

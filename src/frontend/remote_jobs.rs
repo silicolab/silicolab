@@ -29,6 +29,17 @@ pub struct RemoteSubmitted {
     /// The exact worker deployment identity confirmed on the host.
     pub deployment_id: String,
     pub initial_phase: crate::engines::remote::launcher::RemoteJobPhase,
+    /// Engine launches this submission probed on the host because none was
+    /// configured. The dispatcher caches them back onto the host so the next
+    /// submission skips the SSH round trip.
+    pub detected_launches: Vec<DetectedLaunch>,
+}
+
+/// An engine launch discovered on a host at submit time.
+pub struct DetectedLaunch {
+    pub engine: crate::engines::registry::EngineId,
+    pub launch: crate::engines::registry::EngineLaunch,
+    pub version: Option<String>,
 }
 
 /// Result of an off-thread detached remote submission. The success payload is
@@ -155,6 +166,7 @@ pub fn spawn_remote_submit(
     project_root: Option<String>,
     local_run_dir: PathBuf,
 ) -> RunningRemoteSubmit {
+    use crate::backend::engine_launch::{LaunchTarget, resolve_engine_launch};
     use crate::engines::remote::launcher::{self, Launcher};
     use crate::engines::remote::{self, RemoteTarget, deploy};
     use crate::wire::{Engine, EngineRequest};
@@ -191,6 +203,25 @@ pub fn spawn_remote_submit(
                     return Ok(RemoteSubmitOutcome::Failed(message));
                 }
             }
+            // Resolve how to launch every external engine this job needs, on THIS
+            // host, before anything is deployed or uploaded: a host with no usable
+            // engine should fail fast and cheaply. The resolved launches travel in
+            // `request.json`, so the worker runs the binary the user configured
+            // rather than whichever one it can find on the node.
+            let mut launches = crate::engines::registry::EngineLaunches::new();
+            let mut detected_launches = Vec::new();
+            for id in engine.required_engines() {
+                let resolved = resolve_engine_launch(LaunchTarget::Remote(&host), *id)?;
+                if resolved.detected {
+                    detected_launches.push(DetectedLaunch {
+                        engine: *id,
+                        launch: resolved.launch.clone(),
+                        version: resolved.version,
+                    });
+                }
+                launches.insert(*id, resolved.launch);
+            }
+
             let deployed = deploy::ensure_worker_deployed(&host, &target)?;
             std::fs::create_dir_all(&local_run_dir)?;
             resources.cpus_per_task = clamp_cores(
@@ -204,10 +235,11 @@ pub fn spawn_remote_submit(
                 request.resources.cores = resources.cpus_per_task.unwrap_or(0);
                 request.resources.gpu = resources.gpu.count();
             }
-            let request = EngineRequest::with_cores(
+            let request = EngineRequest::new(
                 engine,
                 resources.cpus_per_task.map(|value| value as usize),
-            );
+                launches,
+            )?;
             let json = serde_json::to_vec(&request)?;
             std::fs::write(local_run_dir.join(launcher::REQUEST_FILE), json)?;
             remote::write_run_record(&target, &local_run_dir, launcher, None, &resources);
@@ -237,6 +269,7 @@ pub fn spawn_remote_submit(
                 } else {
                     crate::engines::remote::launcher::RemoteJobPhase::Running
                 },
+                detected_launches,
             })))
         })();
         let _ = sender

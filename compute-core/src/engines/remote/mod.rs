@@ -599,7 +599,7 @@ mod tests {
             port: 22,
             work_root: "~/.silicolab/".to_string(), // trailing slash trimmed
             prelude: Vec::new(),
-            engines: HashMap::new(),
+            engines: crate::launch::EngineLaunches::new(),
             engine_versions: HashMap::new(),
             resources: Default::default(),
             scheduler: Default::default(),
