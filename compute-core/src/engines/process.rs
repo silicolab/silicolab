@@ -188,6 +188,8 @@ pub fn spawn_with_cancel(config: ProcessConfig, cancel: Arc<AtomicBool>) -> Resu
         command.env(key, value);
     }
 
+    suppress_console(&mut command);
+
     let mut child = command.spawn().with_context(|| {
         format!(
             "failed to spawn {} in {}",
@@ -292,6 +294,23 @@ pub fn spawn_with_cancel(config: ProcessConfig, cancel: Arc<AtomicBool>) -> Resu
 pub fn run(config: ProcessConfig) -> Result<ProcessResult> {
     spawn(config)?.join()
 }
+
+/// A GUI-subsystem process has no console, so Windows allocates a fresh console
+/// *window* for every console-subsystem child it spawns (`wsl.exe`, `ssh.exe`,
+/// `gmx.exe`). This layer always pipes the child's stdio, so that window can
+/// never carry anything: suppressing it is a property of the layer, not a knob.
+///
+/// `creation_flags` overwrites the flag word rather than OR-ing into it; any
+/// future flag must be folded in here rather than set at a second call site.
+#[cfg(windows)]
+fn suppress_console(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn suppress_console(_command: &mut Command) {}
 
 #[derive(Debug, Clone, Copy)]
 enum StreamKind {
