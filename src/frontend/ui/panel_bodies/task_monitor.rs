@@ -287,7 +287,8 @@ fn render_controlled_jobs(state: &AppState, ui: &mut egui::Ui, actions: &mut Vec
                         );
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if let Some(run_uuid) = job.run_uuid.as_ref()
+                        if !job.status.is_running()
+                            && let Some(run_uuid) = job.run_uuid.as_ref()
                             && ui.button("Remove scratch").clicked()
                         {
                             actions.push(AppAction::RemoveRemoteScratch(run_uuid.clone()));

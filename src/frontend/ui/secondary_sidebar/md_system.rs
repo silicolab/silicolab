@@ -527,7 +527,13 @@ pub(crate) fn render_md_system_task_panel(
             execution_section(
                 ui,
                 &mut prompt.prefs,
-                crate::frontend::state::ExecutionCaps::default(),
+                crate::frontend::state::ExecutionCaps {
+                    cores: true,
+                    gpu: true,
+                    memory: true,
+                    walltime: true,
+                    ..Default::default()
+                },
                 &hosts,
                 actions,
             );

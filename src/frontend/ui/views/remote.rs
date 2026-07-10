@@ -141,6 +141,57 @@ pub(crate) fn render_remote_hosts_settings(
                     .desired_width(f32::INFINITY),
             );
             remote_host_field(ui, "GROMACS path:", &mut draft.gmx_program);
+            ui.horizontal(|ui| {
+                ui.label("Execution backend:");
+                ui.selectable_value(&mut draft.slurm, false, "Direct SSH");
+                ui.selectable_value(&mut draft.slurm, true, "Slurm");
+            });
+            if draft.slurm {
+                ui.label(caption_text(
+                    "Scheduler setup commands (one per line):",
+                    pal.text_muted,
+                ));
+                ui.add(
+                    egui::TextEdit::multiline(&mut draft.scheduler_prelude)
+                        .desired_rows(2)
+                        .desired_width(f32::INFINITY),
+                );
+                remote_host_field(ui, "Partition:", &mut draft.partition);
+                remote_host_field(ui, "Account:", &mut draft.account);
+                remote_host_field(ui, "QOS:", &mut draft.qos);
+                remote_host_field(ui, "Default CPUs:", &mut draft.default_cpus);
+                remote_host_field(ui, "Default memory (MiB):", &mut draft.default_memory_mib);
+                remote_host_field(
+                    ui,
+                    "Default walltime (minutes):",
+                    &mut draft.default_walltime_minutes,
+                );
+                default_gpu_fields(ui, draft);
+                ui.horizontal(|ui| {
+                    ui.label("GPU syntax:");
+                    ui.selectable_value(&mut draft.gpu_syntax, "gres".to_string(), "GRES");
+                    ui.selectable_value(&mut draft.gpu_syntax, "gpus".to_string(), "--gpus");
+                    ui.selectable_value(&mut draft.gpu_syntax, "custom".to_string(), "Custom");
+                });
+                if draft.gpu_syntax == "gres" {
+                    remote_host_field(ui, "GRES name:", &mut draft.gres_name);
+                } else if draft.gpu_syntax == "custom" {
+                    remote_host_field(ui, "GPU argument template:", &mut draft.custom_gpu_argument);
+                }
+                ui.collapsing("Advanced", |ui| {
+                    remote_host_field(ui, "Reservation:", &mut draft.reservation);
+                    remote_host_field(ui, "Constraint:", &mut draft.constraint);
+                    ui.label(caption_text(
+                        "Extra arguments (one argv token per line):",
+                        pal.text_muted,
+                    ));
+                    ui.add(
+                        egui::TextEdit::multiline(&mut draft.extra_args)
+                            .desired_rows(2)
+                            .desired_width(f32::INFINITY),
+                    );
+                });
+            }
         }
         if let Some(version) = &version {
             ui.label(caption_text(
@@ -162,7 +213,35 @@ pub(crate) fn render_remote_hosts_settings(
             if ui.button("Set up passwordless login").clicked() {
                 actions.push(AppAction::SetupRemoteHostKey(id.clone()));
             }
+            if state.config.remote_hosts.get(id).is_some_and(|host| {
+                matches!(
+                    host.scheduler,
+                    crate::backend::config::SchedulerConfig::Slurm(_)
+                )
+            }) {
+                if ui.button("Detect Slurm").clicked() {
+                    actions.push(AppAction::DetectRemoteSlurm(id.clone()));
+                }
+                if ui.button("Refresh cluster").clicked() {
+                    actions.push(AppAction::RefreshSlurmCapabilities(id.clone()));
+                }
+                if ui.button("Test scheduler").clicked() {
+                    actions.push(AppAction::TestRemoteSlurm(id.clone()));
+                }
+            }
         });
+
+        if let Some(capabilities) = state.ui.settings.slurm_capabilities.get(id) {
+            ui.label(caption_text(
+                format!(
+                    "Partitions: {} · GPU types: {} · Features: {}",
+                    capabilities.partitions.join(", "),
+                    capabilities.gpu_types.join(", "),
+                    capabilities.features.join(", ")
+                ),
+                pal.text_muted,
+            ));
+        }
 
         ui.add_space(8.0);
         if crate::frontend::ui::widgets::confirm_destructive(
@@ -217,7 +296,87 @@ pub(crate) fn render_remote_hosts_settings(
         "GROMACS path (optional — use Detect after adding):",
         &mut draft.gmx_program,
     );
+    ui.horizontal(|ui| {
+        ui.label("Execution backend:");
+        ui.selectable_value(&mut draft.slurm, false, "Direct SSH");
+        ui.selectable_value(&mut draft.slurm, true, "Slurm");
+    });
+    if draft.slurm {
+        ui.label(caption_text(
+            "Scheduler setup commands (one per line):",
+            pal.text_muted,
+        ));
+        ui.add(
+            egui::TextEdit::multiline(&mut draft.scheduler_prelude)
+                .desired_rows(2)
+                .desired_width(f32::INFINITY),
+        );
+        remote_host_field(ui, "Partition:", &mut draft.partition);
+        remote_host_field(ui, "Account:", &mut draft.account);
+        remote_host_field(ui, "QOS:", &mut draft.qos);
+        remote_host_field(ui, "Default CPUs:", &mut draft.default_cpus);
+        remote_host_field(ui, "Default memory (MiB):", &mut draft.default_memory_mib);
+        remote_host_field(
+            ui,
+            "Default walltime (minutes):",
+            &mut draft.default_walltime_minutes,
+        );
+        default_gpu_fields(ui, draft);
+        if draft.gpu_syntax.is_empty() {
+            draft.gpu_syntax = "gres".to_string();
+        }
+        if draft.gres_name.is_empty() {
+            draft.gres_name = "gpu".to_string();
+        }
+        ui.horizontal(|ui| {
+            ui.label("GPU syntax:");
+            ui.selectable_value(&mut draft.gpu_syntax, "gres".to_string(), "GRES");
+            ui.selectable_value(&mut draft.gpu_syntax, "gpus".to_string(), "--gpus");
+            ui.selectable_value(&mut draft.gpu_syntax, "custom".to_string(), "Custom");
+        });
+        if draft.gpu_syntax == "gres" {
+            remote_host_field(ui, "GRES name:", &mut draft.gres_name);
+        } else if draft.gpu_syntax == "custom" {
+            remote_host_field(ui, "GPU argument template:", &mut draft.custom_gpu_argument);
+        }
+    }
     if ui.button("Add host").clicked() {
         actions.push(AppAction::AddRemoteHost);
     }
+}
+
+fn default_gpu_fields(ui: &mut egui::Ui, draft: &mut crate::frontend::state::RemoteHostDraft) {
+    if draft.default_gpu_kind.is_empty() {
+        draft.default_gpu_kind = "none".to_string();
+    }
+    ui.horizontal(|ui| {
+        ui.label("Default GPU:");
+        egui::ComboBox::from_id_salt("host_default_gpu")
+            .selected_text(match draft.default_gpu_kind.as_str() {
+                "any" => "Any available",
+                "typed" => "Specific type",
+                _ => "No GPU",
+            })
+            .show_ui(ui, |ui| {
+                ui.selectable_value(&mut draft.default_gpu_kind, "none".to_string(), "No GPU");
+                ui.selectable_value(
+                    &mut draft.default_gpu_kind,
+                    "any".to_string(),
+                    "Any available",
+                );
+                ui.selectable_value(
+                    &mut draft.default_gpu_kind,
+                    "typed".to_string(),
+                    "Specific type",
+                );
+            });
+        if draft.default_gpu_kind == "typed" {
+            ui.label("Type:");
+            ui.add(egui::TextEdit::singleline(&mut draft.default_gpu_type).desired_width(90.0));
+        }
+        if draft.default_gpu_kind != "none" {
+            ui.label("Count:");
+            ui.add(egui::TextEdit::singleline(&mut draft.default_gpu_count).desired_width(45.0));
+        }
+    });
 }

@@ -7,7 +7,7 @@ fn host_from_draft(
     id: String,
     draft: &crate::frontend::state::RemoteHostDraft,
     prior_versions: std::collections::HashMap<String, String>,
-    prior_resources: crate::backend::config::ResourceSpec,
+    _prior_resources: crate::backend::config::ResourceSpec,
 ) -> anyhow::Result<crate::backend::config::RemoteHost> {
     let hostname = draft.hostname.trim();
     let username = draft.username.trim();
@@ -55,6 +55,88 @@ fn host_from_draft(
             label.to_string()
         }
     };
+    let parse_optional = |label: &str, value: &str| -> anyhow::Result<Option<u64>> {
+        let value = value.trim();
+        if value.is_empty() {
+            return Ok(None);
+        }
+        let parsed = value
+            .parse::<u64>()
+            .map_err(|_| anyhow!("{label} must be a positive number"))?;
+        if parsed == 0 {
+            anyhow::bail!("{label} must be greater than zero");
+        }
+        Ok(Some(parsed))
+    };
+    let default_gpu_count = || -> anyhow::Result<u32> {
+        parse_optional("Default GPU count", &draft.default_gpu_count)?
+            .unwrap_or(1)
+            .try_into()
+            .map_err(|_| anyhow!("Default GPU count is too large"))
+    };
+    let default_gpu = match draft.default_gpu_kind.as_str() {
+        "any" => crate::backend::config::GpuRequest::Any {
+            count: default_gpu_count()?,
+        },
+        "typed" => crate::backend::config::GpuRequest::Typed {
+            gpu_type: draft.default_gpu_type.trim().to_string(),
+            count: default_gpu_count()?,
+        },
+        _ => crate::backend::config::GpuRequest::None,
+    };
+    default_gpu.validate()?;
+    let resources = crate::backend::config::JobResources {
+        cpus_per_task: parse_optional("Default CPUs", &draft.default_cpus)?
+            .map(|value| u32::try_from(value).map_err(|_| anyhow!("Default CPUs is too large")))
+            .transpose()?,
+        memory_mib: parse_optional("Default memory", &draft.default_memory_mib)?,
+        walltime_seconds: parse_optional("Default walltime", &draft.default_walltime_minutes)?
+            .map(|minutes| minutes.saturating_mul(60)),
+        gpu: default_gpu,
+        gpu_explicit: true,
+    };
+    let optional = |value: &str| (!value.trim().is_empty()).then(|| value.trim().to_string());
+    let scheduler = if draft.slurm {
+        let gpu_syntax = match draft.gpu_syntax.as_str() {
+            "gpus" => crate::backend::config::SlurmGpuSyntax::Gpus,
+            "custom" => crate::backend::config::SlurmGpuSyntax::CustomTemplate {
+                argument: draft.custom_gpu_argument.trim().to_string(),
+            },
+            _ => crate::backend::config::SlurmGpuSyntax::Gres {
+                resource_name: if draft.gres_name.trim().is_empty() {
+                    "gpu".to_string()
+                } else {
+                    draft.gres_name.trim().to_string()
+                },
+            },
+        };
+        let profile = crate::backend::config::SlurmProfile {
+            scheduler_prelude: draft
+                .scheduler_prelude
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect(),
+            partition: optional(&draft.partition),
+            account: optional(&draft.account),
+            qos: optional(&draft.qos),
+            reservation: optional(&draft.reservation),
+            constraint: optional(&draft.constraint),
+            gpu_syntax,
+            extra_args: draft
+                .extra_args
+                .lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
+                .map(str::to_string)
+                .collect(),
+        };
+        profile.validate()?;
+        crate::backend::config::SchedulerConfig::Slurm(profile)
+    } else {
+        crate::backend::config::SchedulerConfig::Direct
+    };
     Ok(crate::backend::config::RemoteHost {
         id,
         label,
@@ -65,7 +147,8 @@ fn host_from_draft(
         prelude,
         engines,
         engine_versions: prior_versions,
-        resources: prior_resources,
+        resources,
+        scheduler,
     })
 }
 
@@ -108,6 +191,17 @@ pub(crate) fn save_remote_host(state: &mut AppState, id: String) {
 }
 
 pub(crate) fn remove_remote_host(state: &mut AppState, id: String) {
+    let has_active_jobs = (|| -> anyhow::Result<bool> {
+        let conn = crate::backend::storage::jobs::open()?;
+        Ok(crate::backend::storage::jobs::list_non_terminal(&conn)?
+            .iter()
+            .any(|job| job.host_id == id))
+    })()
+    .unwrap_or(true);
+    if has_active_jobs {
+        state.set_message("This host has active remote jobs and cannot be removed".to_string());
+        return;
+    }
     state.config.remote_hosts.remove(&id);
     state.ui.settings.remote_host_drafts.remove(&id);
     state.ui.settings.remote_status.remove(&id);
@@ -154,6 +248,39 @@ pub(crate) fn detect_remote_gromacs(state: &mut AppState, id: String) {
         crate::frontend::jobs::RemoteProbeKind::DetectGromacs,
     ));
     state.set_message("Detecting GROMACS on the remote host…".to_string());
+}
+
+pub(crate) fn detect_remote_slurm(state: &mut AppState, id: String) {
+    let Some(host) = begin_remote_probe(state, &id) else {
+        return;
+    };
+    state.jobs.remote_probe = Some(crate::frontend::jobs::spawn_remote_probe(
+        host,
+        crate::frontend::jobs::RemoteProbeKind::DetectSlurm,
+    ));
+    state.set_message("Detecting Slurm…".to_string());
+}
+
+pub(crate) fn refresh_slurm_capabilities(state: &mut AppState, id: String) {
+    let Some(host) = begin_remote_probe(state, &id) else {
+        return;
+    };
+    state.jobs.remote_probe = Some(crate::frontend::jobs::spawn_remote_probe(
+        host,
+        crate::frontend::jobs::RemoteProbeKind::SlurmCapabilities,
+    ));
+    state.set_message("Refreshing Slurm capabilities…".to_string());
+}
+
+pub(crate) fn test_remote_slurm(state: &mut AppState, id: String) {
+    let Some(host) = begin_remote_probe(state, &id) else {
+        return;
+    };
+    state.jobs.remote_probe = Some(crate::frontend::jobs::spawn_remote_probe(
+        host,
+        crate::frontend::jobs::RemoteProbeKind::TestSlurm,
+    ));
+    state.set_message("Submitting a Slurm test job…".to_string());
 }
 
 /// Fetch the static hardware inventory of a remote host over SSH (CPU/memory/GPU)
@@ -219,6 +346,20 @@ pub(crate) fn set_monitor_source(state: &mut AppState, src: crate::frontend::sta
     let Some(host) = state.config.remote_hosts.get(&id).cloned() else {
         return; // host vanished from config between selection and dispatch.
     };
+    if matches!(
+        host.scheduler,
+        crate::backend::config::SchedulerConfig::Slurm(_)
+    ) {
+        state.ui.settings.remote_gpu_live = Some(crate::frontend::state::RemoteGpuLive {
+            host_id: id,
+            gpus: Vec::new(),
+            last_error: Some(
+                "Slurm targets show allocation state in the task monitor; login-node utilization is not cluster utilization"
+                    .to_string(),
+            ),
+        });
+        return;
+    }
     state.ui.settings.remote_gpu_live = Some(crate::frontend::state::RemoteGpuLive {
         host_id: id,
         gpus: Vec::new(),

@@ -7,6 +7,9 @@ pub enum RemoteProbeKind {
     Passwordless,
     /// Detect a GROMACS executable + version on the host.
     DetectGromacs,
+    DetectSlurm,
+    SlurmCapabilities,
+    TestSlurm,
 }
 
 /// Result of a remote-host probe (sent back from the worker thread).
@@ -14,6 +17,10 @@ pub enum RemoteProbeOutcome {
     Passwordless(bool),
     /// `(program, version)` when GROMACS was found, else `None`.
     Detected(Option<(String, String)>),
+    SlurmDetected(crate::engines::remote::launcher::SlurmDetection),
+    SlurmCapabilities(crate::engines::remote::launcher::SlurmCapabilities),
+    SlurmTested(String, String),
+    Failed(String),
 }
 
 /// An in-flight Remote Hosts probe. Runs the blocking `ssh` off the UI thread so
@@ -34,7 +41,12 @@ pub fn spawn_remote_probe(
     let (sender, receiver) = std::sync::mpsc::channel();
     let host_id = host.id.clone();
     std::thread::spawn(move || {
-        let target = remote::RemoteTarget::for_run(&host, "probe");
+        let run_anchor = if matches!(kind, RemoteProbeKind::TestSlurm) {
+            format!("scheduler-test-{}", uuid::Uuid::new_v4().simple())
+        } else {
+            "probe".to_string()
+        };
+        let target = remote::RemoteTarget::for_run(&host, &run_anchor);
         let outcome = match kind {
             RemoteProbeKind::Passwordless => {
                 RemoteProbeOutcome::Passwordless(remote::check_passwordless(&target))
@@ -42,6 +54,35 @@ pub fn spawn_remote_probe(
             RemoteProbeKind::DetectGromacs => RemoteProbeOutcome::Detected(
                 remote::detect_remote_engine(&target, remote::GMX_REMOTE_CANDIDATES),
             ),
+            RemoteProbeKind::DetectSlurm => remote::launcher::detect_slurm(&target)
+                .map(RemoteProbeOutcome::SlurmDetected)
+                .unwrap_or_else(|error| RemoteProbeOutcome::Failed(error.to_string())),
+            RemoteProbeKind::SlurmCapabilities => {
+                remote::launcher::probe_slurm_capabilities(&target)
+                    .map(RemoteProbeOutcome::SlurmCapabilities)
+                    .unwrap_or_else(|error| RemoteProbeOutcome::Failed(error.to_string()))
+            }
+            RemoteProbeKind::TestSlurm => {
+                let result = (|| -> anyhow::Result<(String, String)> {
+                    let crate::backend::config::SchedulerConfig::Slurm(profile) = &host.scheduler
+                    else {
+                        anyhow::bail!("host is not configured for Slurm");
+                    };
+                    let deployed = remote::deploy::ensure_worker_deployed(&host, &target)?;
+                    let output = remote::launcher::slurm_smoke_test(
+                        &target,
+                        profile,
+                        &deployed.remote_path,
+                    )?;
+                    Ok((output, deployed.deployment_id))
+                })();
+                match result {
+                    Ok((output, deployment_id)) => {
+                        RemoteProbeOutcome::SlurmTested(output, deployment_id)
+                    }
+                    Err(error) => RemoteProbeOutcome::Failed(error.to_string()),
+                }
+            }
         };
         let _ = sender.send(outcome);
     });

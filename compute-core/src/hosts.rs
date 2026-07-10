@@ -49,31 +49,249 @@ pub struct RemoteHost {
     /// without re-probing over SSH on every open.
     #[serde(default)]
     pub engine_versions: HashMap<String, String>,
-    /// Per-host default resource request. Only `cores` is consumed today — it caps
-    /// the worker's thread pool so a job is a good citizen on a shared node;
-    /// resolution is per-job override → this → the app-wide core count. The other
-    /// fields parse forward-compatibly for scheduler-directive rendering.
+    /// Per-host default resource request, resolved as per-job override → this →
+    /// the app-wide core count. `cpus_per_task` caps the worker's thread pool so a
+    /// job is a good citizen on a shared node; the rest render as scheduler
+    /// directives and are inert under the Direct launcher.
     #[serde(default)]
     pub resources: ResourceSpec,
+    #[serde(default)]
+    pub scheduler: SchedulerConfig,
 }
 
 /// What a job asks the node (or a scheduler) for, launcher-agnostic. Every field
-/// is optional so an empty spec is valid and means "let the node decide". Only
-/// `cores` is consumed today (it sizes the worker's thread pool); the rest are
-/// reserved and round-trip untouched.
+/// is optional so an empty spec is valid and means "let the node decide".
+pub type ResourceSpec = JobResources;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ResourceSpec {
-    /// Requested core count. Resolves per-job override → per-host default → the
-    /// app-wide core count, then is clamped to the target's inventory before it
-    /// reaches `request.json`.
+pub struct JobResources {
+    /// `cores` is the pre-scheduler name this field shipped under; the alias keeps
+    /// an existing host's core default alive across the upgrade.
+    #[serde(default, alias = "cores")]
+    pub cpus_per_task: Option<u32>,
+    #[serde(default, alias = "mem_mb")]
+    pub memory_mib: Option<u64>,
     #[serde(default)]
-    pub cores: Option<usize>,
+    pub walltime_seconds: Option<u64>,
     #[serde(default)]
-    pub mem_mb: Option<u64>,
+    pub gpu: GpuRequest,
     #[serde(default)]
-    pub walltime: Option<String>,
+    pub gpu_explicit: bool,
+}
+
+impl JobResources {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.cpus_per_task == Some(0) {
+            anyhow::bail!("CPU count must be greater than zero");
+        }
+        if self.memory_mib == Some(0) {
+            anyhow::bail!("memory must be greater than zero");
+        }
+        if self.walltime_seconds == Some(0) {
+            anyhow::bail!("walltime must be greater than zero");
+        }
+        self.gpu.validate()
+    }
+
+    pub fn resolved_with(&self, defaults: &Self) -> Self {
+        Self {
+            cpus_per_task: self.cpus_per_task.or(defaults.cpus_per_task),
+            memory_mib: self.memory_mib.or(defaults.memory_mib),
+            walltime_seconds: self.walltime_seconds.or(defaults.walltime_seconds),
+            gpu: if self.gpu_explicit {
+                self.gpu.clone()
+            } else {
+                defaults.gpu.clone()
+            },
+            gpu_explicit: true,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GpuRequest {
+    #[default]
+    None,
+    Any {
+        count: u32,
+    },
+    Typed {
+        gpu_type: String,
+        count: u32,
+    },
+}
+
+impl GpuRequest {
+    pub fn count(&self) -> u32 {
+        match self {
+            Self::None => 0,
+            Self::Any { count } | Self::Typed { count, .. } => *count,
+        }
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        match self {
+            Self::None => Ok(()),
+            Self::Any { count } if *count > 0 => Ok(()),
+            Self::Typed { gpu_type, count } if *count > 0 && valid_scheduler_value(gpu_type) => {
+                Ok(())
+            }
+            Self::Any { .. } | Self::Typed { count: 0, .. } => {
+                anyhow::bail!("GPU count must be greater than zero")
+            }
+            Self::Typed { .. } => anyhow::bail!("GPU type contains invalid characters"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SchedulerConfig {
+    #[default]
+    Direct,
+    Slurm(SlurmProfile),
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SlurmProfile {
     #[serde(default)]
-    pub extra: Vec<String>,
+    pub scheduler_prelude: Vec<String>,
+    #[serde(default)]
+    pub partition: Option<String>,
+    #[serde(default)]
+    pub account: Option<String>,
+    #[serde(default)]
+    pub qos: Option<String>,
+    #[serde(default)]
+    pub reservation: Option<String>,
+    #[serde(default)]
+    pub constraint: Option<String>,
+    #[serde(default)]
+    pub gpu_syntax: SlurmGpuSyntax,
+    #[serde(default)]
+    pub extra_args: Vec<String>,
+}
+
+impl SlurmProfile {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        for (label, value) in [
+            ("partition", self.partition.as_deref()),
+            ("account", self.account.as_deref()),
+            ("QOS", self.qos.as_deref()),
+            ("reservation", self.reservation.as_deref()),
+        ] {
+            if value.is_some_and(|value| !valid_scheduler_value(value)) {
+                anyhow::bail!("{label} contains invalid characters");
+            }
+        }
+        if self
+            .constraint
+            .as_deref()
+            .is_some_and(|value| !valid_constraint_value(value))
+        {
+            anyhow::bail!("constraint contains invalid characters");
+        }
+        self.gpu_syntax.validate()?;
+        for argument in &self.extra_args {
+            validate_extra_arg(argument)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SlurmGpuSyntax {
+    Gres { resource_name: String },
+    Gpus,
+    CustomTemplate { argument: String },
+}
+
+impl Default for SlurmGpuSyntax {
+    fn default() -> Self {
+        Self::Gres {
+            resource_name: "gpu".to_string(),
+        }
+    }
+}
+
+impl SlurmGpuSyntax {
+    pub fn validate(&self) -> anyhow::Result<()> {
+        match self {
+            Self::Gres { resource_name } if valid_scheduler_value(resource_name) => Ok(()),
+            Self::Gres { .. } => anyhow::bail!("GRES resource name contains invalid characters"),
+            Self::Gpus => Ok(()),
+            Self::CustomTemplate { argument } => {
+                let remainder = argument.replace("{count}", "").replace("{type}", "");
+                if !argument.contains("{count}")
+                    || remainder.contains('{')
+                    || remainder.contains('}')
+                    || argument.contains(['\n', '\r', '\0'])
+                {
+                    anyhow::bail!("custom GPU argument has invalid placeholders");
+                }
+                Ok(())
+            }
+        }
+    }
+}
+
+fn valid_scheduler_value(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|ch| {
+            ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | ':' | '+' | ',' | '/')
+        })
+}
+
+/// `--constraint` takes a feature *expression*, not a bare name: `a&b`, `a|b`,
+/// `[a*2&b]`. Every rendered argument is shell-quoted, so the extra operators
+/// stay inert.
+fn valid_constraint_value(value: &str) -> bool {
+    !value.is_empty()
+        && value.chars().all(|ch| {
+            ch.is_ascii_alphanumeric()
+                || matches!(
+                    ch,
+                    '_' | '-'
+                        | '.'
+                        | ':'
+                        | '+'
+                        | ','
+                        | '/'
+                        | '&'
+                        | '|'
+                        | '*'
+                        | '['
+                        | ']'
+                        | '('
+                        | ')'
+                )
+        })
+}
+
+fn validate_extra_arg(argument: &str) -> anyhow::Result<()> {
+    const OWNED: &[&str] = &[
+        "--wrap",
+        "--chdir",
+        "--output",
+        "--error",
+        "--open-mode",
+        "--parsable",
+        "--nodes",
+        "--ntasks",
+        "--job-name",
+        "--export",
+    ];
+    let key = argument.split('=').next().unwrap_or(argument);
+    if !argument.starts_with('-')
+        || argument.contains(['\n', '\r', '\0'])
+        || argument.chars().any(char::is_whitespace)
+        || OWNED.contains(&key)
+    {
+        anyhow::bail!("invalid or conflicting Slurm argument `{argument}`");
+    }
+    Ok(())
 }
 
 fn default_ssh_port() -> u16 {
@@ -118,13 +336,14 @@ mod tests {
         assert!(host.engines.is_empty());
         assert!(host.engine_versions.is_empty());
         assert_eq!(host.resources, ResourceSpec::default());
-        assert_eq!(host.resources.cores, None);
+        assert_eq!(host.resources.cpus_per_task, None);
+        assert_eq!(host.scheduler, SchedulerConfig::Direct);
     }
 
     #[test]
     fn resource_spec_roundtrips_and_empty_is_default() {
         let spec = ResourceSpec {
-            cores: Some(8),
+            cpus_per_task: Some(8),
             ..Default::default()
         };
         let json = serde_json::to_string(&spec).unwrap();
@@ -134,5 +353,46 @@ mod tests {
             serde_json::from_str::<ResourceSpec>("{}").unwrap(),
             ResourceSpec::default()
         );
+    }
+
+    #[test]
+    fn resource_and_slurm_validation_rejects_unsafe_values() {
+        assert!(GpuRequest::Any { count: 0 }.validate().is_err());
+        assert!(
+            GpuRequest::Typed {
+                gpu_type: "a100;id".into(),
+                count: 1,
+            }
+            .validate()
+            .is_err()
+        );
+        let mut profile = SlurmProfile {
+            partition: Some("debug".into()),
+            ..Default::default()
+        };
+        assert!(profile.validate().is_ok());
+        profile.extra_args.push("--wrap=oops".into());
+        assert!(profile.validate().is_err());
+    }
+
+    #[test]
+    fn constraint_accepts_slurm_feature_expressions() {
+        let profile = SlurmProfile {
+            constraint: Some("gpu&highmem".into()),
+            ..Default::default()
+        };
+        assert!(profile.validate().is_ok());
+        let profile = SlurmProfile {
+            constraint: Some("a; rm -rf /".into()),
+            ..Default::default()
+        };
+        assert!(profile.validate().is_err());
+    }
+
+    #[test]
+    fn a_pre_scheduler_resource_spec_keeps_its_core_default() {
+        let spec: ResourceSpec =
+            serde_json::from_str(r#"{"cores": 8, "walltime": "01:00:00", "extra": []}"#).unwrap();
+        assert_eq!(spec.cpus_per_task, Some(8));
     }
 }

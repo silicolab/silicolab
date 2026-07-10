@@ -21,12 +21,14 @@ pub struct RemoteSubmitted {
     pub remote_dir: String,
     pub scheduler: String,
     pub launch_handle: String,
+    pub cluster: Option<String>,
     pub engine_id: String,
     pub job_kind: String,
     pub project_root: Option<String>,
     pub local_run_dir: PathBuf,
     /// The exact worker deployment identity confirmed on the host.
     pub deployment_id: String,
+    pub initial_phase: crate::engines::remote::launcher::RemoteJobPhase,
 }
 
 /// Result of an off-thread detached remote submission. The success payload is
@@ -52,7 +54,9 @@ pub(crate) fn resolve_requested_cores(
     host: &crate::backend::config::RemoteHost,
     fallback: usize,
 ) -> usize {
-    per_job.or(host.resources.cores).unwrap_or(fallback)
+    per_job
+        .or(host.resources.cpus_per_task.map(|value| value as usize))
+        .unwrap_or(fallback)
 }
 
 /// Clamp a requested core count to a remote host's probed inventory. Prefers the
@@ -143,8 +147,8 @@ fn engine_id_token(engine: &crate::wire::Engine) -> &'static str {
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_remote_submit(
     host: crate::backend::config::RemoteHost,
-    engine: crate::wire::Engine,
-    cores: Option<usize>,
+    mut engine: crate::wire::Engine,
+    resources: crate::backend::config::JobResources,
     run_uuid: String,
     task_run_id: Option<u64>,
     job_kind: String,
@@ -160,15 +164,26 @@ pub fn spawn_remote_submit(
         let result = (|| -> anyhow::Result<RemoteSubmitOutcome> {
             let target = RemoteTarget::for_run(&host, &run_uuid);
             let engine_id = engine_id_token(&engine).to_string();
-            // One probe feeds both the core clamp and the in-core memory budget.
-            let inventory = probe_remote_inventory(&target);
+            let (launcher, profile) = match &host.scheduler {
+                crate::backend::config::SchedulerConfig::Direct => (Launcher::Direct, None),
+                crate::backend::config::SchedulerConfig::Slurm(profile) => {
+                    (Launcher::Slurm, Some(profile.clone()))
+                }
+            };
+            let mut resources = resources.resolved_with(&host.resources);
+            let inventory = (launcher == Launcher::Direct)
+                .then(|| probe_remote_inventory(&target))
+                .flatten();
             // Pre-flight an in-core QM ERI allocation against the REMOTE host's RAM,
             // before deploying, so an oversized job is refused client-side rather
             // than left to OOM mid-SCF on the node. Only in-core molecular QM has
             // this tensor; every other engine (and periodic QM) skips the guard,
             // as does a host whose RAM we could not probe (falling open).
             if let Engine::Qm(QmJob::Molecular(request)) = &engine
-                && let Some(ram) = inventory.as_ref().and_then(|info| info.ram_bytes)
+                && let Some(ram) = resources
+                    .memory_mib
+                    .map(|mib| mib.saturating_mul(1024 * 1024))
+                    .or_else(|| inventory.as_ref().and_then(|info| info.ram_bytes))
             {
                 let verdict =
                     memory_verdict(request, crate::backend::hardware::qm_incore_budget_for(ram));
@@ -178,24 +193,50 @@ pub fn spawn_remote_submit(
             }
             let deployed = deploy::ensure_worker_deployed(&host, &target)?;
             std::fs::create_dir_all(&local_run_dir)?;
-            let cores = clamp_cores(cores, inventory.as_ref());
-            let request = EngineRequest::with_cores(engine, cores);
+            resources.cpus_per_task = clamp_cores(
+                resources.cpus_per_task.map(|value| value as usize),
+                inventory.as_ref(),
+            )
+            .map(|value| value as u32);
+            if let Engine::Gromacs(crate::workflows::gromacs::GromacsJob::Run(request)) =
+                &mut engine
+            {
+                request.resources.cores = resources.cpus_per_task.unwrap_or(0);
+                request.resources.gpu = resources.gpu.count();
+            }
+            let request = EngineRequest::with_cores(
+                engine,
+                resources.cpus_per_task.map(|value| value as usize),
+            );
             let json = serde_json::to_vec(&request)?;
             std::fs::write(local_run_dir.join(launcher::REQUEST_FILE), json)?;
-            remote::write_run_record(&target, &local_run_dir);
-            let handle = Launcher::Direct.submit(&target, &local_run_dir, &deployed.remote_path)?;
+            remote::write_run_record(&target, &local_run_dir, launcher, None, &resources);
+            let handle = launcher.submit(
+                &target,
+                &local_run_dir,
+                &deployed.remote_path,
+                &resources,
+                profile.as_ref(),
+            )?;
+            remote::write_run_record(&target, &local_run_dir, launcher, Some(&handle), &resources);
             Ok(RemoteSubmitOutcome::Submitted(Box::new(RemoteSubmitted {
                 run_uuid: run_uuid.clone(),
                 host_id: host.id.clone(),
                 host_label: host.label.clone(),
                 remote_dir: target.remote_dir.clone(),
-                scheduler: Launcher::Direct.token().to_string(),
-                launch_handle: handle.0,
+                scheduler: launcher.token().to_string(),
+                launch_handle: handle.id,
+                cluster: handle.cluster,
                 engine_id,
                 job_kind,
                 project_root,
                 local_run_dir: local_run_dir.clone(),
                 deployment_id: deployed.deployment_id,
+                initial_phase: if launcher == Launcher::Slurm {
+                    crate::engines::remote::launcher::RemoteJobPhase::Queued
+                } else {
+                    crate::engines::remote::launcher::RemoteJobPhase::Running
+                },
             })))
         })();
         let _ = sender
@@ -209,18 +250,19 @@ pub fn spawn_remote_submit(
 
 /// Per-job result of a remote-jobs refresh.
 pub enum RemoteJobOutcome {
-    /// Still on the system.
-    Running,
+    Observed(crate::engines::remote::launcher::LauncherObservation),
     /// Finished cleanly; the retrieved, parsed outcome. Boxed (it carries a full
     /// structure) to keep this enum small.
-    Done(Box<crate::wire::EngineOutcome>),
-    /// Exited non-zero on the host.
-    FailedExit(i32),
-    /// Gone without an exit code (node crash, OOM, external kill).
-    Lost,
+    Done(
+        Box<crate::wire::EngineOutcome>,
+        crate::engines::remote::launcher::LauncherObservation,
+    ),
     /// Finished, its `outcome.json` retrieved, but the JSON could not be parsed.
     /// Terminal (the file will not become parseable on a retry) → marked failed.
-    OutcomeUnreadable(String),
+    OutcomeUnreadable(
+        String,
+        crate::engines::remote::launcher::LauncherObservation,
+    ),
     /// A transient probe/transport error — the job's recorded status is left
     /// unchanged so a flaky network does not declare it lost.
     ProbeError(String),
@@ -236,6 +278,129 @@ pub struct RunningRemoteJobsRefresh {
     pub receiver: Receiver<Vec<RemoteJobRefreshUpdate>>,
 }
 
+pub struct RunningRemoteCancel {
+    pub run_uuid: String,
+    pub receiver: Receiver<Result<RemoteJobOutcome, String>>,
+}
+
+pub struct RunningRemoteCleanup {
+    pub run_uuid: String,
+    pub receiver: Receiver<Result<(), String>>,
+}
+
+pub fn spawn_remote_cleanup(
+    row: crate::backend::storage::jobs::RemoteJob,
+    host: crate::backend::config::RemoteHost,
+) -> RunningRemoteCleanup {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let run_uuid = row.run_uuid.clone();
+    std::thread::spawn(move || {
+        let result = crate::engines::remote::RemoteTarget::from_remote_dir(&host, &row.remote_dir)
+            .and_then(|target| crate::engines::remote::remove_remote_scratch(&target))
+            .map_err(|error| error.to_string());
+        let _ = sender.send(result);
+    });
+    RunningRemoteCleanup { run_uuid, receiver }
+}
+
+/// Cancel a detached remote job and wait for the launcher to confirm it. The
+/// confirmation poll goes through [`observe_remote_job`], so a job that finishes
+/// in the window between the request and the kill still has its `outcome.json`
+/// retrieved rather than being discarded as "finished as done".
+pub fn spawn_remote_cancel(
+    row: crate::backend::storage::jobs::RemoteJob,
+    host: crate::backend::config::RemoteHost,
+) -> RunningRemoteCancel {
+    use crate::engines::remote::RemoteTarget;
+    use crate::engines::remote::launcher::{LaunchHandle, Launcher, RemoteJobPhase};
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let run_uuid = row.run_uuid.clone();
+    std::thread::spawn(move || {
+        let result = (|| -> anyhow::Result<RemoteJobOutcome> {
+            let target = RemoteTarget::from_remote_dir(&host, &row.remote_dir)?;
+            let launcher = Launcher::from_token(&row.scheduler)?;
+            let handle = LaunchHandle {
+                id: row.launch_handle,
+                cluster: row.cluster,
+            };
+            launcher.cancel(&target, &handle)?;
+            let mut console_offset = row.console_offset;
+            for _ in 0..60 {
+                let outcome = observe_remote_job(
+                    &target,
+                    launcher,
+                    &handle,
+                    console_offset,
+                    true,
+                    &row.local_run_dir,
+                );
+                match &outcome {
+                    RemoteJobOutcome::Observed(observation) => {
+                        console_offset = observation.console.next_offset;
+                        if matches!(
+                            observation.phase,
+                            RemoteJobPhase::Failed
+                                | RemoteJobPhase::Cancelled
+                                | RemoteJobPhase::Lost
+                        ) {
+                            return Ok(outcome);
+                        }
+                    }
+                    // Transient: keep waiting on the same console offset.
+                    RemoteJobOutcome::ProbeError(_) => {}
+                    RemoteJobOutcome::Done(..) | RemoteJobOutcome::OutcomeUnreadable(..) => {
+                        return Ok(outcome);
+                    }
+                }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+            }
+            anyhow::bail!("scheduler did not confirm cancellation within 60 seconds")
+        })();
+        let _ = sender.send(result.map_err(|error| error.to_string()));
+    });
+    RunningRemoteCancel { run_uuid, receiver }
+}
+
+/// Probe one remote job: read its phase and its new console bytes, and — when it
+/// finished — retrieve and parse `outcome.json`. The console is appended locally
+/// only on a path whose `next_offset` the caller will persist, so a failed
+/// retrieval replays the same bytes next time instead of duplicating them.
+fn observe_remote_job(
+    target: &crate::engines::remote::RemoteTarget,
+    launcher: crate::engines::remote::launcher::Launcher,
+    handle: &crate::engines::remote::launcher::LaunchHandle,
+    console_offset: u64,
+    cancelling: bool,
+    local_run_dir: &str,
+) -> RemoteJobOutcome {
+    use crate::engines::remote::launcher::{RemoteJobPhase, retrieve_outcome};
+    match launcher.poll(target, handle, console_offset, cancelling) {
+        Ok(observation) if observation.phase == RemoteJobPhase::Succeeded => {
+            match retrieve_outcome(target, std::path::Path::new(local_run_dir)) {
+                Ok(bytes) => {
+                    append_console(local_run_dir, &observation.console.text);
+                    match serde_json::from_slice::<crate::wire::EngineOutcome>(&bytes) {
+                        Ok(outcome) => RemoteJobOutcome::Done(Box::new(outcome), observation),
+                        // The job finished but its outcome is corrupt: a retry
+                        // cannot fix it, so this is terminal.
+                        Err(error) => RemoteJobOutcome::OutcomeUnreadable(
+                            format!("parse outcome: {error}"),
+                            observation,
+                        ),
+                    }
+                }
+                // scp itself failed: transient, retry next refresh.
+                Err(error) => RemoteJobOutcome::ProbeError(format!("retrieve outcome: {error}")),
+            }
+        }
+        Ok(observation) => {
+            append_console(local_run_dir, &observation.console.text);
+            RemoteJobOutcome::Observed(observation)
+        }
+        Err(error) => RemoteJobOutcome::ProbeError(error.to_string()),
+    }
+}
+
 /// Probe each job's liveness over SSH and, when one has finished, retrieve and
 /// parse its `outcome.json`, off the UI thread. A refresh reads `.exit` **and**
 /// the process-group liveness, so a job that died without writing `.exit` is
@@ -247,39 +412,44 @@ pub fn spawn_remote_jobs_refresh(
     )>,
 ) -> RunningRemoteJobsRefresh {
     use crate::engines::remote::RemoteTarget;
-    use crate::engines::remote::launcher::{LaunchHandle, Launcher, Liveness, retrieve_outcome};
+    use crate::engines::remote::launcher::{LaunchHandle, Launcher};
 
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let mut updates = Vec::with_capacity(items.len());
         for (row, host) in items {
-            let target = RemoteTarget::for_run(&host, &row.run_uuid);
-            let handle = LaunchHandle(row.launch_handle.clone());
-            // Only the Direct launcher exists.
-            let outcome = match Launcher::Direct.poll(&target, &handle) {
-                Ok((Liveness::Alive, _)) => RemoteJobOutcome::Running,
-                Ok((Liveness::Lost, _)) => RemoteJobOutcome::Lost,
-                Ok((Liveness::Done(0), _)) => {
-                    match retrieve_outcome(&target, std::path::Path::new(&row.local_run_dir)) {
-                        Ok(bytes) => {
-                            match serde_json::from_slice::<crate::wire::EngineOutcome>(&bytes) {
-                                Ok(outcome) => RemoteJobOutcome::Done(Box::new(outcome)),
-                                // The job finished but its outcome is corrupt: a
-                                // retry cannot fix it, so this is terminal.
-                                Err(error) => RemoteJobOutcome::OutcomeUnreadable(format!(
-                                    "parse outcome: {error}"
-                                )),
-                            }
-                        }
-                        // scp itself failed: transient, retry next refresh.
-                        Err(error) => {
-                            RemoteJobOutcome::ProbeError(format!("retrieve outcome: {error}"))
-                        }
-                    }
+            let target = match RemoteTarget::from_remote_dir(&host, &row.remote_dir) {
+                Ok(target) => target,
+                Err(error) => {
+                    updates.push(RemoteJobRefreshUpdate {
+                        run_uuid: row.run_uuid,
+                        outcome: RemoteJobOutcome::ProbeError(error.to_string()),
+                    });
+                    continue;
                 }
-                Ok((Liveness::Done(code), _)) => RemoteJobOutcome::FailedExit(code),
-                Err(error) => RemoteJobOutcome::ProbeError(error.to_string()),
             };
+            let launcher = match Launcher::from_token(&row.scheduler) {
+                Ok(launcher) => launcher,
+                Err(error) => {
+                    updates.push(RemoteJobRefreshUpdate {
+                        run_uuid: row.run_uuid,
+                        outcome: RemoteJobOutcome::ProbeError(error.to_string()),
+                    });
+                    continue;
+                }
+            };
+            let handle = LaunchHandle {
+                id: row.launch_handle.clone(),
+                cluster: row.cluster.clone(),
+            };
+            let outcome = observe_remote_job(
+                &target,
+                launcher,
+                &handle,
+                row.console_offset,
+                row.status == crate::backend::storage::jobs::RemoteJobStatus::Cancelling,
+                &row.local_run_dir,
+            );
             updates.push(RemoteJobRefreshUpdate {
                 run_uuid: row.run_uuid,
                 outcome,
@@ -288,6 +458,21 @@ pub fn spawn_remote_jobs_refresh(
         let _ = sender.send(updates);
     });
     RunningRemoteJobsRefresh { receiver }
+}
+
+fn append_console(local_run_dir: &str, text: &str) {
+    if text.is_empty() {
+        return;
+    }
+    use std::io::Write;
+    let path = std::path::Path::new(local_run_dir).join("run.console");
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)
+    {
+        let _ = file.write_all(text.as_bytes());
+    }
 }
 
 #[cfg(test)]

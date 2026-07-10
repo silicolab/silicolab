@@ -1,4 +1,6 @@
-use crate::frontend::remote_jobs::{RunningRemoteJobsRefresh, RunningRemoteSubmit};
+use crate::frontend::remote_jobs::{
+    RunningRemoteCancel, RunningRemoteCleanup, RunningRemoteJobsRefresh, RunningRemoteSubmit,
+};
 
 use super::agent::{RunningAgentTurn, TrackedAgentJob};
 use super::disorder::RunningDisorderJob;
@@ -55,6 +57,8 @@ pub struct JobManager {
     /// In-flight off-thread refresh of the detached remote jobs (liveness probe +
     /// outcome retrieval). Opt-in, never an automatic loop.
     pub remote_jobs_refresh: Option<RunningRemoteJobsRefresh>,
+    pub remote_cancel: Option<RunningRemoteCancel>,
+    pub remote_cleanup: Option<RunningRemoteCleanup>,
     /// Whether the registry snapshot has been loaded into the UI this session
     /// (a one-shot reconnect read on the first frame).
     pub remote_jobs_loaded: bool,

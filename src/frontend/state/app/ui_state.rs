@@ -43,6 +43,7 @@ pub struct SettingsState {
     pub remote_hardware: BTreeMap<String, crate::engines::remote::hardware::RemoteHardwareInfo>,
     /// Remote host currently selected in the remote-hardware panel.
     pub remote_hardware_host: Option<String>,
+    pub slurm_capabilities: BTreeMap<String, crate::engines::remote::launcher::SlurmCapabilities>,
     /// Live remote-GPU monitoring data for the host currently being watched
     /// (Hardware ▸ Remote host ▸ Live GPU). `None` when no monitor is running.
     pub remote_gpu_live: Option<RemoteGpuLive>,

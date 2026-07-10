@@ -73,7 +73,15 @@ pub(crate) fn start_pending_docking(state: &mut AppState) {
         // A configured remote target: deploy + submit detached, tracked via the
         // job registry and the opt-in refresh. Docking is single-threaded, so no
         // core count rides along.
-        Some(host) => start_remote_engine(state, host, crate::wire::Engine::Docking(request), None),
+        Some(host) => {
+            let resources = prompt.prefs.job_resources();
+            start_remote_engine(
+                state,
+                host,
+                crate::wire::Engine::Docking(request),
+                resources,
+            )
+        }
         None => {
             let job = spawn_docking_job(request);
             state.jobs.set_docking(job);

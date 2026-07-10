@@ -182,6 +182,14 @@ locally. This is the same `compute-core` job machinery, transported:
 - The worker executes the request and writes an outcome the client reads back.
   QM, docking, and GROMACS/MD all run through this path; jobs are bounded by the
   host's own CPU and RAM.
+- `engines/remote/launcher.rs` owns the shared run bundle and the Direct/Slurm
+  launcher boundary. Resources enter it as scheduler-neutral CPU, memory,
+  walltime, and none/any/typed GPU requests. Slurm uses GRES by default, treats
+  `sacct` as optional, and falls back to `scontrol` for retained terminal state.
+- Detached jobs persist their submission-time launcher, launch handle, optional
+  Slurm cluster, remote directory, scheduler state/reason, and console offset in
+  the global job registry. Refresh and cancellation use those persisted values,
+  so later edits to a host do not relocate or reinterpret an existing job.
 
 **Why:** the wire/payload split keeps the GUI-free `compute-core` as the single
 implementation of each engine — local and remote runs share it, so behavior can

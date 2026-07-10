@@ -19,6 +19,7 @@ use crate::frontend::{
 const MAX_SUBTASKS: u32 = 256;
 const MAX_GPUS: u32 = 16;
 const MAX_MEMORY_MIB: u32 = 1_048_576; // 1 TiB
+const MAX_WALLTIME_MINUTES: u32 = 525_600;
 
 /// `(id, label)` for every configured remote host, sorted by label — the option
 /// list behind the compute-target picker.
@@ -135,15 +136,7 @@ pub(crate) fn execution_section(
         true,
         "This task doesn't expose a core count.",
     );
-    resource_field(
-        ui,
-        "GPUs",
-        &mut prefs.gpu_count,
-        caps.gpu,
-        0..=MAX_GPUS,
-        true,
-        "GPU selection isn't available for this task yet.",
-    );
+    gpu_request_field(ui, &mut prefs.gpu, &mut prefs.gpu_explicit, caps.gpu);
     resource_field(
         ui,
         "Memory (MiB)",
@@ -153,4 +146,81 @@ pub(crate) fn execution_section(
         true,
         "This task doesn't expose a memory cap.",
     );
+    resource_field(
+        ui,
+        "Walltime (minutes)",
+        &mut prefs.walltime_minutes,
+        caps.walltime,
+        0..=MAX_WALLTIME_MINUTES,
+        true,
+        "This task doesn't expose a walltime request.",
+    );
+}
+
+fn gpu_request_field(
+    ui: &mut egui::Ui,
+    request: &mut crate::backend::config::GpuRequest,
+    explicit: &mut bool,
+    enabled: bool,
+) {
+    use crate::backend::config::GpuRequest;
+    ui.add_enabled_ui(enabled, |ui| {
+        ui.horizontal(|ui| {
+            ui.label("GPU:");
+            let selected = match request {
+                GpuRequest::None => "No GPU",
+                GpuRequest::Any { .. } => "Any available",
+                GpuRequest::Typed { .. } => "Specific type",
+            };
+            egui::ComboBox::from_id_salt("gpu_request_kind")
+                .selected_text(selected)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(matches!(request, GpuRequest::None), "No GPU")
+                        .clicked()
+                    {
+                        *request = GpuRequest::None;
+                        *explicit = true;
+                    }
+                    if ui
+                        .selectable_label(
+                            matches!(request, GpuRequest::Any { .. }),
+                            "Any available",
+                        )
+                        .clicked()
+                    {
+                        *request = GpuRequest::Any { count: 1 };
+                        *explicit = true;
+                    }
+                    if ui
+                        .selectable_label(
+                            matches!(request, GpuRequest::Typed { .. }),
+                            "Specific type",
+                        )
+                        .clicked()
+                    {
+                        *request = GpuRequest::Typed {
+                            gpu_type: String::new(),
+                            count: 1,
+                        };
+                        *explicit = true;
+                    }
+                });
+            match request {
+                GpuRequest::None => {}
+                GpuRequest::Any { count } => {
+                    ui.label("Count:");
+                    ui.add(egui::DragValue::new(count).range(1..=MAX_GPUS));
+                }
+                GpuRequest::Typed { gpu_type, count } => {
+                    ui.label("Type:");
+                    ui.add(egui::TextEdit::singleline(gpu_type).desired_width(100.0));
+                    ui.label("Count:");
+                    ui.add(egui::DragValue::new(count).range(1..=MAX_GPUS));
+                }
+            }
+        });
+    })
+    .response
+    .on_disabled_hover_text("GPU selection isn't available for this task yet.");
 }

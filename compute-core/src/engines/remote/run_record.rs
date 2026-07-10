@@ -13,11 +13,13 @@ use std::time::UNIX_EPOCH;
 use serde::{Deserialize, Serialize};
 
 use super::RemoteTarget;
+use super::launcher::{LaunchHandle, Launcher};
+use crate::hosts::JobResources;
 
 /// Filename of the per-run breadcrumb written into the local run dir.
 pub const REMOTE_RUN_FILE: &str = "remote_run.json";
 /// Schema version of [`RemoteRunRecord`]; bumped if the shape changes.
-pub const REMOTE_RUN_RECORD_VERSION: u32 = 1;
+pub const REMOTE_RUN_RECORD_VERSION: u32 = 2;
 
 /// A typed, versioned, self-describing record of where a detached remote run
 /// lives. Written into each local run dir at launch so a later session (or the
@@ -34,13 +36,34 @@ pub struct RemoteRunRecord {
     pub user_host: String,
     pub remote_dir: String,
     pub started_at_unix: u64,
+    #[serde(default = "default_scheduler")]
+    pub scheduler: String,
+    #[serde(default)]
+    pub launch_handle: Option<RunLaunchHandle>,
+    #[serde(default)]
+    pub resources: JobResources,
+    #[serde(default)]
+    pub submitted_at_ms: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RunLaunchHandle {
+    pub id: String,
+    #[serde(default)]
+    pub cluster: Option<String>,
 }
 
 /// Write the [`RemoteRunRecord`] breadcrumb into the local run dir at launch.
 /// Because the remote command is detached (`setsid`), closing the app leaves it
 /// running; this record is what a later session needs to reconnect or clean up.
 /// Best-effort — a write failure must never fail the run.
-pub fn write_run_record(target: &RemoteTarget, working_dir: &Path) {
+pub fn write_run_record(
+    target: &RemoteTarget,
+    working_dir: &Path,
+    launcher: Launcher,
+    handle: Option<&LaunchHandle>,
+    resources: &JobResources,
+) {
     let started_at_unix = std::time::SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())
@@ -52,10 +75,25 @@ pub fn write_run_record(target: &RemoteTarget, working_dir: &Path) {
         user_host: target.user_host(),
         remote_dir: target.remote_dir.clone(),
         started_at_unix,
+        scheduler: launcher.token().to_string(),
+        launch_handle: handle.map(|handle| RunLaunchHandle {
+            id: handle.id.clone(),
+            cluster: handle.cluster.clone(),
+        }),
+        resources: resources.clone(),
+        submitted_at_ms: started_at_unix.saturating_mul(1000) as i64,
     };
     if let Ok(text) = serde_json::to_string_pretty(&record) {
-        let _ = fs::write(working_dir.join(REMOTE_RUN_FILE), text);
+        let path = working_dir.join(REMOTE_RUN_FILE);
+        let temporary = working_dir.join(format!("{REMOTE_RUN_FILE}.tmp"));
+        if fs::write(&temporary, text).is_ok() {
+            let _ = fs::rename(temporary, path);
+        }
     }
+}
+
+fn default_scheduler() -> String {
+    "direct".to_string()
 }
 
 /// Read the [`RemoteRunRecord`] breadcrumb from a local run dir, if present and
@@ -78,6 +116,16 @@ mod tests {
             user_host: "alice@login.example.edu".to_string(),
             remote_dir: "~/.silicolab/runs/abc-123".to_string(),
             started_at_unix: 1_700_000_000,
+            scheduler: "slurm".to_string(),
+            launch_handle: Some(RunLaunchHandle {
+                id: "42".to_string(),
+                cluster: Some("alpha".to_string()),
+            }),
+            resources: JobResources {
+                cpus_per_task: Some(4),
+                ..Default::default()
+            },
+            submitted_at_ms: 1_700_000_000_000,
         };
         let json = serde_json::to_string(&record).unwrap();
         let back: RemoteRunRecord = serde_json::from_str(&json).unwrap();
@@ -86,6 +134,8 @@ mod tests {
         assert_eq!(back.user_host, "alice@login.example.edu");
         assert_eq!(back.remote_dir, "~/.silicolab/runs/abc-123");
         assert_eq!(back.started_at_unix, 1_700_000_000);
+        assert_eq!(back.scheduler, "slurm");
+        assert_eq!(back.launch_handle.unwrap().id, "42");
     }
 
     #[test]
@@ -102,5 +152,22 @@ mod tests {
         let record: RemoteRunRecord = serde_json::from_str(json).unwrap();
         assert_eq!(record.version, 0);
         assert_eq!(record.host_id, "hpc");
+        assert_eq!(record.scheduler, "direct");
+        assert!(record.launch_handle.is_none());
+    }
+
+    #[test]
+    fn version_one_record_loads_with_direct_defaults() {
+        let json = r#"{
+            "version": 1,
+            "host_id": "hpc",
+            "host_label": "Cluster",
+            "user_host": "alice@login.example.edu",
+            "remote_dir": "~/.silicolab/runs/abc-123",
+            "started_at_unix": 1700000000
+        }"#;
+        let record: RemoteRunRecord = serde_json::from_str(json).unwrap();
+        assert_eq!(record.version, 1);
+        assert_eq!(record.scheduler, "direct");
     }
 }

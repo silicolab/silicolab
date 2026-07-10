@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use crate::engines::docking::{DockingInput, DockingOutcome, DockingRequest};
 use crate::engines::gromacs::GromacsProgress;
 use crate::engines::qm::{QmJob, QmOutcome};
-use crate::engines::remote::launcher::{self, Liveness, RemoteExecution};
+use crate::engines::remote::launcher::{self, RemoteExecution, RemoteJobPhase};
 use crate::workflows::docking::{DockingProgress, run_docking_calculation};
 use crate::workflows::gromacs::{GromacsJob, GromacsOutcome, run_gromacs_calculation};
 use crate::workflows::qm::{QmCalculationProgress, run_qm_calculation};
@@ -295,6 +295,10 @@ fn wait_for_subprocess(child: &Arc<Mutex<Child>>, outcome_path: &Path) -> Result
 const REMOTE_POLL_INTERVAL: Duration = Duration::from_secs(3);
 /// Granularity at which the poll wait wakes to check the cancel flag.
 const REMOTE_CANCEL_TICK: Duration = Duration::from_millis(250);
+/// How long a scheduler may keep reporting `Unknown` before the job counts as
+/// lost. Bounded because a finished Slurm job ages out of `squeue` and, without
+/// accounting, out of `scontrol` too — otherwise the wait never terminates.
+const REMOTE_UNKNOWN_GRACE: Duration = Duration::from_secs(60);
 
 /// Drive a job on a remote worker to completion, streaming the remote console as
 /// progress. Cancel kills the remote process group. This attached path keeps the
@@ -330,6 +334,8 @@ fn run_remote_blocking(
         launcher,
         working_dir,
         worker_path,
+        resources,
+        slurm_profile,
     } = execution;
 
     progress("staging the remote job".to_string());
@@ -339,9 +345,16 @@ fn run_remote_blocking(
     std::fs::write(working_dir.join(launcher::REQUEST_FILE), json).context("write request.json")?;
 
     progress("submitting to the remote host".to_string());
-    let handle = launcher.submit(target, working_dir, worker_path)?;
+    let handle = launcher.submit(
+        target,
+        working_dir,
+        worker_path,
+        resources,
+        slurm_profile.as_ref(),
+    )?;
 
-    let mut forwarded = 0usize;
+    let mut console_offset = 0;
+    let mut unknown_since: Option<std::time::Instant> = None;
     loop {
         // Cancel-responsive wait between polls.
         let mut slept = Duration::ZERO;
@@ -353,31 +366,43 @@ fn run_remote_blocking(
             std::thread::sleep(REMOTE_CANCEL_TICK);
             slept += REMOTE_CANCEL_TICK;
         }
-        let (liveness, console) = launcher.poll(target, &handle)?;
-        forward_console(&console, &mut forwarded, &mut progress);
-        match liveness {
-            Liveness::Alive => {}
-            Liveness::Lost => {
+        let observation = launcher.poll(target, &handle, console_offset, false)?;
+        console_offset = observation.console.next_offset;
+        for line in observation.console.text.lines() {
+            progress(line.to_string());
+        }
+        match observation.phase {
+            RemoteJobPhase::Unknown => {
+                let since = *unknown_since.get_or_insert_with(std::time::Instant::now);
+                if since.elapsed() >= REMOTE_UNKNOWN_GRACE {
+                    bail!(
+                        "remote job state is unknown: the scheduler stopped reporting it and no exit marker appeared"
+                    )
+                }
+            }
+            RemoteJobPhase::Queued
+            | RemoteJobPhase::Starting
+            | RemoteJobPhase::Running
+            | RemoteJobPhase::Completing
+            | RemoteJobPhase::Cancelling => unknown_since = None,
+            RemoteJobPhase::Lost => {
                 bail!("remote job was lost (no exit code — node crash, OOM, or external kill)")
             }
-            Liveness::Done(0) => {
+            RemoteJobPhase::Succeeded => {
                 progress("retrieving the outcome".to_string());
                 let bytes = launcher::retrieve_outcome(target, working_dir)?;
                 return serde_json::from_slice(&bytes).context("parse engine outcome");
             }
-            Liveness::Done(code) => bail!("remote worker exited with status {code}"),
+            RemoteJobPhase::Cancelled => bail!("remote job was cancelled"),
+            RemoteJobPhase::Failed => bail!(
+                "remote worker failed{}",
+                observation
+                    .exit_code
+                    .map(|code| format!(" with status {code}"))
+                    .unwrap_or_default()
+            ),
         }
     }
-}
-
-/// Forward console lines that appeared since the last forward (best-effort live
-/// streaming; the authoritative outcome arrives in `outcome.json`).
-fn forward_console(console: &str, forwarded: &mut usize, progress: &mut impl FnMut(String)) {
-    let lines: Vec<&str> = console.lines().collect();
-    for line in lines.iter().skip(*forwarded) {
-        progress((*line).to_string());
-    }
-    *forwarded = lines.len().max(*forwarded);
 }
 
 /// Reject a payload the worker should not run: no atoms, or a non-finite

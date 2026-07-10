@@ -21,9 +21,11 @@ pub struct ExecutionPrefs {
     /// (`AppConfig::compute_core_count`); `0` means "let the engine decide".
     pub cores_per_subtask: u32,
     /// GPUs to use; `0` means none / CPU only.
-    pub gpu_count: u32,
+    pub gpu: crate::backend::config::GpuRequest,
+    pub gpu_explicit: bool,
     /// Memory cap per subtask in MiB; `0` means no explicit cap.
     pub memory_mib: u32,
+    pub walltime_minutes: u32,
 }
 
 impl Default for ExecutionPrefs {
@@ -32,8 +34,10 @@ impl Default for ExecutionPrefs {
             target: ComputeTarget::Local,
             subtasks: 1,
             cores_per_subtask: 0,
-            gpu_count: 0,
+            gpu: crate::backend::config::GpuRequest::None,
+            gpu_explicit: false,
             memory_mib: 0,
+            walltime_minutes: 0,
         }
     }
 }
@@ -51,6 +55,17 @@ impl ExecutionPrefs {
             ..Self::default()
         }
     }
+
+    pub fn job_resources(&self) -> crate::backend::config::JobResources {
+        crate::backend::config::JobResources {
+            cpus_per_task: (self.cores_per_subtask > 0).then_some(self.cores_per_subtask),
+            memory_mib: (self.memory_mib > 0).then_some(self.memory_mib as u64),
+            walltime_seconds: (self.walltime_minutes > 0)
+                .then_some(self.walltime_minutes as u64 * 60),
+            gpu: self.gpu.clone(),
+            gpu_explicit: self.gpu_explicit,
+        }
+    }
 }
 
 /// Which resource knobs a task actually honours. The compute target is always
@@ -62,6 +77,7 @@ pub struct ExecutionCaps {
     pub cores: bool,
     pub gpu: bool,
     pub memory: bool,
+    pub walltime: bool,
 }
 
 #[cfg(test)]
@@ -84,7 +100,9 @@ mod tests {
         // …while the remaining knobs start at "engine decides" (single subtask,
         // no GPU, no memory cap), to be overridden per run.
         assert_eq!(prefs.subtasks, 1);
-        assert_eq!(prefs.gpu_count, 0);
+        assert_eq!(prefs.gpu, crate::backend::config::GpuRequest::None);
+        assert!(!prefs.gpu_explicit);
         assert_eq!(prefs.memory_mib, 0);
+        assert_eq!(prefs.walltime_minutes, 0);
     }
 }
