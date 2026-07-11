@@ -34,19 +34,93 @@ pub(crate) fn render_status_bar(
     });
 }
 
-fn task_status_badge(pal: &crate::frontend::theme::Palette, status: TaskStatus) -> RichText {
-    let color = match status {
-        TaskStatus::Ready => pal.status_blue,
-        TaskStatus::WaitingInput => pal.status_amber,
-        TaskStatus::Running => pal.status_green,
-        TaskStatus::Cancelling => pal.status_amber,
-        TaskStatus::Completed => pal.status_green,
-        TaskStatus::Failed => pal.status_red,
-        TaskStatus::Cancelled => pal.status_amber,
-        TaskStatus::Interrupted => pal.status_red,
-    };
+/// One shared visual tone for a run's status, so a Task row and a live Job card
+/// read from the same vocabulary and the same colours.
+#[derive(Clone, Copy)]
+enum StatusTone {
+    /// Blue — queued / ready, nothing happening yet.
+    Idle,
+    /// Green — running, or a successful terminal state.
+    Active,
+    /// Amber — cancelling/cancelled/lost, or waiting on the user.
+    Attention,
+    /// Red — failed or interrupted.
+    Failure,
+}
 
-    RichText::new(status.label()).strong().color(color)
+impl StatusTone {
+    fn color(self, pal: &crate::frontend::theme::Palette) -> egui::Color32 {
+        match self {
+            Self::Idle => pal.status_blue,
+            Self::Active => pal.status_green,
+            Self::Attention => pal.status_amber,
+            Self::Failure => pal.status_red,
+        }
+    }
+}
+
+fn task_tone(status: TaskStatus) -> StatusTone {
+    match status {
+        TaskStatus::Ready => StatusTone::Idle,
+        TaskStatus::Running | TaskStatus::Completed => StatusTone::Active,
+        TaskStatus::WaitingInput | TaskStatus::Cancelling | TaskStatus::Cancelled => {
+            StatusTone::Attention
+        }
+        TaskStatus::Failed | TaskStatus::Interrupted => StatusTone::Failure,
+    }
+}
+
+fn job_tone(status: crate::frontend::jobs::JobStatus) -> StatusTone {
+    use crate::frontend::jobs::JobStatus;
+    match status {
+        JobStatus::Queued => StatusTone::Idle,
+        JobStatus::Running | JobStatus::Done => StatusTone::Active,
+        JobStatus::Cancelling | JobStatus::Lost | JobStatus::Cancelled => StatusTone::Attention,
+        JobStatus::Failed => StatusTone::Failure,
+    }
+}
+
+/// The single status-badge renderer: coloured strong text sharing one tone
+/// vocabulary across Task rows and live Job cards.
+fn status_badge(
+    pal: &crate::frontend::theme::Palette,
+    label: impl Into<String>,
+    tone: StatusTone,
+) -> RichText {
+    RichText::new(label.into()).strong().color(tone.color(pal))
+}
+
+/// A note for a task whose result import needs attention: a remote
+/// result awaiting recovery, or one that failed to import. Settled imports
+/// (Applied / NotRequired / still Pending) show nothing.
+fn import_state_note(
+    import_state: crate::backend::run_attempt::ResultImport,
+) -> Option<(&'static str, StatusTone)> {
+    use crate::backend::run_attempt::ResultImport;
+    match import_state {
+        ResultImport::PendingRecovery => Some(("Result pending recovery", StatusTone::Attention)),
+        ResultImport::Failed => Some(("Result import failed", StatusTone::Failure)),
+        ResultImport::NotRequired | ResultImport::Pending | ResultImport::Applied => None,
+    }
+}
+
+/// The status text for a live job card: a local job shows its status directly; a
+/// remote job is prefixed "Last known:" and, when unreachable, annotated
+/// with a freshness note so a stale status never reads as live.
+fn job_status_label(job: &crate::frontend::jobs::LiveJobSnapshot) -> String {
+    let base = if job.backend == crate::frontend::jobs::JobBackend::RemoteRegistry {
+        format!("Last known: {}", job.status.label())
+    } else {
+        job.status.label().to_string()
+    };
+    if matches!(
+        job.observation,
+        Some(crate::job::ObservationState::Unreachable)
+    ) {
+        format!("{base} · connection unavailable")
+    } else {
+        base
+    }
 }
 
 pub(crate) fn render_task_monitor_panel(
@@ -57,10 +131,10 @@ pub(crate) fn render_task_monitor_panel(
     let pal = crate::frontend::theme::palette(ui);
     ui.set_width(ui.available_width());
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Task Monitor").strong());
+        ui.label(RichText::new("Activity").strong());
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             if ui
-                .button(format!("{}  Open Tasks", egui_phosphor::regular::LIGHTNING))
+                .button(format!("{}  Launch", egui_phosphor::regular::LIGHTNING))
                 .clicked()
             {
                 state.ui.layout.active_primary_view = PrimaryView::Tasks;
@@ -136,6 +210,10 @@ pub(crate) fn render_task_monitor_panel(
                 engine_label,
             ) in task_rows
             {
+                // The durable import state of the task's current attempt: a
+                // remote result whose file is missing surfaces as pending recovery
+                // rather than being silently dropped.
+                let import_state = state.tasks.runs.attempt_import_state(task_id);
                 let row = Frame::group(ui.style())
                     .inner_margin(Margin::same(8))
                     .show(ui, |ui| {
@@ -168,7 +246,7 @@ pub(crate) fn render_task_monitor_panel(
                                     {
                                         actions.push(AppAction::RunTask(task_id));
                                     }
-                                    ui.label(task_status_badge(&pal, status));
+                                    ui.label(status_badge(&pal, status.label(), task_tone(status)));
                                 });
                             });
                             ui.add_space(4.0);
@@ -193,19 +271,31 @@ pub(crate) fn render_task_monitor_panel(
                                 });
                             }
                             if source_entry_id.is_some() || result_entry_id.is_some() {
-                                ui.label(
-                                    RichText::new(format!(
-                                        "Source Entry: {}    Result Entry: {}",
-                                        source_entry_id
-                                            .map(|id| id.to_string())
-                                            .unwrap_or_else(|| "-".to_string()),
-                                        result_entry_id
-                                            .map(|id| id.to_string())
-                                            .unwrap_or_else(|| "-".to_string())
-                                    ))
-                                    .small()
-                                    .color(pal.text_tertiary),
-                                );
+                                ui.horizontal_wrapped(|ui| {
+                                    ui.label(
+                                        RichText::new(format!(
+                                            "Source Entry: {}    Result Entry: {}",
+                                            source_entry_id
+                                                .map(|id| id.to_string())
+                                                .unwrap_or_else(|| "-".to_string()),
+                                            result_entry_id
+                                                .map(|id| id.to_string())
+                                                .unwrap_or_else(|| "-".to_string())
+                                        ))
+                                        .small()
+                                        .color(pal.text_tertiary),
+                                    );
+                                    // Jump to the run's result — the entry it produced,
+                                    // or the input it anchored to for a report.
+                                    if let Some(anchor) = result_entry_id.or(source_entry_id)
+                                        && ui.small_button("Open Result").clicked()
+                                    {
+                                        actions.push(AppAction::ActivateEntry(anchor));
+                                    }
+                                });
+                            }
+                            if let Some((note, tone)) = import_state_note(import_state) {
+                                ui.label(status_badge(&pal, note, tone));
                             }
                         });
                         response.response
@@ -221,28 +311,6 @@ pub(crate) fn render_task_monitor_panel(
                 ui.add_space(6.0);
             }
         });
-}
-
-fn job_status_badge(
-    pal: &crate::frontend::theme::Palette,
-    status: crate::frontend::jobs::JobStatus,
-    remote: bool,
-) -> RichText {
-    let color = match status {
-        crate::frontend::jobs::JobStatus::Queued => pal.status_blue,
-        crate::frontend::jobs::JobStatus::Running => pal.status_green,
-        crate::frontend::jobs::JobStatus::Done => pal.status_green,
-        crate::frontend::jobs::JobStatus::Failed => pal.status_red,
-        crate::frontend::jobs::JobStatus::Cancelling
-        | crate::frontend::jobs::JobStatus::Lost
-        | crate::frontend::jobs::JobStatus::Cancelled => pal.status_amber,
-    };
-    let label = if remote {
-        format!("Last known: {}", status.label())
-    } else {
-        status.label().to_string()
-    };
-    RichText::new(label).strong().color(color)
 }
 
 fn render_controlled_jobs(state: &AppState, ui: &mut egui::Ui, actions: &mut Vec<AppAction>) {
@@ -297,10 +365,10 @@ fn render_controlled_jobs(state: &AppState, ui: &mut egui::Ui, actions: &mut Vec
                         if job.can_cancel() && ui.button("Cancel").clicked() {
                             actions.push(AppAction::CancelControlledJob(job.id.clone()));
                         }
-                        ui.label(job_status_badge(
+                        ui.label(status_badge(
                             &pal,
-                            job.status,
-                            job.backend == crate::frontend::jobs::JobBackend::RemoteRegistry,
+                            job_status_label(job),
+                            job_tone(job.status),
                         ));
                     });
                 });
@@ -346,7 +414,7 @@ fn render_active_task_summary(state: &AppState, ui: &mut egui::Ui) {
             for (title, status, controller_id, backend, outcome) in &running {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(title.as_str()).strong());
-                    ui.label(task_status_badge(&pal, *status));
+                    ui.label(status_badge(&pal, status.label(), task_tone(*status)));
                 });
                 ui.label(
                     RichText::new(format!("{controller_id} / {backend} / {outcome}"))

@@ -55,6 +55,17 @@ pub(super) fn render_dock_area(
         .into_iter()
         .filter_map(|tab| {
             let label = match tab {
+                // Launching a job never steals focus; instead the Activity tab
+                // shows a running-count badge while it is not the active tab, so
+                // in-flight work is visible without switching to it.
+                DockTab::Static(StaticView::TaskMonitor) => {
+                    let running = state.tasks.running_task_runs().len();
+                    if running > 0 && active != Some(tab) {
+                        format!("{}  ({running})", StaticView::TaskMonitor.label())
+                    } else {
+                        StaticView::TaskMonitor.label().to_string()
+                    }
+                }
                 DockTab::Static(view) => view.label().to_string(),
                 DockTab::Task(id) => state.tasks.task_run(id)?.title.clone(),
             };

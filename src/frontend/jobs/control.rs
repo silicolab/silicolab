@@ -152,6 +152,9 @@ pub struct LiveJobSnapshot {
     pub task_run_id: Option<u64>,
     pub run_uuid: Option<String>,
     pub host_label: Option<String>,
+    /// Observability of a remote job — `None` for local and agent jobs, which
+    /// are always observed. `Unreachable` renders a freshness note by the status.
+    pub observation: Option<crate::job::ObservationState>,
 }
 
 impl LiveJobSnapshot {
@@ -554,6 +557,7 @@ pub fn remote_job_snapshot(row: &registry::RemoteJob) -> LiveJobSnapshot {
         task_run_id: None,
         run_uuid: Some(row.job_id.clone()),
         host_label: Some(row.host_label.clone()),
+        observation: Some(row.observation_state()),
     }
 }
 
@@ -694,6 +698,7 @@ fn local_snapshot(
         task_run_id,
         run_uuid: None,
         host_label: None,
+        observation: None,
     }
 }
 
@@ -741,5 +746,6 @@ fn agent_snapshot(tracked: &super::agent::TrackedAgentJob) -> LiveJobSnapshot {
         task_run_id: Some(tracked.task_run_id),
         run_uuid: None,
         host_label: None,
+        observation: None,
     }
 }

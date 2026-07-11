@@ -400,6 +400,14 @@ pub(crate) fn render_monitor_popover(state: &mut AppState, ctx: &egui::Context) 
                 .inner_margin(egui::Margin::symmetric(H_MARGIN, 12))
                 .show(ui, |ui| {
                     ui.set_width(content_width);
+                    // "Resources" names the system-utilization surface, distinct from
+                    // the "Activity" job monitor and the "Launch" task list.
+                    ui.label(
+                        egui::RichText::new("Resources")
+                            .small()
+                            .color(pal.text_tertiary),
+                    );
+                    ui.add_space(6.0);
                     match &source {
                         MonitorSource::Local => {
                             gauge::utilization_chart(
