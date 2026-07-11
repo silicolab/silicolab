@@ -13,7 +13,7 @@ use std::fmt::Write;
 use serde_json::{Value, json};
 
 use crate::backend::config::ApprovalMode;
-use crate::engines::registry::{EngineId, EngineRegistry, EngineStatus};
+use crate::engines::registry::{EngineRegistry, EngineStatus, external_engine_specs};
 use crate::frontend::console::{RiskLevel, command_risk};
 use crate::frontend::state::AppState;
 use crate::io::llm::types::{ToolCall, ToolDef};
@@ -657,16 +657,23 @@ pub fn inspect(state: &AppState, _query: Option<&str>) -> String {
     }
 
     let registry = EngineRegistry::probe(&state.config.engine_overrides);
-    let _ = writeln!(
-        out,
-        "engines: GROMACS {}",
-        match registry.status(EngineId::GROMACS) {
-            Some(EngineStatus::Verified { version, .. }) => format!("{version} (verified)"),
-            Some(EngineStatus::Unverified { launch }) =>
-                format!("configured at {}, not verified", launch.display_command()),
-            _ => "not configured".to_string(),
-        }
-    );
+    let engines = external_engine_specs()
+        .iter()
+        .map(|spec| {
+            let status = match registry.status(spec.id) {
+                Some(EngineStatus::Verified { version, .. }) => {
+                    format!("{version} (verified)")
+                }
+                Some(EngineStatus::Unverified { launch }) => {
+                    format!("configured at {}, not verified", launch.display_command())
+                }
+                _ => "not configured".to_string(),
+            };
+            format!("{} {status}", spec.name)
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    let _ = writeln!(out, "engines: {engines}");
 
     let running_jobs = crate::frontend::jobs::list_controlled_jobs(state)
         .into_iter()

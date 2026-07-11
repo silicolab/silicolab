@@ -12,7 +12,7 @@ use std::sync::{Arc, atomic::AtomicBool};
 
 use anyhow::Result;
 
-use crate::engines::qm::{QmJob, QmOutcome, run_periodic_qm, run_qm};
+use crate::engines::qm::{QmCalculation, QmEngine, QmJob, QmOutcome, run_periodic_qm, run_qm};
 
 /// A coarse progress update (`"running scf"`, `"collecting results"`, …).
 pub struct QmCalculationProgress {
@@ -43,9 +43,12 @@ pub fn run_qm_calculation(
                 stage: stage.to_string(),
             });
         };
-        let outcome = match job {
-            QmJob::Molecular(request) => run_qm(request, cancel, &mut report)?,
-            QmJob::Periodic(request) => run_periodic_qm(request, cancel, &mut report)?,
+        if job.engine != QmEngine::Hartree {
+            anyhow::bail!("external QM jobs require an engine launch");
+        }
+        let outcome = match job.calculation {
+            QmCalculation::Molecular(request) => run_qm(request, cancel, &mut report)?,
+            QmCalculation::Periodic(request) => run_periodic_qm(request, cancel, &mut report)?,
         };
         Ok(QmCalculationResult { outcome })
     };
@@ -68,7 +71,7 @@ mod tests {
     use super::run_qm_calculation;
     use crate::{
         domain::{Atom, Structure},
-        engines::qm::{QmJob, QmKind, QmMethod, QmRequest},
+        engines::qm::{QmEngine, QmJob, QmKind, QmMethod, QmRequest},
     };
 
     #[test]
@@ -89,16 +92,19 @@ mod tests {
             ],
         );
         let result = run_qm_calculation(
-            QmJob::Molecular(QmRequest {
-                structure,
-                method: QmMethod::Rhf,
-                basis: "sto-3g".into(),
-                charge: 0,
-                multiplicity: 1,
-                kind: QmKind::SinglePoint,
-                options: Default::default(),
-                ts: None,
-            }),
+            QmJob::molecular(
+                QmEngine::Hartree,
+                QmRequest {
+                    structure,
+                    method: QmMethod::Rhf,
+                    basis: "sto-3g".into(),
+                    charge: 0,
+                    multiplicity: 1,
+                    kind: QmKind::SinglePoint,
+                    options: Default::default(),
+                    ts: None,
+                },
+            ),
             Some(2),
             Default::default(),
             |_progress| {},
@@ -127,19 +133,22 @@ mod tests {
 
         let mut stages = Vec::new();
         let result = run_qm_calculation(
-            QmJob::Molecular(QmRequest {
-                structure,
-                method: QmMethod::Rhf,
-                basis: "sto-3g".to_string(),
-                charge: 0,
-                multiplicity: 1,
-                kind: QmKind::SinglePoint,
-                options: crate::engines::qm::QmOptions {
-                    compute_properties: true,
-                    ..Default::default()
+            QmJob::molecular(
+                QmEngine::Hartree,
+                QmRequest {
+                    structure,
+                    method: QmMethod::Rhf,
+                    basis: "sto-3g".to_string(),
+                    charge: 0,
+                    multiplicity: 1,
+                    kind: QmKind::SinglePoint,
+                    options: crate::engines::qm::QmOptions {
+                        compute_properties: true,
+                        ..Default::default()
+                    },
+                    ts: None,
                 },
-                ts: None,
-            }),
+            ),
             None,
             Default::default(),
             |progress| stages.push(progress.stage),

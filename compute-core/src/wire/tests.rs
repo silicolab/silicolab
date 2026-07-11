@@ -2,7 +2,9 @@ use nalgebra::Point3;
 
 use super::*;
 use crate::domain::{Atom, Structure};
-use crate::engines::qm::{QmKind, QmMethod, QmOptions, QmOutcome, QmRequest};
+use crate::engines::qm::{
+    QmCalculation, QmEngine, QmKind, QmMethod, QmOptions, QmOutcome, QmRequest,
+};
 use crate::launch::EngineLaunch;
 
 fn builtin_request(engine: Engine) -> EngineRequest {
@@ -40,31 +42,37 @@ fn h2_single_point() -> EngineRequest {
             },
         ],
     );
-    builtin_request(Engine::Qm(QmJob::Molecular(QmRequest {
-        structure,
-        method: QmMethod::Rhf,
-        basis: "sto-3g".to_string(),
-        charge: 0,
-        multiplicity: 1,
-        kind: QmKind::SinglePoint,
-        options: QmOptions::default(),
-        ts: None,
-    })))
+    builtin_request(Engine::Qm(QmJob::molecular(
+        QmEngine::Hartree,
+        QmRequest {
+            structure,
+            method: QmMethod::Rhf,
+            basis: "sto-3g".to_string(),
+            charge: 0,
+            multiplicity: 1,
+            kind: QmKind::SinglePoint,
+            options: QmOptions::default(),
+            ts: None,
+        },
+    )))
 }
 
 #[test]
 fn validate_request_rejects_empty_nan_and_accepts_h2() {
     // Empty atoms → rejected.
-    let empty = builtin_request(Engine::Qm(QmJob::Molecular(QmRequest {
-        structure: Structure::new("empty", Vec::new()),
-        method: QmMethod::Rhf,
-        basis: "sto-3g".to_string(),
-        charge: 0,
-        multiplicity: 1,
-        kind: QmKind::SinglePoint,
-        options: QmOptions::default(),
-        ts: None,
-    })));
+    let empty = builtin_request(Engine::Qm(QmJob::molecular(
+        QmEngine::Hartree,
+        QmRequest {
+            structure: Structure::new("empty", Vec::new()),
+            method: QmMethod::Rhf,
+            basis: "sto-3g".to_string(),
+            charge: 0,
+            multiplicity: 1,
+            kind: QmKind::SinglePoint,
+            options: QmOptions::default(),
+            ts: None,
+        },
+    )));
     assert!(validate_request(&empty).is_err());
 
     // A non-finite coordinate → rejected, message names the atom index. The
@@ -86,16 +94,19 @@ fn validate_request_rejects_empty_nan_and_accepts_h2() {
         ],
     );
     nan_structure.atoms[1].position.y = f32::INFINITY;
-    let nan = builtin_request(Engine::Qm(QmJob::Molecular(QmRequest {
-        structure: nan_structure,
-        method: QmMethod::Rhf,
-        basis: "sto-3g".to_string(),
-        charge: 0,
-        multiplicity: 1,
-        kind: QmKind::SinglePoint,
-        options: QmOptions::default(),
-        ts: None,
-    })));
+    let nan = builtin_request(Engine::Qm(QmJob::molecular(
+        QmEngine::Hartree,
+        QmRequest {
+            structure: nan_structure,
+            method: QmMethod::Rhf,
+            basis: "sto-3g".to_string(),
+            charge: 0,
+            multiplicity: 1,
+            kind: QmKind::SinglePoint,
+            options: QmOptions::default(),
+            ts: None,
+        },
+    )));
     let error = validate_request(&nan).unwrap_err().to_string();
     assert!(
         error.contains("atom 1"),
@@ -133,6 +144,30 @@ fn a_gromacs_job_without_a_launch_is_rejected_at_both_ends() {
     let mut blank = EngineLaunches::new();
     blank.insert(EngineId::GROMACS, EngineLaunch::native(""));
     assert!(!blank.contains(EngineId::GROMACS));
+}
+
+#[test]
+fn an_orca_job_requires_its_configured_launch() {
+    let mut request = h2_single_point();
+    let Engine::Qm(job) = &mut request.engine else {
+        unreachable!();
+    };
+    job.engine = QmEngine::Orca;
+    let error = EngineRequest::new(request.engine.clone(), None, EngineLaunches::new())
+        .expect_err("an ORCA job needs an explicit launch")
+        .to_string();
+    assert!(error.contains("orca"));
+
+    let mut launches = EngineLaunches::new();
+    launches.insert(EngineId::ORCA, EngineLaunch::native("/opt/orca/orca"));
+    let bound = EngineRequest::new(request.engine, None, launches).expect("ORCA launch supplied");
+    let json = serde_json::to_vec(&bound).unwrap();
+    let back: EngineRequest = serde_json::from_slice(&json).unwrap();
+    assert!(back.launches.contains(EngineId::ORCA));
+    let Engine::Qm(job) = back.engine else {
+        panic!("expected QM job");
+    };
+    assert_eq!(job.engine, QmEngine::Orca);
 }
 
 /// The smallest build request that satisfies the structure validator.
@@ -173,7 +208,7 @@ fn validate_request_rejects_a_non_finite_lattice() {
         }],
         cell,
     );
-    let request = builtin_request(Engine::Qm(QmJob::Periodic(PeriodicQmRequest::new(
+    let request = builtin_request(Engine::Qm(QmJob::periodic(PeriodicQmRequest::new(
         structure,
     ))));
     let error = validate_request(&request).unwrap_err().to_string();
@@ -189,7 +224,10 @@ fn engine_request_round_trips() {
     let json = serde_json::to_vec(&request).unwrap();
     let back: EngineRequest = serde_json::from_slice(&json).unwrap();
     match back.engine {
-        Engine::Qm(QmJob::Molecular(req)) => {
+        Engine::Qm(QmJob {
+            calculation: QmCalculation::Molecular(req),
+            ..
+        }) => {
             assert_eq!(req.basis, "sto-3g");
             assert_eq!(req.structure.atoms.len(), 2);
         }
@@ -218,7 +256,10 @@ fn ts_request_round_trips_with_two_endpoint_product() {
         ],
     );
     let mut request = match h2_single_point().engine {
-        Engine::Qm(QmJob::Molecular(req)) => req,
+        Engine::Qm(QmJob {
+            calculation: QmCalculation::Molecular(req),
+            ..
+        }) => req,
         _ => unreachable!(),
     };
     request.kind = QmKind::TransitionState;
@@ -226,10 +267,14 @@ fn ts_request_round_trips_with_two_endpoint_product() {
         guess: QmTsGuess::TwoEndpoint(Box::new(QmTsEndpoints::new(product))),
         ..QmTsConfig::default()
     });
-    let wrapped = builtin_request(Engine::Qm(QmJob::Molecular(request)));
+    let wrapped = builtin_request(Engine::Qm(QmJob::molecular(QmEngine::Hartree, request)));
     let json = serde_json::to_vec(&wrapped).unwrap();
     let back: EngineRequest = serde_json::from_slice(&json).unwrap();
-    let Engine::Qm(QmJob::Molecular(req)) = back.engine else {
+    let Engine::Qm(QmJob {
+        calculation: QmCalculation::Molecular(req),
+        ..
+    }) = back.engine
+    else {
         panic!("expected a molecular QM request");
     };
     assert!(matches!(req.kind, QmKind::TransitionState));
@@ -297,13 +342,16 @@ fn periodic_request_round_trips_with_cell() {
         }],
         UnitCell::from_parameters(5.43, 5.43, 5.43, 90.0, 90.0, 90.0),
     );
-    let request = builtin_request(Engine::Qm(QmJob::Periodic(PeriodicQmRequest::new(
+    let request = builtin_request(Engine::Qm(QmJob::periodic(PeriodicQmRequest::new(
         structure,
     ))));
     let json = serde_json::to_vec(&request).unwrap();
     let back: EngineRequest = serde_json::from_slice(&json).unwrap();
     match back.engine {
-        Engine::Qm(QmJob::Periodic(req)) => {
+        Engine::Qm(QmJob {
+            calculation: QmCalculation::Periodic(req),
+            ..
+        }) => {
             assert!(req.structure.cell.is_some());
         }
         _ => panic!("expected a periodic QM request"),

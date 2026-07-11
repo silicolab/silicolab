@@ -512,16 +512,59 @@ pub struct QmRequest {
     pub ts: Option<QmTsConfig>,
 }
 
+/// Quantum-chemistry backend selected for a job. Hartree is the built-in
+/// default; ORCA is an optional external executable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum QmEngine {
+    #[default]
+    Hartree,
+    Orca,
+}
+
+impl QmEngine {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Hartree => "Hartree (built-in)",
+            Self::Orca => "ORCA",
+        }
+    }
+}
+
 /// A quantum-chemistry job: a molecular calculation or a periodic (crystalline)
 /// one. Both produce a [`QmOutcome`], so the worker thread, the workflow entry
 /// point, and the result-polling UI handle the two uniformly — only the input
 /// form differs. Built by the panel/console; run by [`crate::workflows::qm`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum QmJob {
+pub enum QmCalculation {
     /// A molecular (non-periodic) HF/DFT/post-HF calculation.
     Molecular(QmRequest),
+    /// A molecular calculation executed by the user-configured ORCA binary.
     /// A periodic (PBC) Kohn–Sham calculation over a unit cell.
     Periodic(PeriodicQmRequest),
+}
+
+/// A quantum-chemistry job with backend selection kept orthogonal to the
+/// molecular/periodic calculation model.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QmJob {
+    pub engine: QmEngine,
+    pub calculation: QmCalculation,
+}
+
+impl QmJob {
+    pub fn molecular(engine: QmEngine, request: QmRequest) -> Self {
+        Self {
+            engine,
+            calculation: QmCalculation::Molecular(request),
+        }
+    }
+
+    pub fn periodic(request: PeriodicQmRequest) -> Self {
+        Self {
+            engine: QmEngine::Hartree,
+            calculation: QmCalculation::Periodic(request),
+        }
+    }
 }
 
 /// The result of a quantum-chemistry calculation.

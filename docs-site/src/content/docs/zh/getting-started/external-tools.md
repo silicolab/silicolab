@@ -8,6 +8,20 @@ sidebar:
 SilicoLab 在没有可选外部工具时也可以启动。只有在使用对应功能时，才需要安装
 这些程序。
 
+## ORCA
+
+量子化学计算默认使用内置 Hartree 引擎。ORCA 是可选引擎，首版支持分子体系的
+单点能、几何优化和振动频率计算；过渡态与周期 QM 计算仅支持 Hartree。
+
+请单独安装 ORCA，然后打开 **设置 > 计算目标**，在本机或远程主机的 ORCA 行中
+填写该目标可用的可执行文件路径，再点击 **验证**。SilicoLab 不会自动搜索或选择
+ORCA。在 Windows 中使用 WSL 版 ORCA 时，将命令前缀设为 `wsl.exe -e`，程序填写
+WSL 内的通用 Linux 路径，例如 `/opt/orca/orca`；原生安装则将命令前缀留空。
+
+在 QM 任务面板中显式选择 ORCA，或在脚本中使用 `qm energy --engine orca`。
+ORCA 默认使用一个 CPU 核心；请求更多核心会启用 `%pal` 并行模式，并要求目标
+环境中能够调用 `mpirun`。
+
 ## GROMACS
 
 分子动力学模拟需要单独安装 [GROMACS](https://www.gromacs.org/)。

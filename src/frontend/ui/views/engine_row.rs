@@ -28,6 +28,7 @@ pub(crate) struct EngineRow<'a> {
     pub probe: Option<EngineProbeState>,
     /// A local program can be picked from a file dialog; a remote path cannot.
     pub browsable: bool,
+    pub auto_discovery: bool,
 }
 
 /// Render `row`'s status line, launch fields, and actions, editing `draft` in place.
@@ -67,7 +68,11 @@ pub(crate) fn engine_row(
         });
     });
     ui.label(caption_text(
-        "Leave empty to look for it on this target automatically.",
+        if row.auto_discovery {
+            "Leave empty to look for it on this target automatically."
+        } else {
+            "Required: specify the engine executable path."
+        },
         pal.text_tertiary,
     ));
 

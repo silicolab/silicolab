@@ -98,3 +98,5 @@ Slurm target. Allocation state and pending reason belong in the task monitor.
   cluster** and check that the selected partition contains that GRES type.
 - **GROMACS is missing:** add the appropriate module or environment command to
   **Job environment commands**, then use **Detect GROMACS**.
+- **ORCA is not configured:** enter the ORCA executable path for that remote
+  host under **Compute targets**. ORCA is not auto-detected.

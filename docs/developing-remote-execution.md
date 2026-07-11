@@ -80,7 +80,8 @@ The remote machine must run **x86_64 Linux** and accept passwordless login
 through SilicoLab's host-key-verified SSH configuration. ARM64/aarch64 hosts are
 not supported by this worker. The remote machine needs no Rust toolchain,
 container runtime, source checkout, compiler, or operating-system changes.
-GROMACS jobs still require a working `gmx` on the remote host; QM and docking do
+GROMACS jobs require a working `gmx` on the remote host, while ORCA-backed QM
+jobs require the configured ORCA executable; built-in QM and docking do
 not.
 
 ## Standard workflows

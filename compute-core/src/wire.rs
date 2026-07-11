@@ -9,7 +9,7 @@
 //! every out-of-process path shares.
 
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Mutex};
@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::engines::docking::{DockingInput, DockingOutcome, DockingRequest};
 use crate::engines::gromacs::GromacsProgress;
-use crate::engines::qm::{QmJob, QmOutcome};
+use crate::engines::qm::{QmCalculation, QmEngine, QmJob, QmOutcome};
 use crate::engines::remote::launcher::{self, RemoteExecution, RemoteJobPhase};
 use crate::launch::{EngineId, EngineLaunches};
 use crate::workflows::docking::{DockingProgress, run_docking_calculation};
@@ -98,6 +98,10 @@ impl EngineRequest {
 impl Engine {
     pub fn required_engines(&self) -> &'static [EngineId] {
         match self {
+            Engine::Qm(QmJob {
+                engine: QmEngine::Orca,
+                ..
+            }) => &[EngineId::ORCA],
             Engine::Qm(_) | Engine::Docking(_) => &[],
             Engine::Gromacs(_) => &[EngineId::GROMACS],
         }
@@ -117,7 +121,7 @@ fn engine_label(engine: &Engine) -> &'static str {
 // The QM variant embeds a full inline `Structure`, so it dwarfs the others; this
 // envelope is built once per job and immediately serialized or moved, never held
 // in bulk, so boxing every variant would only add indirection to a cold path (and
-// break the nested `Engine::Qm(QmJob::Molecular(..))` matching the call sites use).
+// make every engine payload pay for heap indirection on a cold path).
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Engine {
@@ -278,7 +282,8 @@ fn run_subprocess(request: EngineRequest) -> Running {
             let monitor = Arc::clone(&child);
             std::thread::spawn(move || {
                 let outcome_path = run_dir.join("outcome.json");
-                let result = wait_for_subprocess(&monitor, &outcome_path);
+                let result =
+                    wait_for_subprocess(&monitor, &outcome_path, &run_dir.join("engine.log"));
                 let _ = std::fs::remove_dir_all(&run_dir);
                 let _ = sender.send(match result {
                     Ok(outcome) => JobUpdate::Finished(Box::new(outcome)),
@@ -325,15 +330,23 @@ fn spawn_subprocess(request: &EngineRequest, run_dir: &Path) -> Result<Child> {
     std::fs::write(&request_path, json)
         .with_context(|| format!("write {}", request_path.display()))?;
     let exe = std::env::current_exe().context("resolve current executable")?;
+    let log = std::fs::File::create(run_dir.join("engine.log")).context("create engine log")?;
+    let stderr = log.try_clone().context("clone engine log")?;
     Command::new(exe)
         .arg("exec")
         .arg(&request_path)
         .arg(&outcome_path)
+        .stdout(Stdio::from(log))
+        .stderr(Stdio::from(stderr))
         .spawn()
         .context("spawn engine subprocess")
 }
 
-fn wait_for_subprocess(child: &Arc<Mutex<Child>>, outcome_path: &Path) -> Result<EngineOutcome> {
+fn wait_for_subprocess(
+    child: &Arc<Mutex<Child>>,
+    outcome_path: &Path,
+    log_path: &Path,
+) -> Result<EngineOutcome> {
     let status = loop {
         {
             let mut guard = child
@@ -346,7 +359,14 @@ fn wait_for_subprocess(child: &Arc<Mutex<Child>>, outcome_path: &Path) -> Result
         std::thread::sleep(Duration::from_millis(50));
     };
     if !status.success() {
-        bail!("engine subprocess exited without success ({status})");
+        let log = std::fs::read_to_string(log_path).unwrap_or_default();
+        let mut tail = log.lines().rev().take(20).collect::<Vec<_>>();
+        tail.reverse();
+        let detail = tail.join("\n");
+        if detail.is_empty() {
+            bail!("engine subprocess exited without success ({status})");
+        }
+        bail!("engine subprocess exited without success ({status}):\n{detail}");
     }
     let bytes =
         std::fs::read(outcome_path).with_context(|| format!("read {}", outcome_path.display()))?;
@@ -521,14 +541,17 @@ fn validate_structure_atoms(structure: &crate::domain::Structure, role: &str) ->
 }
 
 fn validate_qm_job(job: &QmJob) -> Result<()> {
-    let structure = match job {
-        QmJob::Molecular(req) => &req.structure,
-        QmJob::Periodic(req) => &req.structure,
+    if job.engine == QmEngine::Orca && matches!(job.calculation, QmCalculation::Periodic(_)) {
+        bail!("ORCA does not support periodic QM jobs");
+    }
+    let structure = match &job.calculation {
+        QmCalculation::Molecular(req) => &req.structure,
+        QmCalculation::Periodic(req) => &req.structure,
     };
     validate_structure_atoms(structure, "engine request")?;
     // A two-endpoint transition-state search carries a second (product) structure
     // over the same untrusted boundary; validate it the way the reactant is.
-    if let QmJob::Molecular(req) = job
+    if let QmCalculation::Molecular(req) = &job.calculation
         && let Some(ts) = &req.ts
         && let crate::engines::qm::QmTsGuess::TwoEndpoint(endpoints) = &ts.guess
     {
@@ -536,7 +559,7 @@ fn validate_qm_job(job: &QmJob) -> Result<()> {
     }
     // A periodic job carries a lattice; a non-finite component would corrupt the
     // reciprocal-space setup, so reject it up front the way atom coordinates are.
-    if let QmJob::Periodic(_) = job
+    if let QmCalculation::Periodic(_) = &job.calculation
         && let Some(cell) = &structure.cell
     {
         let lattice_finite = [cell.a, cell.b, cell.c, cell.alpha, cell.beta, cell.gamma]
@@ -608,6 +631,20 @@ fn run_request(
     } = request;
     match engine {
         Engine::Qm(job) => {
+            if job.engine == QmEngine::Orca {
+                let QmCalculation::Molecular(request) = job.calculation else {
+                    bail!("ORCA does not support periodic QM jobs");
+                };
+                let launch = launches
+                    .get(EngineId::ORCA)
+                    .ok_or_else(|| anyhow::anyhow!("the ORCA job carries no launch for `orca`"))?
+                    .clone();
+                let outcome =
+                    crate::engines::orca::run_orca(request, launch, cores, cancel, |stage| {
+                        progress(stage.to_string())
+                    })?;
+                return Ok(EngineOutcome::Qm(outcome));
+            }
             let result =
                 run_qm_calculation(job, cores, cancel, |QmCalculationProgress { stage }| {
                     progress(stage)

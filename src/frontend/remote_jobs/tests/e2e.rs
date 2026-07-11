@@ -202,7 +202,7 @@ fn argon_em_job() -> Engine {
 #[ignore = "requires an SSH host (set SILICOLAB_TEST_SSH_HOST)"]
 fn remote_qm_submit_then_refresh_against_ssh_host() {
     use crate::domain::{Atom, Structure};
-    use crate::engines::qm::{QmJob, QmKind, QmMethod, QmOptions, QmRequest};
+    use crate::engines::qm::{QmEngine, QmJob, QmKind, QmMethod, QmOptions, QmRequest};
     use nalgebra::Point3;
 
     let Some(host) = test_host(EngineLaunches::new()) else {
@@ -224,16 +224,19 @@ fn remote_qm_submit_then_refresh_against_ssh_host() {
             },
         ],
     );
-    let job = Engine::Qm(QmJob::Molecular(QmRequest {
-        structure,
-        method: QmMethod::Rhf,
-        basis: "sto-3g".to_string(),
-        charge: 0,
-        multiplicity: 1,
-        kind: QmKind::SinglePoint,
-        options: QmOptions::default(),
-        ts: None,
-    }));
+    let job = Engine::Qm(QmJob::molecular(
+        QmEngine::Hartree,
+        QmRequest {
+            structure,
+            method: QmMethod::Rhf,
+            basis: "sto-3g".to_string(),
+            charge: 0,
+            multiplicity: 1,
+            kind: QmKind::SinglePoint,
+            options: QmOptions::default(),
+            ts: None,
+        },
+    ));
     let resources = JobResources {
         cpus_per_task: Some(1),
         ..Default::default()

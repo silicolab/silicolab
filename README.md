@@ -75,8 +75,9 @@ manual in English and Chinese lives at <https://silicolab.github.io/silicolab/>.
 ## External tools
 
 SilicoLab can run without optional external tools until you use features that
-need them. Molecular dynamics requires GROMACS. Quantum chemistry is available
-through the built-in Hartree engine. See the manual for setup details:
+need them. Molecular dynamics requires GROMACS. Quantum chemistry uses the
+built-in Hartree engine by default, with ORCA available as an optional external
+engine when the user configures its executable path. See the manual for setup details:
 
 - [External tools](https://silicolab.github.io/silicolab/getting-started/external-tools/)
 - [Remote execution over SSH](https://silicolab.github.io/silicolab/getting-started/remote-execution/)

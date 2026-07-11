@@ -144,7 +144,10 @@ fn remote_qm_memory_rejection(verdict: &MemoryVerdict, host_label: &str) -> Opti
 fn engine_id_token(engine: &crate::wire::Engine) -> &'static str {
     use crate::engines::registry::EngineId;
     match engine {
-        crate::wire::Engine::Qm(_) => EngineId::HARTREE.as_str(),
+        crate::wire::Engine::Qm(job) => match job.engine {
+            crate::engines::qm::QmEngine::Hartree => EngineId::HARTREE.as_str(),
+            crate::engines::qm::QmEngine::Orca => EngineId::ORCA.as_str(),
+        },
         crate::wire::Engine::Docking(_) => EngineId::DOCKING.as_str(),
         crate::wire::Engine::Gromacs(_) => EngineId::GROMACS.as_str(),
     }
@@ -191,7 +194,10 @@ pub fn spawn_remote_submit(
             // than left to OOM mid-SCF on the node. Only in-core molecular QM has
             // this tensor; every other engine (and periodic QM) skips the guard,
             // as does a host whose RAM we could not probe (falling open).
-            if let Engine::Qm(QmJob::Molecular(request)) = &engine
+            if let Engine::Qm(QmJob {
+                engine: crate::engines::qm::QmEngine::Hartree,
+                calculation: crate::engines::qm::QmCalculation::Molecular(request),
+            }) = &engine
                 && let Some(ram) = resources
                     .memory_mib
                     .map(|mib| mib.saturating_mul(1024 * 1024))

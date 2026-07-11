@@ -274,7 +274,7 @@ pub fn check_passwordless(target: &RemoteTarget) -> bool {
     matches!(process::run(config), Ok(result) if result.success())
 }
 
-/// SSH-run `<prelude && launch> <version_arg>` and decide whether it *is* this
+/// SSH-run an engine's version probe and decide whether it *is* this
 /// engine. The remote twin of [`crate::engines::registry::verify_launch`]: same
 /// question, same two failure modes told apart ("would not start" vs "started, but
 /// is not this engine"), only the transport differs. Always off the UI thread.
@@ -283,9 +283,6 @@ pub fn verify_remote_launch(
     launch: &EngineLaunch,
     spec: &crate::engines::registry::EngineSpec,
 ) -> Result<String, String> {
-    let Some(version_arg) = spec.version_arg else {
-        return Err(format!("{} has no version check", spec.name));
-    };
     let command = launch
         .command_prefix
         .iter()
@@ -294,23 +291,26 @@ pub fn verify_remote_launch(
         .map(sh_quote)
         .collect::<Vec<_>>()
         .join(" ");
-    let script = format!(
-        "{}{command} {}",
-        target.prelude_prefix(),
-        sh_quote(version_arg)
-    );
+    let args = spec
+        .version_args
+        .iter()
+        .map(|arg| sh_quote(arg))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let script = format!("{}{command} {args}", target.prelude_prefix());
     let config = ssh_config(target, &script, Some(Duration::from_secs(30)));
     let result = process::run(config).map_err(|error| format!("ssh failed: {error}"))?;
     let blob = format!("{}{}", result.stdout, result.stderr);
-    if !result.success() {
+    let identifies = blob.contains(spec.identity_marker);
+    if !result.success() && !(spec.identity_allows_nonzero_exit && identifies) {
         let detail = blob
             .lines()
             .map(str::trim)
             .find(|line| !line.is_empty())
             .unwrap_or("no output");
-        return Err(format!("`{command} {version_arg}` failed: {detail}"));
+        return Err(format!("`{command} {args}` failed: {detail}"));
     }
-    if !blob.contains(spec.identity_marker) {
+    if !identifies {
         return Err(format!(
             "it runs, but does not identify itself as {}",
             spec.name

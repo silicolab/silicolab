@@ -28,7 +28,8 @@ Windows 下为 `silicolab.exe`）。
 
 - **GROMACS** —— 运行分子动力学模拟时必需。
 
-SilicoLab 已内置 Hartree 引擎，可用于量子化学计算。
+量子化学计算默认使用内置 Hartree 引擎。ORCA 可作为分子单点能、几何优化和
+振动频率计算的可选外部引擎，必须由用户指定可执行文件路径。
 
 请阅读[外部工具](./external-tools/)了解配置说明，包括 GPU 加速。
 如需通过 SSH 在远程 Linux 主机上运行大型任务，请阅读[远程执行](./remote-execution/)。

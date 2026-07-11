@@ -247,10 +247,41 @@ pub(crate) fn render_qm_task_panel(
         .map(|prompt| prompt.memory_signature(state.structure()));
 
     if let Some(prompt) = &mut state.ui.pending_qm {
+        let previous_engine = prompt.engine;
+        ui.horizontal(|ui| {
+            ui.label("Engine:");
+            egui::ComboBox::from_id_salt("qm_engine")
+                .selected_text(prompt.engine.label())
+                .show_ui(ui, |ui| {
+                    crate::frontend::theme::stabilize_selectable_rows(ui);
+                    ui.selectable_value(
+                        &mut prompt.engine,
+                        crate::engines::qm::QmEngine::Hartree,
+                        crate::engines::qm::QmEngine::Hartree.label(),
+                    );
+                    ui.selectable_value(
+                        &mut prompt.engine,
+                        crate::engines::qm::QmEngine::Orca,
+                        crate::engines::qm::QmEngine::Orca.label(),
+                    );
+                });
+        });
+        if prompt.engine != previous_engine && prompt.engine == crate::engines::qm::QmEngine::Orca {
+            prompt.prefs.cores_per_subtask = 1;
+        }
+        if prompt.engine == crate::engines::qm::QmEngine::Orca {
+            prompt.periodic = false;
+            prompt.options.compute_properties = false;
+            if prompt.kind == crate::engines::qm::QmKind::TransitionState {
+                prompt.kind = crate::engines::qm::QmKind::SinglePoint;
+            }
+            ui.small("ORCA requires a program path configured for the selected compute target.");
+            ui.separator();
+        }
         // Offer molecular vs. periodic only when a cell is present; without one,
         // force the form back to molecular so a stale periodic selection (left
         // over from a previous entry) can't run against a non-periodic system.
-        if has_real_cell {
+        if has_real_cell && prompt.engine == crate::engines::qm::QmEngine::Hartree {
             ui.label("Calculation target:");
             ui.horizontal(|ui| {
                 crate::frontend::theme::stabilize_selectable_rows(ui);
@@ -287,6 +318,7 @@ pub(crate) fn render_qm_task_panel(
         // The memory estimate models the molecular in-core ERI tensor; a periodic
         // GPW run has none, so the button is molecular-only.
         if !prompt.periodic
+            && prompt.engine == crate::engines::qm::QmEngine::Hartree
             && ui
                 .add_enabled(
                     !structure_is_empty,
