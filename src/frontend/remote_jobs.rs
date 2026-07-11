@@ -24,6 +24,7 @@ pub struct RemoteSubmitted {
     pub cluster: Option<String>,
     pub engine_id: String,
     pub job_kind: String,
+    pub project_id: Option<String>,
     pub project_root: Option<String>,
     pub local_run_dir: PathBuf,
     /// The exact worker deployment identity confirmed on the host.
@@ -166,6 +167,7 @@ pub fn spawn_remote_submit(
     run_uuid: String,
     task_run_id: Option<u64>,
     job_kind: String,
+    project_id: Option<String>,
     project_root: Option<String>,
     local_run_dir: PathBuf,
 ) -> RunningRemoteSubmit {
@@ -267,6 +269,7 @@ pub fn spawn_remote_submit(
                 cluster: handle.cluster,
                 engine_id,
                 job_kind,
+                project_id,
                 project_root,
                 local_run_dir: local_run_dir.clone(),
                 deployment_id: deployed.deployment_id,
@@ -332,7 +335,7 @@ pub fn spawn_remote_cleanup(
     host: crate::backend::config::RemoteHost,
 ) -> RunningRemoteCleanup {
     let (sender, receiver) = std::sync::mpsc::channel();
-    let run_uuid = row.run_uuid.clone();
+    let run_uuid = row.job_id.clone();
     std::thread::spawn(move || {
         let result = crate::engines::remote::RemoteTarget::from_remote_dir(&host, &row.remote_dir)
             .and_then(|target| crate::engines::remote::remove_remote_scratch(&target))
@@ -353,7 +356,7 @@ pub fn spawn_remote_cancel(
     use crate::engines::remote::RemoteTarget;
     use crate::engines::remote::launcher::{LaunchHandle, Launcher, RemoteJobPhase};
     let (sender, receiver) = std::sync::mpsc::channel();
-    let run_uuid = row.run_uuid.clone();
+    let run_uuid = row.job_id.clone();
     std::thread::spawn(move || {
         let result = (|| -> anyhow::Result<RemoteJobOutcome> {
             let target = RemoteTarget::from_remote_dir(&host, &row.remote_dir)?;
@@ -461,7 +464,7 @@ pub fn spawn_remote_jobs_refresh(
                 Ok(target) => target,
                 Err(error) => {
                     updates.push(RemoteJobRefreshUpdate {
-                        run_uuid: row.run_uuid,
+                        run_uuid: row.job_id,
                         outcome: RemoteJobOutcome::ProbeError(error.to_string()),
                     });
                     continue;
@@ -471,7 +474,7 @@ pub fn spawn_remote_jobs_refresh(
                 Ok(launcher) => launcher,
                 Err(error) => {
                     updates.push(RemoteJobRefreshUpdate {
-                        run_uuid: row.run_uuid,
+                        run_uuid: row.job_id,
                         outcome: RemoteJobOutcome::ProbeError(error.to_string()),
                     });
                     continue;
@@ -490,7 +493,7 @@ pub fn spawn_remote_jobs_refresh(
                 &row.local_run_dir,
             );
             updates.push(RemoteJobRefreshUpdate {
-                run_uuid: row.run_uuid,
+                run_uuid: row.job_id,
                 outcome,
             });
         }

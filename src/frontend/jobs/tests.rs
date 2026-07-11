@@ -281,7 +281,9 @@ fn agent_job_snapshots_include_latest_stage() {
 
     assert_eq!(snapshots.len(), 1);
     assert_eq!(snapshots[0].id, JobControlId::Agent(9));
-    assert_eq!(snapshots[0].kind, JobKind::AssistantQm);
+    // An agent QM job is a plain Qm kind; the AgentLive backend marks it assistant.
+    assert_eq!(snapshots[0].kind, JobKind::Qm);
+    assert_eq!(snapshots[0].backend, JobBackend::AgentLive);
     assert_eq!(snapshots[0].stage.as_deref(), Some("SCF"));
     assert_eq!(snapshots[0].task_run_id, Some(44));
 }
@@ -297,9 +299,11 @@ fn remote_job_snapshot_maps_last_known_registry_state() {
 
     assert_eq!(snapshot.id, JobControlId::Remote("run-1".to_string()));
     assert_eq!(snapshot.backend, JobBackend::RemoteRegistry);
-    assert_eq!(snapshot.kind, JobKind::RemoteEngine);
+    // A remote job is a plain Engine kind; RemoteRegistry marks it remote, and its
+    // QM-ness (below) is recovered from job_kind, not a dedicated variant.
+    assert_eq!(snapshot.kind, JobKind::Engine);
     assert_eq!(snapshot.status, JobStatus::Running);
-    assert_eq!(snapshot.cancel, CancelCapability::RemoteLauncher);
+    assert_eq!(snapshot.cancel, crate::job::CancelCapability::Preemptive);
     assert_eq!(snapshot.engine_id.as_deref(), Some("hartree"));
     assert_eq!(snapshot.job_kind.as_deref(), Some("qm-energy"));
     assert_eq!(snapshot.host_label.as_deref(), Some("Cluster"));
@@ -509,7 +513,7 @@ fn remote_row(
     status: crate::backend::storage::jobs::RemoteJobStatus,
 ) -> crate::backend::storage::jobs::RemoteJob {
     crate::backend::storage::jobs::RemoteJob {
-        run_uuid: run_uuid.to_string(),
+        job_id: run_uuid.to_string(),
         host_id: "hpc".to_string(),
         host_label: "Cluster".to_string(),
         remote_dir: format!("~/.silicolab/runs/{run_uuid}"),
@@ -518,7 +522,8 @@ fn remote_row(
         cluster: None,
         engine_id: "hartree".to_string(),
         job_kind: "qm-energy".to_string(),
-        project_root: Some("/work/proj".to_string()),
+        project_id: Some("proj-id".to_string()),
+        project_root_hint: Some("/work/proj".to_string()),
         local_run_dir: "/tmp/run".to_string(),
         status,
         submitted_at_ms: 1000,

@@ -196,11 +196,7 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     if state.ui.agent.key_available.is_none() {
         crate::frontend::agent::refresh_key_status(state);
     }
-    poll_engine_job(state, ctx);
-    poll_optimization_job(state, ctx);
-    poll_disorder_job(state, ctx);
-    poll_qm_job(state, ctx);
-    poll_docking_job(state, ctx);
+    poll_compute_jobs(state, ctx);
     poll_trajectory_jobs(state, ctx);
     poll_update_check(state, ctx);
     poll_self_update(state, ctx);

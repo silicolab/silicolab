@@ -2,7 +2,12 @@ use crate::frontend::remote_jobs::{
     RunningRemoteCancel, RunningRemoteCleanup, RunningRemoteJobsRefresh, RunningRemoteSubmit,
 };
 
+use std::collections::HashMap;
+
+use crate::job::JobId;
+
 use super::agent::{RunningAgentTurn, TrackedAgentJob};
+use super::control::LocalJobSlot;
 use super::disorder::RunningDisorderJob;
 use super::docking::RunningDockingJob;
 use super::engine::RunningEngineJob;
@@ -65,6 +70,11 @@ pub struct JobManager {
     /// Whether the registry snapshot has been loaded into the UI this session
     /// (a one-shot reconnect read on the first frame).
     pub remote_jobs_loaded: bool,
+    /// The `JobId` of the live job in each local slot, bound at launch. A poller
+    /// attributes its completion through this — resolving `JobId → RunAttempt →
+    /// TaskRun` — instead of the ambient active task run, so two concurrent local
+    /// jobs of different kinds never cross attribution.
+    local_executions: HashMap<LocalJobSlot, JobId>,
 }
 
 impl JobManager {
@@ -126,5 +136,28 @@ impl JobManager {
 
     pub fn set_engine(&mut self, engine: RunningEngineJob) {
         self.engine = Some(engine);
+    }
+
+    /// Bind the `JobId` of the job just launched into a local slot.
+    pub fn bind_local_execution(&mut self, slot: LocalJobSlot, job_id: JobId) {
+        self.local_executions.insert(slot, job_id);
+    }
+
+    /// The `JobId` bound to a local slot, read by its poller to attribute progress
+    /// and completion.
+    pub fn local_execution(&self, slot: LocalJobSlot) -> Option<JobId> {
+        self.local_executions.get(&slot).copied()
+    }
+
+    /// Remove and return a local slot's `JobId` once its job reaches a terminal
+    /// state.
+    pub fn take_local_execution(&mut self, slot: LocalJobSlot) -> Option<JobId> {
+        self.local_executions.remove(&slot)
+    }
+
+    /// Drop every local-slot binding — on a workspace switch, where the tasks the
+    /// bindings resolve to no longer exist.
+    pub fn clear_local_executions(&mut self) {
+        self.local_executions.clear();
     }
 }

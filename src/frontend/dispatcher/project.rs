@@ -6,10 +6,17 @@ use crate::frontend::actions::{LeaveConfirmation, LeaveIntent};
 /// still pending it requests a repaint at the deadline so the flush fires even
 /// if the user stops interacting.
 pub fn flush_pending_autosave(state: &mut AppState, ctx: &egui::Context) {
+    let now = ctx.input(|input| input.time);
+    // A recorded materialization (even a zero-entry report, which changes no entry
+    // fingerprint) must reach disk in the atomic entries+ledger transaction. If
+    // nothing else scheduled a save, schedule one now so the ledger is not stranded
+    // in memory.
+    if state.materializations.is_dirty() && state.autosave_deadline().is_none() {
+        state.request_autosave(now, AUTOSAVE_DEBOUNCE_SECS);
+    }
     let Some(deadline) = state.autosave_deadline() else {
         return;
     };
-    let now = ctx.input(|input| input.time);
     if now >= deadline {
         // `persist_project` clears the deadline itself.
         let _ = persist_project(state, false);
@@ -41,6 +48,11 @@ pub(crate) fn persist_project(state: &mut AppState, persist_history: bool) -> an
     // Any pending coalesced autosave is subsumed by this save.
     state.clear_autosave_deadline();
     let Some(project) = state.workspace.project() else {
+        // A scratch workspace has no database, so the ledger can never be
+        // persisted; resolving its dirty flag here stops `flush_pending_autosave`
+        // from re-arming a save every frame and pinning `full_save_pending`. The
+        // narrow flushes clear their own scratch state the same way.
+        state.materializations.mark_saved();
         return Ok(());
     };
     // Save from borrowed references into the live state rather than cloning the
@@ -53,12 +65,18 @@ pub(crate) fn persist_project(state: &mut AppState, persist_history: bool) -> an
         name: project.name.as_str(),
         entries: &state.entries,
         tasks: &state.tasks,
+        materializations: &state.materializations,
         view: &view,
         history: &state.history,
         assistant: &assistant,
     };
     match save_project_ref(project, &snapshot, persist_history) {
         Ok(()) => {
+            // The full save rewrote every task row, the run graph, and the ledger,
+            // so nothing is stale anymore.
+            state.tasks.clear_dirty_task_runs();
+            state.tasks.runs.mark_saved();
+            state.materializations.mark_saved();
             state.mark_project_saved();
             Ok(())
         }
@@ -69,6 +87,110 @@ pub(crate) fn persist_project(state: &mut AppState, persist_history: bool) -> an
             Err(error)
         }
     }
+}
+
+/// A full-project save is pending. Entries and the materialization ledger reach
+/// disk only in that atomic save, so it — not a narrow flush — must be the first
+/// writer of any row that references them: a task row carrying `result_entry_id`
+/// or a run-graph row marked `import_state = Applied` written ahead of it would
+/// point at an entry or ledger record that a crash in the gap left unsaved.
+/// Deferring costs nothing, since the pending save rewrites these same rows.
+fn full_save_pending(state: &AppState) -> bool {
+    state.autosave_deadline().is_some() || state.materializations.is_dirty()
+}
+
+/// Write task rows whose status changed since the last save straight to
+/// `project.db`, without a full-project save. Task status is not part of the
+/// entry fingerprint that gates autosave, so without this a completed run (e.g. a
+/// QM report that adds no entry) would sit unsaved in memory until an unrelated
+/// edit or shutdown. A no-op when nothing is dirty.
+pub(crate) fn flush_dirty_task_runs(state: &mut AppState) {
+    if !state.tasks.has_dirty_task_runs() {
+        return;
+    }
+    let Some(db_path) = state
+        .workspace
+        .project()
+        .map(|project| project.project_db.clone())
+    else {
+        // A scratch workspace has no project.db; task rows are never persisted.
+        state.tasks.clear_dirty_task_runs();
+        return;
+    };
+    if full_save_pending(state) {
+        return;
+    }
+    let ids = state.tasks.take_dirty_task_runs();
+    let result = {
+        let rows: Vec<&crate::backend::tasks::TaskRun> = state
+            .tasks
+            .tasks
+            .iter()
+            .filter(|task| ids.contains(&task.id))
+            .collect();
+        (|| -> anyhow::Result<()> {
+            let conn = rusqlite::Connection::open(&db_path)?;
+            crate::backend::storage::upsert_task_runs(&conn, &rows)
+        })()
+    };
+    if let Err(error) = result {
+        // Keep the ids dirty so the next flush or full save retries them.
+        state.tasks.mark_task_runs_dirty(ids);
+        state
+            .output_log
+            .push(format!("failed to persist task status: {error}"));
+    }
+}
+
+/// Write the run/execution graph to `project.db` when it changed since the last
+/// save — the narrow persist that lets a launched job's execution row reach disk
+/// immediately (so a remote job's `JobId → task` resolution survives a restart),
+/// without waiting for a full-project save. A no-op when nothing is dirty.
+pub(crate) fn flush_dirty_run_graph(state: &mut AppState) {
+    if !state.tasks.runs.is_dirty() {
+        return;
+    }
+    let Some(db_path) = state
+        .workspace
+        .project()
+        .map(|project| project.project_db.clone())
+    else {
+        state.tasks.runs.mark_saved();
+        return;
+    };
+    if full_save_pending(state) {
+        return;
+    }
+    let result = (|| -> anyhow::Result<()> {
+        let mut conn = rusqlite::Connection::open(&db_path)?;
+        let tx = conn.transaction()?;
+        crate::backend::storage::write_run_graph(&tx, &state.tasks.runs)?;
+        tx.commit()?;
+        Ok(())
+    })();
+    match result {
+        Ok(()) => state.tasks.runs.mark_saved(),
+        Err(error) => state
+            .output_log
+            .push(format!("failed to persist run graph: {error}")),
+    }
+}
+
+/// On project open, finalize local runs left non-terminal by a crash or
+/// force-quit: their in-memory runtime is gone, so a persisted `Running`/
+/// `Cancelling` local task is a zombie and becomes `Interrupted`. A task with a
+/// registry row is remote/detached and may still be alive, so it is left for the
+/// remote reconnect/compensation path.
+fn reconcile_interrupted_local_tasks(state: &mut AppState) {
+    // A task is remote/detached — and may still be alive on its host — when its
+    // current attempt has a remote job execution; those are left to the remote
+    // reconnect/compensation path. Every other non-terminal local task is a crash
+    // zombie whose in-memory runtime is gone.
+    let zombies = state.tasks.local_zombie_task_ids();
+    for id in zombies {
+        state.tasks.mark_status(id, TaskStatus::Interrupted);
+    }
+    flush_dirty_task_runs(state);
 }
 
 pub(crate) fn reset_transient_state(state: &mut AppState) {
@@ -87,6 +209,9 @@ pub(crate) fn reset_transient_state(state: &mut AppState) {
     state.ui.hovered_atom = None;
     state.ui.viewport_cache.clear();
     state.active_task_run = None;
+    // The local-slot JobId bindings resolve to tasks in the workspace we are
+    // leaving; drop them with the active run.
+    state.jobs.clear_local_executions();
     // Task tabs belong to the project's task runs; drop them so a closed/switched
     // project doesn't leave stale (and unreachable) task tabs docked. Fixed-view
     // placement is untouched.
@@ -125,6 +250,7 @@ pub(crate) fn replace_workspace_from_project(
     state.workspace = WorkspaceSession::Project(project.clone());
     state.entries = snapshot.entries;
     state.tasks = snapshot.tasks;
+    state.materializations = snapshot.materializations;
     state.history = snapshot.history;
     state
         .history
@@ -139,6 +265,10 @@ pub(crate) fn replace_workspace_from_project(
     }
     reset_transient_state(state);
     reset_chart_caches(state);
+    reconcile_interrupted_local_tasks(state);
+    // Import any remote result that finished while this project was closed (or a
+    // different one was open); a missing outcome file becomes a pending recovery.
+    compensate_open_project(state);
     state.load_viewport_for_active_entry();
     state.mark_project_saved();
     let set_current_dir_error = std::env::set_current_dir(&project.root).err();
@@ -188,8 +318,14 @@ pub(crate) fn create_project_action(state: &mut AppState) {
     match create_project(parent, name).and_then(|project| {
         let snapshot = state.project_snapshot().unwrap_or_else(|| ProjectSnapshot {
             name: project.name.clone(),
+            project_id: project
+                .project_id
+                .as_ref()
+                .map(|id| id.as_str().to_string())
+                .unwrap_or_default(),
             entries: state.entries.clone(),
             tasks: state.tasks.clone(),
+            materializations: state.materializations.clone(),
             view: state.project_view_settings(),
             history: state.history.clone(),
             assistant: state.ui.agent.project_snapshot(),
@@ -239,6 +375,7 @@ fn close_project_without_persist(state: &mut AppState, run_maintenance: bool) {
     state.workspace = WorkspaceSession::Scratch;
     state.entries = EntryStore::new_empty();
     state.tasks = TaskManager::default();
+    state.materializations = Default::default();
     state.ui.project_viewport = Default::default();
     state.ui.viewport = Default::default();
     state.ui.entry_viewports.clear();
@@ -514,5 +651,86 @@ mod tests {
         assert!(state.ui.chart.is_none());
         assert!(state.ui.chart_availability.is_empty());
         assert!(state.ui.task_chart_thumbnails.is_empty());
+    }
+
+    /// A completed task's `result_entry_id` reaches disk only through the atomic
+    /// entries+ledger save; the every-frame narrow flush must not write that row
+    /// ahead of it, or a crash in the gap leaves the task pointing at an entry
+    /// that was never persisted. The flush therefore defers while a full save is
+    /// pending — signalled either by a scheduled autosave (an unsaved entry) or a
+    /// dirty ledger (an unsaved materialization) — and only then persists.
+    #[test]
+    fn narrow_task_flush_defers_to_a_pending_full_save() {
+        let root = std::env::temp_dir().join(format!("sl-flush-defer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let session = crate::backend::project::create_project(&root, "flush").unwrap();
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        state.workspace = crate::backend::project::WorkspaceSession::Project(session);
+
+        let controller = *crate::backend::tasks::task_controller_by_id("qm-optimize").unwrap();
+        let task = state.tasks.create_task_run(controller);
+        state.tasks.set_result_entry_id(task, Some(42));
+        state.tasks.mark_status(task, TaskStatus::Completed);
+        assert!(state.tasks.has_dirty_task_runs());
+
+        // A scheduled autosave (an unsaved entry) defers the flush.
+        state.request_autosave(0.0, 0.5);
+        flush_dirty_task_runs(&mut state);
+        assert!(
+            state.tasks.has_dirty_task_runs(),
+            "must defer while an autosave is pending",
+        );
+
+        // So does a dirty ledger (an unsaved materialization), even with no autosave.
+        state.clear_autosave_deadline();
+        state
+            .materializations
+            .record(crate::backend::materialization::Materialization::single(
+                "job-1".to_string(),
+                0,
+                42,
+                "result",
+            ));
+        flush_dirty_task_runs(&mut state);
+        assert!(
+            state.tasks.has_dirty_task_runs(),
+            "must defer while the ledger is dirty",
+        );
+
+        // Once nothing is pending, the entry is already durable, so the flush writes.
+        state.materializations.mark_saved();
+        flush_dirty_task_runs(&mut state);
+        assert!(
+            !state.tasks.has_dirty_task_runs(),
+            "must persist once no full save is pending",
+        );
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A scratch workspace has no database to persist the ledger into, so
+    /// `persist_project` must resolve its dirty flag on the early-return path.
+    /// Left set, the flag would re-arm the autosave every frame and pin
+    /// `full_save_pending` for the whole session, permanently deferring the
+    /// narrow flushes.
+    #[test]
+    fn scratch_persist_resolves_a_dirty_ledger() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        state
+            .materializations
+            .record(crate::backend::materialization::Materialization::report(
+                "job-1".to_string(),
+                0,
+            ));
+        assert!(state.materializations.is_dirty());
+        assert!(full_save_pending(&state));
+
+        persist_project(&mut state, false).unwrap();
+
+        assert!(
+            !state.materializations.is_dirty(),
+            "scratch persist must resolve the ledger's dirty flag",
+        );
+        assert!(!full_save_pending(&state));
     }
 }

@@ -51,12 +51,10 @@ pub(crate) fn apply_remote_gromacs_outcome(
     }
 
     let belongs_here = outcome_belongs_to_current_workspace(state, row);
-    let task_id = state
-        .tasks
-        .task_run_by_uuid(&row.run_uuid)
-        .map(|task| task.id);
+    let already = outcome_already_materialized(state, &row.job_id);
+    let task_id = state.tasks.runs.task_run_id_for_job(&row.job_id);
 
-    if belongs_here {
+    if belongs_here && !already {
         let run_dir = PathBuf::from(&row.local_run_dir);
         let _ = std::fs::create_dir_all(&run_dir);
         // A build carries the topology + system context a later run reuses; a run
@@ -92,6 +90,8 @@ pub(crate) fn apply_remote_gromacs_outcome(
         if is_run {
             set_md_run_origin(state, entry_id, trajectory_path);
         }
+        let role = if is_run { "md" } else { "structure" };
+        record_materialization(state, &row.job_id, role, Some(entry_id), &[entry_id]);
     }
     if let Some(task_id) = task_id {
         mark_task_status(state, task_id, TaskStatus::Completed);

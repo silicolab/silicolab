@@ -17,7 +17,7 @@ impl PrimaryView {
     pub fn icon(self) -> &'static str {
         match self {
             Self::EntryList => egui_phosphor::regular::LIST,
-            Self::Tasks => egui_phosphor::regular::LIGHTNING,
+            Self::Tasks => egui_phosphor::regular::ROCKET_LAUNCH,
             Self::Style => egui_phosphor::regular::PALETTE,
         }
     }
@@ -25,7 +25,10 @@ impl PrimaryView {
     pub fn label(self) -> &'static str {
         match self {
             Self::EntryList => "Entry List",
-            Self::Tasks => "Tasks",
+            // The launcher (`Tasks` variant kept for stability); "Activity" is the
+            // read-only monitor and "Resources" the system gauges — three distinct
+            // names, no collision.
+            Self::Tasks => "Launch",
             Self::Style => "Style",
         }
     }
@@ -35,7 +38,7 @@ impl PrimaryView {
     pub fn short_label(self) -> &'static str {
         match self {
             Self::EntryList => "Entries",
-            Self::Tasks => "Tasks",
+            Self::Tasks => "Launch",
             Self::Style => "Style",
         }
     }
@@ -75,7 +78,9 @@ impl StaticView {
             Self::Console => "Console",
             Self::Sequence => "Sequence",
             Self::Assistant => "Assistant",
-            Self::TaskMonitor => "Task Monitor",
+            // The persistence token stays `task_monitor` so saved layouts still
+            // resolve this tab even though the label reads "Activity".
+            Self::TaskMonitor => "Activity",
             Self::Output => "Output",
             Self::Plot => "Plot",
         }

@@ -157,7 +157,7 @@ pub(super) fn registry() -> Vec<ShortcutBinding> {
             egui::Key::Num2,
             Mods::MOD,
             ShortcutCommand::SetPrimaryView(PrimaryView::Tasks),
-            "Tasks",
+            "Launch",
             Always,
         ),
         bind_ui(
@@ -211,7 +211,7 @@ pub(super) fn registry() -> Vec<ShortcutBinding> {
             egui::Key::T,
             Mods::MOD_SHIFT,
             ShortcutCommand::RevealStaticView(StaticView::TaskMonitor),
-            "Task Monitor",
+            "Activity",
             Always,
         ),
         bind_action(

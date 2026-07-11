@@ -489,6 +489,50 @@ mod tests {
     }
 
     #[test]
+    fn agent_qm_completion_creates_the_optimized_entry_and_records_the_result() {
+        // QM vertical slice (agent placement): an agent-driven QM run drains to
+        // completion, adds its optimized geometry as an entry, and records it as the
+        // task's result — attributed by the TrackedAgentJob's task_run_id.
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let task = register_agent_task_run(&mut state, HeavyKind::Qm, "qm optimize");
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(QmWorkerMessage::Finished(Box::new(
+            crate::engines::qm::QmOutcome {
+                energy_hartree: -1.0,
+                converged: true,
+                optimized_structure: Some(crate::domain::Structure::empty()),
+                summary: "energy -1.0 Eh".to_string(),
+                scf_trace: Vec::new(),
+                opt_trace: Vec::new(),
+                frequencies: Vec::new(),
+            },
+        )))
+        .unwrap();
+        let mut running = RunningQmJob {
+            cancel: crate::wire::JobCancelHandle::from_flag(std::sync::Arc::new(
+                std::sync::atomic::AtomicBool::new(false),
+            )),
+            receiver: rx,
+            latest_stage: None,
+            cancel_requested: false,
+        };
+
+        let completion = drain_qm(&mut state, &mut running, task);
+        let (_summary, is_error) = completion.expect("the job completes");
+        assert!(!is_error, "a converged run is not an error");
+        assert!(
+            state
+                .tasks
+                .task_run(task)
+                .unwrap()
+                .result_entry_id
+                .is_some(),
+            "the optimized geometry is recorded as the task result"
+        );
+    }
+
+    #[test]
     fn complete_marks_terminal_status() {
         let mut state = AppState::scratch(Default::default(), Vec::new());
         let ok = register_agent_task_run(&mut state, HeavyKind::Qm, "qm energy");

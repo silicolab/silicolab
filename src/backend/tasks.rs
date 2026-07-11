@@ -1,5 +1,7 @@
 use std::{collections::HashSet, path::PathBuf, time::SystemTime};
 
+use crate::backend::run_attempt::RunGraph;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskKind {
     BuildReticularStructure,
@@ -67,7 +69,6 @@ pub struct TaskController {
     pub kind: TaskKind,
     pub panel: TaskPanelKind,
     pub outcome: TaskOutcome,
-    pub backend: TaskBackend,
     pub uses_run_directory: bool,
 }
 
@@ -98,23 +99,6 @@ impl TaskOutcome {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskBackend {
-    InlineNative,
-    BackgroundNative,
-    ExternalEngine,
-}
-
-impl TaskBackend {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::InlineNative => "inline-native",
-            Self::BackgroundNative => "background-native",
-            Self::ExternalEngine => "external-engine",
-        }
-    }
-}
-
 const TASK_CONTROLLERS: &[TaskController] = &[
     TaskController {
         id: "build-reticular",
@@ -127,7 +111,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::BuildReticularStructure,
         panel: TaskPanelKind::ReticularBuilder,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -141,7 +124,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::BuildNanosheet,
         panel: TaskPanelKind::NanosheetBuilder,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -155,7 +137,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::CreateBuildingBlock,
         panel: TaskPanelKind::BuildingBlockEditor,
         outcome: TaskOutcome::FileOnly,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -169,7 +150,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::OptimizeGeometry,
         panel: TaskPanelKind::OptimizationPrompt,
         outcome: TaskOutcome::EditInPlace,
-        backend: TaskBackend::BackgroundNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -183,7 +163,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::OptimizeCrystalGeometry,
         panel: TaskPanelKind::OptimizationPrompt,
         outcome: TaskOutcome::EditInPlace,
-        backend: TaskBackend::BackgroundNative,
         uses_run_directory: false,
     },
     // The three QM tasks share the QmPrompt panel; each opens it with a
@@ -199,7 +178,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::RunQmEnergy,
         panel: TaskPanelKind::QmPrompt,
         outcome: TaskOutcome::Report,
-        backend: TaskBackend::BackgroundNative,
         uses_run_directory: true,
     },
     TaskController {
@@ -213,7 +191,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::RunQmOptimize,
         panel: TaskPanelKind::QmPrompt,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::BackgroundNative,
         uses_run_directory: true,
     },
     TaskController {
@@ -227,7 +204,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::RunQmFrequencies,
         panel: TaskPanelKind::QmPrompt,
         outcome: TaskOutcome::Report,
-        backend: TaskBackend::BackgroundNative,
         uses_run_directory: true,
     },
     TaskController {
@@ -243,7 +219,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::RunQmTransitionState,
         panel: TaskPanelKind::QmPrompt,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::BackgroundNative,
         uses_run_directory: true,
     },
     TaskController {
@@ -257,7 +232,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::TranslateIntoFirstUnitCell,
         panel: TaskPanelKind::None,
         outcome: TaskOutcome::EditInPlace,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -271,7 +245,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::ExpandSupercell,
         panel: TaskPanelKind::SupercellPrompt,
         outcome: TaskOutcome::EditInPlace,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -286,7 +259,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::PrepareProtein,
         panel: TaskPanelKind::ProteinPrepPrompt,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -300,7 +272,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::BuildMdSystem,
         panel: TaskPanelKind::MdSystemPrompt,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: true,
     },
     TaskController {
@@ -315,7 +286,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::BuildDisorderedSystem,
         panel: TaskPanelKind::DisorderedSystemPrompt,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::BackgroundNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -329,7 +299,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::AddHydrogens,
         panel: TaskPanelKind::None,
         outcome: TaskOutcome::EditInPlace,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -343,7 +312,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::RecomputeBonds,
         panel: TaskPanelKind::None,
         outcome: TaskOutcome::EditInPlace,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -357,7 +325,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::RunMd,
         panel: TaskPanelKind::MdRunPrompt,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::ExternalEngine,
         uses_run_directory: true,
     },
     TaskController {
@@ -372,7 +339,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::RunDocking,
         panel: TaskPanelKind::DockingPrompt,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::BackgroundNative,
         uses_run_directory: true,
     },
     TaskController {
@@ -388,7 +354,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::ModifyProteinPtm,
         panel: TaskPanelKind::PtmPrompt,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
 ];
@@ -412,6 +377,9 @@ pub enum TaskStatus {
     Completed,
     Failed,
     Cancelled,
+    /// A local run left non-terminal by a crash or force-quit, detected and
+    /// finalized at the next project open by startup reconcile. Terminal.
+    Interrupted,
 }
 
 impl TaskStatus {
@@ -424,7 +392,15 @@ impl TaskStatus {
             Self::Completed => "Completed",
             Self::Failed => "Failed",
             Self::Cancelled => "Cancelled",
+            Self::Interrupted => "Interrupted",
         }
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Completed | Self::Failed | Self::Cancelled | Self::Interrupted
+        )
     }
 }
 
@@ -445,7 +421,6 @@ pub struct TaskRun {
     pub kind: TaskKind,
     pub panel: TaskPanelKind,
     pub outcome: TaskOutcome,
-    pub backend: TaskBackend,
     pub uses_run_directory: bool,
     pub status: TaskStatus,
     pub run_dir: Option<PathBuf>,
@@ -478,7 +453,6 @@ impl TaskRun {
             kind: controller.kind,
             panel: controller.panel,
             outcome: controller.outcome,
-            backend: controller.backend,
             uses_run_directory: controller.uses_run_directory,
             status: TaskStatus::Ready,
             run_dir: None,
@@ -506,9 +480,17 @@ pub struct TaskListState {
 pub struct TaskManager {
     pub task_list: TaskListState,
     pub tasks: Vec<TaskRun>,
+    /// The run/execution graph beneath these tasks: attempts and job executions,
+    /// and the `JobId → TaskRun` resolution the runtime attributes completions
+    /// through — instead of the ambient "active task run".
+    pub runs: RunGraph,
     pub panels: Vec<TaskDetailPanel>,
     pub active_panel: Option<u64>,
     pub(crate) next_task_run_id: u64,
+    /// Task ids whose persisted row is stale since the last write. Status changes
+    /// mark tasks here so they can be flushed to `project.db` promptly, without
+    /// waiting for a full-project save (which only fires on geometry changes).
+    dirty_task_runs: HashSet<u64>,
 }
 
 impl Default for TaskManager {
@@ -516,9 +498,11 @@ impl Default for TaskManager {
         Self {
             task_list: TaskListState::default(),
             tasks: Vec::new(),
+            runs: RunGraph::default(),
             panels: Vec::new(),
             active_panel: None,
             next_task_run_id: 1,
+            dirty_task_runs: HashSet::new(),
         }
     }
 }
@@ -540,12 +524,6 @@ impl TaskManager {
         self.tasks.iter_mut().find(|task| task.id == task_run_id)
     }
 
-    /// Find a run by its durable `run_uuid` (the key a detached remote job is
-    /// reconnected through), rather than the in-memory `id` handle.
-    pub fn task_run_by_uuid(&self, run_uuid: &str) -> Option<&TaskRun> {
-        self.tasks.iter().find(|task| task.run_uuid == run_uuid)
-    }
-
     /// The newest completed QM run whose artifacts belong to `entry_id` (see
     /// [`TaskRun::anchor_entry_id`]), or `None` when the entry has no QM results.
     /// An entry that was the input to several runs surfaces the most recent one.
@@ -564,13 +542,46 @@ impl TaskManager {
     pub fn mark_status(&mut self, task_run_id: u64, status: TaskStatus) {
         if let Some(task) = self.task_run_mut(task_run_id) {
             task.status = status;
-            if matches!(
-                status,
-                TaskStatus::Completed | TaskStatus::Failed | TaskStatus::Cancelled
-            ) {
+            if status.is_terminal() {
                 task.finished_at_ms = Some(now_unix_ms());
             }
+            self.dirty_task_runs.insert(task_run_id);
         }
+    }
+
+    /// Take the set of task ids whose persisted row is stale, clearing it. The
+    /// caller is expected to write those rows to `project.db`.
+    pub fn take_dirty_task_runs(&mut self) -> HashSet<u64> {
+        std::mem::take(&mut self.dirty_task_runs)
+    }
+
+    pub fn has_dirty_task_runs(&self) -> bool {
+        !self.dirty_task_runs.is_empty()
+    }
+
+    /// Re-mark task ids dirty, e.g. after a failed persist so the next flush
+    /// retries them.
+    pub fn mark_task_runs_dirty(&mut self, ids: impl IntoIterator<Item = u64>) {
+        self.dirty_task_runs.extend(ids);
+    }
+
+    /// Clear the dirty set without writing — used after a full-project save has
+    /// already persisted every task row.
+    pub fn clear_dirty_task_runs(&mut self) {
+        self.dirty_task_runs.clear();
+    }
+
+    /// Ids of local runs stranded non-terminal by a crash: `Running`/`Cancelling`
+    /// tasks whose current attempt has no remote job execution. A task with a remote
+    /// execution is detached and may still be alive on its host, so it is left for
+    /// the remote reconnect/compensation path rather than marked `Interrupted`.
+    pub fn local_zombie_task_ids(&self) -> Vec<u64> {
+        self.tasks
+            .iter()
+            .filter(|task| matches!(task.status, TaskStatus::Running | TaskStatus::Cancelling))
+            .filter(|task| !self.runs.task_has_remote_execution(task.id))
+            .map(|task| task.id)
+            .collect()
     }
 
     pub fn set_run_dir(&mut self, task_run_id: u64, run_dir: PathBuf) {
@@ -672,7 +683,6 @@ mod tests {
         assert_eq!(run.title, "Molecular Geometry Optimization");
         assert_eq!(run.status, TaskStatus::WaitingInput);
         assert_eq!(manager.active_panel, Some(run_id));
-        assert!(matches!(run.backend, super::TaskBackend::BackgroundNative));
     }
 
     #[test]
@@ -694,5 +704,38 @@ mod tests {
         tasks.mark_status(b, TaskStatus::Completed);
         let running: Vec<u64> = tasks.running_task_runs().iter().map(|t| t.id).collect();
         assert_eq!(running, vec![a]);
+    }
+
+    #[test]
+    fn local_zombie_ids_skip_remote_and_terminal_runs() {
+        use crate::backend::run_attempt::Placement;
+        let mut tasks = TaskManager::default();
+        let make = || task_controller_by_id("qm-energy").copied().unwrap();
+        let local = tasks.create_task_run(make());
+        let remote = tasks.create_task_run(make());
+        let done = tasks.create_task_run(make());
+        tasks.runs.begin_execution(local, Placement::Local, None, 0);
+        tasks
+            .runs
+            .begin_execution(remote, Placement::Remote { host: None }, None, 0);
+        tasks.mark_status(local, TaskStatus::Running);
+        tasks.mark_status(remote, TaskStatus::Running); // detached remote -> not a zombie
+        tasks.mark_status(done, TaskStatus::Completed);
+
+        let zombies = tasks.local_zombie_task_ids();
+        assert_eq!(zombies, vec![local]);
+    }
+
+    #[test]
+    fn marking_status_is_terminal_aware_and_tracks_dirty() {
+        let mut tasks = TaskManager::default();
+        let id = tasks.create_task_run(task_controller_by_id("qm-energy").copied().unwrap());
+        assert!(!tasks.has_dirty_task_runs()); // creation alone does not dirty
+
+        tasks.mark_status(id, TaskStatus::Interrupted);
+        assert!(TaskStatus::Interrupted.is_terminal());
+        assert!(tasks.task_run(id).unwrap().finished_at_ms.is_some());
+        assert!(tasks.take_dirty_task_runs().contains(&id));
+        assert!(!tasks.has_dirty_task_runs());
     }
 }

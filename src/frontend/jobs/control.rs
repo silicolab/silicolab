@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use crate::backend::storage::jobs as registry;
 use crate::backend::tasks::TaskStatus;
 use crate::frontend::state::AppState;
+use crate::job::CancelCapability;
 
 use super::agent::AgentHeavyJob;
 use super::manager::JobManager;
@@ -30,6 +31,10 @@ pub enum JobBackend {
     RemoteRegistry,
 }
 
+/// What a job computes — orthogonal to where it runs (the snapshot's
+/// [`JobBackend`]) and to its remote/agent placement. A job is a
+/// `Qm`/`Docking`/`Engine` job wherever it runs, and the QM-ness of an
+/// engine/remote job is recovered from its `job_kind`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JobKind {
     Optimizer,
@@ -37,10 +42,6 @@ pub enum JobKind {
     Qm,
     Docking,
     Engine,
-    AssistantQm,
-    AssistantDocking,
-    AssistantEngine,
-    RemoteEngine,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -52,13 +53,6 @@ pub enum JobStatus {
     Failed,
     Lost,
     Cancelled,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CancelCapability {
-    Cooperative,
-    RemoteLauncher,
-    None,
 }
 
 impl JobControlId {
@@ -81,6 +75,19 @@ impl LocalJobSlot {
             Self::Engine => "engine",
         }
     }
+
+    /// The static cancel capability of this slot's engine. Docking wraps a
+    /// single opaque Vina search that cannot be interrupted once it starts, so it
+    /// is `Unsupported`; the others honour a cancel flag (mid-step, or by killing
+    /// the subprocess), so they are `Cooperative`.
+    pub fn cancel_capability(self) -> CancelCapability {
+        match self {
+            Self::Docking => CancelCapability::Unsupported,
+            Self::Optimizer | Self::Disorder | Self::Qm | Self::Engine => {
+                CancelCapability::Cooperative
+            }
+        }
+    }
 }
 
 impl JobBackend {
@@ -101,15 +108,11 @@ impl JobKind {
             Self::Qm => "qm",
             Self::Docking => "docking",
             Self::Engine => "engine",
-            Self::AssistantQm => "assistant-qm",
-            Self::AssistantDocking => "assistant-docking",
-            Self::AssistantEngine => "assistant-engine",
-            Self::RemoteEngine => "remote-engine",
         }
     }
 
     pub fn is_qm(&self) -> bool {
-        matches!(self, Self::Qm | Self::AssistantQm)
+        matches!(self, Self::Qm)
     }
 }
 
@@ -131,20 +134,6 @@ impl JobStatus {
     }
 }
 
-impl CancelCapability {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Cooperative => "cooperative",
-            Self::RemoteLauncher => "remote-launcher",
-            Self::None => "none",
-        }
-    }
-
-    pub fn can_cancel(self) -> bool {
-        !matches!(self, Self::None)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveJobSnapshot {
     pub id: JobControlId,
@@ -159,6 +148,26 @@ pub struct LiveJobSnapshot {
     pub task_run_id: Option<u64>,
     pub run_uuid: Option<String>,
     pub host_label: Option<String>,
+    /// Observability of a remote job — `None` for local and agent jobs, which
+    /// are always observed. `Unreachable` renders a freshness note by the status.
+    pub observation: Option<crate::job::ObservationState>,
+}
+
+impl LiveJobSnapshot {
+    /// Whether a Cancel action should be offered right now: the engine's static
+    /// [`CancelCapability`] must permit it, and the job must still be in a state a
+    /// cancel can act on (not already terminal, and not already cancelling).
+    pub fn can_cancel(&self) -> bool {
+        self.cancel.can_cancel()
+            && !matches!(
+                self.status,
+                JobStatus::Cancelling
+                    | JobStatus::Done
+                    | JobStatus::Failed
+                    | JobStatus::Lost
+                    | JobStatus::Cancelled
+            )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,7 +233,6 @@ impl JobManager {
             );
             if running.cancel_requested {
                 snapshot.status = JobStatus::Cancelling;
-                snapshot.cancel = CancelCapability::None;
             }
             jobs.push(snapshot);
         }
@@ -427,7 +435,7 @@ pub fn format_job_row(job: &LiveJobSnapshot) -> String {
         job_status_display(job),
         job.stage.as_deref().unwrap_or("-"),
         job.backend.label(),
-        job.cancel.label(),
+        job.cancel.token(),
     )
 }
 
@@ -525,15 +533,17 @@ fn running_qm_jobs(state: &AppState) -> Vec<LiveJobSnapshot> {
 
 pub fn remote_job_snapshot(row: &registry::RemoteJob) -> LiveJobSnapshot {
     LiveJobSnapshot {
-        id: JobControlId::Remote(row.run_uuid.clone()),
+        id: JobControlId::Remote(row.job_id.clone()),
         backend: JobBackend::RemoteRegistry,
-        kind: JobKind::RemoteEngine,
+        // A remote job runs an ordinary engine; it is distinguished as remote by the
+        // RemoteRegistry backend, not a dedicated kind. QM-ness is recovered from
+        // `job_kind` (e.g. "qm-energy").
+        kind: JobKind::Engine,
         status: remote_status(row.status),
-        cancel: if row.status.is_terminal() {
-            CancelCapability::None
-        } else {
-            CancelCapability::RemoteLauncher
-        },
+        // A remote job is cancelled by killing its scheduler job / process group,
+        // which acts immediately — a preemptive capability. Whether a cancel is
+        // offered *now* is gated on the (non-terminal) status by `can_cancel`.
+        cancel: CancelCapability::Preemptive,
         label: format!("remote {} on {}", row.job_kind, row.host_label),
         engine_id: Some(row.engine_id.clone()),
         job_kind: Some(row.job_kind.clone()),
@@ -544,8 +554,9 @@ pub fn remote_job_snapshot(row: &registry::RemoteJob) -> LiveJobSnapshot {
             (None, None) => None,
         },
         task_run_id: None,
-        run_uuid: Some(row.run_uuid.clone()),
+        run_uuid: Some(row.job_id.clone()),
         host_label: Some(row.host_label.clone()),
+        observation: Some(row.observation_state()),
     }
 }
 
@@ -573,7 +584,7 @@ fn cancel_remote_controlled_job(
     {
         return Ok(CancelOutcome::Requested {
             id: JobControlId::Remote(run_uuid.to_string()),
-            task_run_id: state.tasks.task_run_by_uuid(run_uuid).map(|task| task.id),
+            task_run_id: state.tasks.runs.task_run_id_for_job(run_uuid),
         });
     }
     let conn = registry::open()?;
@@ -588,7 +599,7 @@ fn cancel_remote_controlled_job(
             reason: format!("remote job is already {}", row.status.token()),
         });
     }
-    let id = JobControlId::Remote(row.run_uuid.clone());
+    let id = JobControlId::Remote(row.job_id.clone());
     let Some(host) = state.config.remote_hosts.get(&row.host_id).cloned() else {
         return Ok(CancelOutcome::NotCancellable {
             id,
@@ -603,7 +614,7 @@ fn cancel_remote_controlled_job(
     }
     registry::record_observation(
         &conn,
-        &row.run_uuid,
+        &row.job_id,
         registry::RemoteObservationUpdate {
             status: registry::RemoteJobStatus::Cancelling,
             exit_code: row.exit_code,
@@ -614,11 +625,8 @@ fn cancel_remote_controlled_job(
             polled_at_ms: registry::now_ms(),
         },
     )?;
-    sync_remote_job_ui_row(state, &row.run_uuid, registry::RemoteJobStatus::Cancelling);
-    let task_run_id = state
-        .tasks
-        .task_run_by_uuid(&row.run_uuid)
-        .map(|task| task.id);
+    sync_remote_job_ui_row(state, &row.job_id, registry::RemoteJobStatus::Cancelling);
+    let task_run_id = state.tasks.runs.task_run_id_for_job(&row.job_id);
     if let Some(task_run_id) = task_run_id {
         mark_task_cancelling(state, task_run_id);
     }
@@ -627,7 +635,7 @@ fn cancel_remote_controlled_job(
         host,
     ));
     Ok(CancelOutcome::Requested {
-        id: JobControlId::Remote(row.run_uuid),
+        id: JobControlId::Remote(row.job_id),
         task_run_id,
     })
 }
@@ -649,7 +657,7 @@ fn sync_remote_job_ui_row(state: &mut AppState, run_uuid: &str, status: registry
         .ui
         .remote_jobs
         .iter_mut()
-        .find(|row| row.run_uuid == run_uuid)
+        .find(|row| row.job_id == run_uuid)
     {
         row.status = status;
         row.last_polled_at_ms = Some(registry::now_ms());
@@ -681,7 +689,7 @@ fn local_snapshot(
         backend: JobBackend::LocalLive,
         kind,
         status: JobStatus::Running,
-        cancel: CancelCapability::Cooperative,
+        cancel: slot.cancel_capability(),
         label: label.into(),
         engine_id: None,
         job_kind: None,
@@ -689,24 +697,36 @@ fn local_snapshot(
         task_run_id,
         run_uuid: None,
         host_label: None,
+        observation: None,
     }
 }
 
 fn agent_snapshot(tracked: &super::agent::TrackedAgentJob) -> LiveJobSnapshot {
-    let (kind, stage, engine_id, job_kind, cancel_requested) = match &tracked.job {
+    // The agent runs the same engines; the AgentLive backend marks them as
+    // assistant-launched, so the kind is the plain Qm/Docking/Engine.
+    let (kind, stage, engine_id, job_kind, capability, cancel_requested) = match &tracked.job {
         AgentHeavyJob::Qm(job) => (
-            JobKind::AssistantQm,
+            JobKind::Qm,
             job.latest_stage.clone(),
             None,
             None,
+            CancelCapability::Cooperative,
             job.cancel_requested,
         ),
-        AgentHeavyJob::Docking(_) => (JobKind::AssistantDocking, None, None, None, false),
+        AgentHeavyJob::Docking(_) => (
+            JobKind::Docking,
+            None,
+            None,
+            None,
+            CancelCapability::Unsupported,
+            false,
+        ),
         AgentHeavyJob::Engine(job) => (
-            JobKind::AssistantEngine,
+            JobKind::Engine,
             job.latest_stage.clone(),
             Some(job.engine.to_string()),
             Some(job.job_kind.to_string()),
+            CancelCapability::Cooperative,
             false,
         ),
     };
@@ -719,11 +739,7 @@ fn agent_snapshot(tracked: &super::agent::TrackedAgentJob) -> LiveJobSnapshot {
         } else {
             JobStatus::Running
         },
-        cancel: if cancel_requested {
-            CancelCapability::None
-        } else {
-            CancelCapability::Cooperative
-        },
+        cancel: capability,
         label: tracked.label.clone(),
         engine_id,
         job_kind,
@@ -731,5 +747,6 @@ fn agent_snapshot(tracked: &super::agent::TrackedAgentJob) -> LiveJobSnapshot {
         task_run_id: Some(tracked.task_run_id),
         run_uuid: None,
         host_label: None,
+        observation: None,
     }
 }

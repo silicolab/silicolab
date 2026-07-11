@@ -159,6 +159,137 @@ pub(crate) fn record_task_result_entry(state: &mut AppState, task_run_id: u64, e
     }
 }
 
+/// Whether this job's outcome has already been materialized into the open project.
+/// The idempotency guard every engine outcome path checks before it creates result
+/// entries, so a remote refresh, a cancel/refresh race, or open-project
+/// compensation never re-imports a result it already applied.
+pub(crate) fn outcome_already_materialized(state: &AppState, job_id: &str) -> bool {
+    state.materializations.contains(job_id)
+}
+
+/// Begin a job execution for `task_run_id` and return its freshly minted [`JobId`],
+/// persisting the new attempt/execution promptly (so a remote job's `JobId → task`
+/// resolution survives a restart). Local jobs bind the id on their `JobManager`
+/// slot; a remote submission carries it as the registry `job_id`.
+pub(crate) fn begin_job_execution(
+    state: &mut AppState,
+    task_run_id: u64,
+    placement: crate::backend::run_attempt::Placement,
+    job_kind: Option<String>,
+) -> crate::job::JobId {
+    let now = crate::backend::storage::jobs::now_ms().max(0) as u64;
+    let job_id = state
+        .tasks
+        .runs
+        .begin_execution(task_run_id, placement, job_kind, now);
+    flush_dirty_run_graph(state);
+    job_id
+}
+
+/// Begin a LOCAL job execution for the active task and bind its `JobId` to `slot`,
+/// so the slot's poller attributes completion through the run graph. The one call
+/// every local launch site makes after handing its handle to the `JobManager`; the
+/// job kind is the task's controller id.
+pub(crate) fn begin_local_job(
+    state: &mut AppState,
+    slot: crate::frontend::jobs::LocalJobSlot,
+    task_run_id: u64,
+) {
+    let job_kind = state
+        .tasks
+        .task_run(task_run_id)
+        .map(|task| task.controller_id.to_string());
+    let job_id = begin_job_execution(
+        state,
+        task_run_id,
+        crate::backend::run_attempt::Placement::Local,
+        job_kind,
+    );
+    state.jobs.bind_local_execution(slot, job_id);
+}
+
+/// Attribute a finished LOCAL job to its task through the run graph, marking the
+/// execution and the task terminal. Resolves `JobId → RunAttempt → TaskRun`, so two
+/// concurrent local jobs never cross attribution the way the ambient active run
+/// did; the active run is cleared only when it is the completed one.
+pub(crate) fn complete_local_job(
+    state: &mut AppState,
+    job_id: Option<crate::job::JobId>,
+    task_status: TaskStatus,
+) {
+    let Some(job_id) = job_id else {
+        return;
+    };
+    let key = job_id.to_string();
+    let now = crate::backend::storage::jobs::now_ms().max(0) as u64;
+    state
+        .tasks
+        .runs
+        .set_execution_state(&key, execution_state_for(task_status), now);
+    if let Some(task_run_id) = state.tasks.runs.task_run_id_for_job(&key) {
+        mark_task_status(state, task_run_id, task_status);
+        if state.active_task_run == Some(task_run_id) {
+            state.active_task_run = None;
+        }
+    }
+}
+
+/// Map a task's terminal (or transitional) status to the execution state recorded
+/// on its job, keeping the two projections consistent.
+fn execution_state_for(status: TaskStatus) -> crate::job::ExecutionState {
+    use crate::job::ExecutionState;
+    match status {
+        TaskStatus::Completed => ExecutionState::Succeeded,
+        TaskStatus::Failed => ExecutionState::Failed,
+        TaskStatus::Cancelled => ExecutionState::Cancelled,
+        TaskStatus::Interrupted => ExecutionState::Interrupted,
+        TaskStatus::Cancelling => ExecutionState::Cancelling,
+        TaskStatus::Ready | TaskStatus::WaitingInput | TaskStatus::Running => {
+            ExecutionState::Running
+        }
+    }
+}
+
+/// Record that `job_id`'s outcome produced `entry_ids` (in application order), with
+/// `primary_entry_id` opened by default and each entry labelled `role`. The record
+/// is persisted in the atomic entries+ledger save. An empty `entry_ids` records a
+/// report — proof the outcome was applied, so it is never re-imported.
+pub(crate) fn record_materialization(
+    state: &mut AppState,
+    job_id: &str,
+    role: &str,
+    primary_entry_id: Option<u64>,
+    entry_ids: &[u64],
+) {
+    let applied_at_ms = crate::backend::storage::jobs::now_ms().max(0) as u64;
+    let entries = entry_ids
+        .iter()
+        .enumerate()
+        .map(
+            |(ordinal, &entry_id)| crate::backend::materialization::MaterializedEntry {
+                ordinal: ordinal as u32,
+                role: role.to_string(),
+                entry_id,
+            },
+        )
+        .collect();
+    state
+        .materializations
+        .record(crate::backend::materialization::Materialization {
+            job_id: job_id.to_string(),
+            applied_at_ms,
+            primary_entry_id,
+            entries,
+        });
+    // The ledger is the idempotency authority; mark the execution's import state
+    // Applied so the run graph carries the durable "imported" signal too (a remote
+    // execution starts Pending). A no-op when the job is not in this project's graph.
+    state
+        .tasks
+        .runs
+        .set_import_state(job_id, crate::backend::run_attempt::ResultImport::Applied);
+}
+
 pub(crate) fn open_task_panel(state: &mut AppState, task_run_id: u64) {
     state.tasks.open_panel(task_run_id);
     state
@@ -404,5 +535,57 @@ pub(crate) fn bind_active_panel_task(state: &mut AppState, panel: TaskPanelKind)
 pub(crate) fn close_active_task_panel(state: &mut AppState) {
     if let Some(task_run_id) = state.tasks.active_panel {
         close_task_panel(state, task_run_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::run_attempt::Placement;
+    use crate::backend::tasks::task_controller_by_id;
+
+    #[test]
+    fn concurrent_local_jobs_attribute_by_job_id_not_active_run() {
+        // attribution/concurrency: two different-kind local jobs run at once;
+        // each completes its own task through `JobId → RunAttempt → TaskRun`, never
+        // through the ambient active run (which points at the last-launched task —
+        // the condition that would otherwise cross attribution).
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let qm = state
+            .tasks
+            .create_task_run(*task_controller_by_id("qm-energy").unwrap());
+        let optimize = state
+            .tasks
+            .create_task_run(*task_controller_by_id("optimize-geometry").unwrap());
+        state.tasks.mark_status(qm, TaskStatus::Running);
+        state.tasks.mark_status(optimize, TaskStatus::Running);
+
+        let qm_job = state
+            .tasks
+            .runs
+            .begin_execution(qm, Placement::Local, None, 0);
+        let _optimize_job = state
+            .tasks
+            .runs
+            .begin_execution(optimize, Placement::Local, None, 0);
+        state.active_task_run = Some(optimize);
+
+        complete_local_job(&mut state, Some(qm_job), TaskStatus::Completed);
+
+        assert_eq!(
+            state.tasks.task_run(qm).unwrap().status,
+            TaskStatus::Completed,
+            "the QM job completes its own task"
+        );
+        assert_eq!(
+            state.tasks.task_run(optimize).unwrap().status,
+            TaskStatus::Running,
+            "the concurrent optimization task is untouched"
+        );
+        assert_eq!(
+            state.active_task_run,
+            Some(optimize),
+            "the active run was not the completed job, so it is left intact"
+        );
     }
 }

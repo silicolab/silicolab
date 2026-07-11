@@ -147,6 +147,11 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
     state.ui.pending_md_run = None;
     state.jobs.set_engine(job);
     if let Some(task_run_id) = state.active_task_run {
+        begin_local_job(
+            state,
+            crate::frontend::jobs::LocalJobSlot::Engine,
+            task_run_id,
+        );
         mark_task_status(state, task_run_id, TaskStatus::Running);
     }
     state.set_message(format!(

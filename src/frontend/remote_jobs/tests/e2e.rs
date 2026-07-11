@@ -59,6 +59,7 @@ fn submit_and_wait(
         None,
         job_kind.to_string(),
         None,
+        None,
         local_run_dir.clone(),
     );
     let submitted = match submit.receiver.recv().expect("submit worker stays alive") {
@@ -71,7 +72,7 @@ fn submit_and_wait(
     );
 
     let row = RemoteJob {
-        run_uuid: submitted.run_uuid.clone(),
+        job_id: submitted.run_uuid.clone(),
         host_id: submitted.host_id.clone(),
         host_label: submitted.host_label.clone(),
         remote_dir: submitted.remote_dir.clone(),
@@ -80,7 +81,8 @@ fn submit_and_wait(
         cluster: submitted.cluster.clone(),
         engine_id: submitted.engine_id.clone(),
         job_kind: submitted.job_kind.clone(),
-        project_root: submitted.project_root.clone(),
+        project_id: submitted.project_id.clone(),
+        project_root_hint: submitted.project_root.clone(),
         local_run_dir: submitted.local_run_dir.to_string_lossy().to_string(),
         status: RemoteJobStatus::Running,
         submitted_at_ms: 0,

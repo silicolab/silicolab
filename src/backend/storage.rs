@@ -1,7 +1,10 @@
 use std::collections::BTreeMap;
 
 use crate::{
-    backend::{entries::EntryStore, history::History, tasks::TaskManager},
+    backend::{
+        entries::EntryStore, history::History, materialization::MaterializationLedger,
+        tasks::TaskManager,
+    },
     frontend::ViewportVisualState,
 };
 
@@ -9,8 +12,10 @@ mod assistant;
 mod entries;
 mod history;
 pub mod jobs;
+mod materialization;
 mod project;
 mod render_overrides;
+mod run_attempt;
 mod schema;
 mod structure_blob;
 mod tasks;
@@ -20,8 +25,10 @@ mod view_save;
 pub use assistant::*;
 pub(crate) use entries::*;
 pub(crate) use history::*;
+pub(crate) use materialization::*;
 pub use project::*;
 pub(crate) use render_overrides::*;
+pub(crate) use run_attempt::*;
 pub(crate) use schema::*;
 pub(crate) use structure_blob::*;
 pub(crate) use tasks::*;
@@ -29,13 +36,17 @@ pub(crate) use view_load::*;
 pub(crate) use view_save::*;
 
 #[cfg(test)]
+mod materialization_tests;
+#[cfg(test)]
 mod tests;
 
 #[derive(Debug, Clone)]
 pub struct ProjectSnapshot {
     pub name: String,
+    pub project_id: String,
     pub entries: EntryStore,
     pub tasks: TaskManager,
+    pub materializations: MaterializationLedger,
     pub view: ProjectViewSettings,
     pub history: History,
     pub assistant: ProjectAssistantSnapshot,
@@ -50,6 +61,7 @@ pub struct ProjectSnapshotRef<'a> {
     pub name: &'a str,
     pub entries: &'a EntryStore,
     pub tasks: &'a TaskManager,
+    pub materializations: &'a MaterializationLedger,
     pub view: &'a ProjectViewSettings,
     pub history: &'a History,
     pub assistant: &'a ProjectAssistantSnapshot,
@@ -61,6 +73,7 @@ impl ProjectSnapshot {
             name: self.name.as_str(),
             entries: &self.entries,
             tasks: &self.tasks,
+            materializations: &self.materializations,
             view: &self.view,
             history: &self.history,
             assistant: &self.assistant,

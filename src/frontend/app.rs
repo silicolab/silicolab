@@ -652,6 +652,8 @@ impl eframe::App for SilicoLabApp {
         if let Some(menu) = self.macos_menu.as_mut() {
             menu.sync(&self.state, &ctx);
         }
+        dispatcher::flush_dirty_task_runs(&mut self.state);
+        dispatcher::flush_dirty_run_graph(&mut self.state);
         dispatcher::flush_pending_autosave(&mut self.state, &ctx);
         dispatcher::flush_pending_layout_save(&mut self.state, &ctx);
         self.state.record_message_change();

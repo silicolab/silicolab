@@ -75,7 +75,7 @@ pub(crate) fn render_assistant_composer(
                         .truncate()
                         .sense(egui::Sense::click()),
                     );
-                    if label_resp.on_hover_text("Open in Task Monitor").clicked()
+                    if label_resp.on_hover_text("Open in Activity").clicked()
                         && let Some(task_run_id) = job.task_run_id
                     {
                         actions.push(AppAction::OpenTaskPanel(task_run_id));

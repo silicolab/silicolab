@@ -55,6 +55,17 @@ pub(super) fn render_dock_area(
         .into_iter()
         .filter_map(|tab| {
             let label = match tab {
+                // Launching a job never steals focus; instead the Activity tab
+                // shows a running-count badge while it is not the active tab, so
+                // in-flight work is visible without switching to it.
+                DockTab::Static(StaticView::TaskMonitor) => {
+                    let running = state.tasks.running_task_runs().len();
+                    if running > 0 && active != Some(tab) {
+                        format!("{}  ({running})", StaticView::TaskMonitor.label())
+                    } else {
+                        StaticView::TaskMonitor.label().to_string()
+                    }
+                }
                 DockTab::Static(view) => view.label().to_string(),
                 DockTab::Task(id) => state.tasks.task_run(id)?.title.clone(),
             };
@@ -387,7 +398,7 @@ fn render_tab_inner(
     info: &TabInfo,
     pal: &Palette,
 ) -> (egui::Response, bool) {
-    const H_PAD: f32 = 10.0; // chip side padding (matches the old button_padding.x)
+    const H_PAD: f32 = 10.0; // chip side padding (matches egui's button_padding.x)
     const V_PAD: f32 = 5.0;
     const GAP: f32 = 6.0; // title → close glyph
     const CLOSE: f32 = 14.0; // close hit box (square)
@@ -442,7 +453,7 @@ fn render_tab_inner(
 
     let hovered = response.hovered() || close.as_ref().is_some_and(|(_, r)| r.hovered());
 
-    // Chip background, mirroring the old tab-button states (transparent at rest,
+    // Chip background, mirroring standard tab-button states (transparent at rest,
     // a soft wash on hover, a blue tint when active).
     let fill = match (selected, hovered) {
         (true, true) => pal.blue_overlay(74),

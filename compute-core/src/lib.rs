@@ -16,6 +16,7 @@ pub mod domain;
 pub mod engines;
 pub mod hosts;
 pub mod io;
+pub mod job;
 pub mod launch;
 pub mod md;
 pub mod payload;

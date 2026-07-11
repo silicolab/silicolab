@@ -123,6 +123,13 @@ pub(crate) fn start_material_md_build(
         max_duration: Duration::from_secs(60 * 60),
     });
     state.jobs.set_engine(job);
+    if let Some(task_run_id) = state.active_task_run {
+        begin_local_job(
+            state,
+            crate::frontend::jobs::LocalJobSlot::Engine,
+            task_run_id,
+        );
+    }
     state.set_message("Building framework MD system; press Esc to stop".to_string());
     true
 }
@@ -214,6 +221,13 @@ pub(crate) fn start_gromacs_md_build(
         max_duration: Duration::from_secs(60 * 60),
     });
     state.jobs.set_engine(job);
+    if let Some(task_run_id) = state.active_task_run {
+        begin_local_job(
+            state,
+            crate::frontend::jobs::LocalJobSlot::Engine,
+            task_run_id,
+        );
+    }
     state.set_message("GROMACS building MD system; press Esc to stop".to_string());
     true
 }

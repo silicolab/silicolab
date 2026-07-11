@@ -21,7 +21,6 @@ pub struct RunManifest<'a> {
     pub title: &'a str,
     pub status: &'a str,
     pub outcome: &'a str,
-    pub backend: &'a str,
     pub created_at_ms: u64,
     pub finished_at_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -42,7 +41,6 @@ impl<'a> RunManifest<'a> {
             title: &task.title,
             status: task.status.label(),
             outcome: task.outcome.label(),
-            backend: task.backend.label(),
             created_at_ms: task.created_at_ms,
             finished_at_ms: task.finished_at_ms,
             source_entry_id: task.source_entry_id,

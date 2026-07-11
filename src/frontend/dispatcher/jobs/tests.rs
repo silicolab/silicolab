@@ -336,6 +336,179 @@ fn single_point_run_anchors_its_report_to_the_input_entry() {
 }
 
 #[test]
+fn local_qm_completion_materializes_and_attributes_through_the_run_graph() {
+    // QM vertical slice (local placement): a finished local QM run adds its
+    // optimized geometry as an entry, records the outcome in the ledger, and
+    // advances the execution to Succeeded/Applied — all attributed through
+    // JobId → RunAttempt → TaskRun, with no active_task_run involved.
+    use crate::backend::run_attempt::{Placement, ResultImport};
+    use crate::backend::tasks::{TaskStatus, task_controller_by_id};
+    use crate::frontend::jobs::LocalJobSlot;
+    use crate::job::ExecutionState;
+
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let task = state
+        .tasks
+        .create_task_run(*task_controller_by_id("qm-optimize").unwrap());
+    state.tasks.mark_status(task, TaskStatus::Running);
+    let job_id = state
+        .tasks
+        .runs
+        .begin_execution(task, Placement::Local, None, 0);
+    state.jobs.bind_local_execution(LocalJobSlot::Qm, job_id);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(QmWorkerMessage::Finished(Box::new(
+        crate::engines::qm::QmOutcome {
+            energy_hartree: -1.0,
+            converged: true,
+            optimized_structure: Some(crate::domain::Structure::empty()),
+            summary: "energy -1.0 Eh".to_string(),
+            scf_trace: Vec::new(),
+            opt_trace: Vec::new(),
+            frequencies: Vec::new(),
+        },
+    )))
+    .unwrap();
+    drop(tx);
+    state.jobs.qm = Some(RunningQmJob {
+        cancel: crate::wire::JobCancelHandle::from_flag(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        )),
+        receiver: rx,
+        latest_stage: None,
+        cancel_requested: false,
+    });
+
+    let ctx = egui::Context::default();
+    poll_qm_job(&mut state, &ctx);
+
+    let task_run = state.tasks.task_run(task).unwrap();
+    assert_eq!(task_run.status, TaskStatus::Completed);
+    assert!(
+        task_run.result_entry_id.is_some(),
+        "the optimized geometry is recorded as the result entry"
+    );
+    assert!(state.materializations.contains(&job_id.to_string()));
+    let execution = state
+        .tasks
+        .runs
+        .executions()
+        .iter()
+        .find(|execution| execution.job_id == job_id)
+        .unwrap();
+    assert_eq!(execution.execution_state, ExecutionState::Succeeded);
+    assert_eq!(execution.import_state, ResultImport::Applied);
+}
+
+#[test]
+fn channel_lost_without_a_terminal_message_interrupts_the_local_job() {
+    use crate::backend::run_attempt::Placement;
+    use crate::backend::tasks::{TaskStatus, task_controller_by_id};
+    use crate::frontend::jobs::LocalJobSlot;
+
+    // a local worker whose channel drops before sending any terminal event
+    // must finalize as Interrupted — not spin forever as a zombie.
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let task = state
+        .tasks
+        .create_task_run(*task_controller_by_id("qm-energy").unwrap());
+    state.tasks.mark_status(task, TaskStatus::Running);
+    let job_id = state
+        .tasks
+        .runs
+        .begin_execution(task, Placement::Local, None, 0);
+    state.jobs.bind_local_execution(LocalJobSlot::Qm, job_id);
+
+    let (tx, rx) = std::sync::mpsc::channel::<QmWorkerMessage>();
+    drop(tx); // worker gone, no Finished/Failed ever sent
+    state.jobs.qm = Some(RunningQmJob {
+        cancel: crate::wire::JobCancelHandle::from_flag(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        )),
+        receiver: rx,
+        latest_stage: None,
+        cancel_requested: false,
+    });
+
+    let ctx = egui::Context::default();
+    poll_qm_job(&mut state, &ctx);
+
+    assert!(
+        state.jobs.qm.is_none(),
+        "the lost runtime is dropped, not requeued"
+    );
+    assert_eq!(
+        state.tasks.task_run(task).unwrap().status,
+        TaskStatus::Interrupted
+    );
+    assert_eq!(state.jobs.local_execution(LocalJobSlot::Qm), None);
+    let execution = state
+        .tasks
+        .runs
+        .executions()
+        .iter()
+        .find(|execution| execution.job_id == job_id)
+        .unwrap();
+    assert_eq!(
+        execution.execution_state,
+        crate::job::ExecutionState::Interrupted
+    );
+}
+
+#[test]
+fn esc_on_docking_flags_best_effort_but_does_not_claim_cancelling() {
+    use crate::backend::run_attempt::Placement;
+    use crate::backend::tasks::{TaskStatus, task_controller_by_id};
+    use crate::frontend::jobs::{LocalJobSlot, RunningDockingJob};
+
+    // Docking's cancel is Unsupported: Esc sets the best-effort flag, but the
+    // in-flight Vina search cannot stop, so the task must NOT be shown as Cancelling.
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let task = state
+        .tasks
+        .create_task_run(*task_controller_by_id("dock-ligand").unwrap());
+    state.tasks.mark_status(task, TaskStatus::Running);
+    let job_id = state
+        .tasks
+        .runs
+        .begin_execution(task, Placement::Local, None, 0);
+    state
+        .jobs
+        .bind_local_execution(LocalJobSlot::Docking, job_id);
+
+    let (_tx, rx) = std::sync::mpsc::channel();
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    state.jobs.set_docking(RunningDockingJob {
+        cancel: std::sync::Arc::clone(&cancel),
+        receiver: rx,
+    });
+
+    let ctx = egui::Context::default();
+    ctx.input_mut(|input| {
+        input.events.push(egui::Event::Key {
+            key: egui::Key::Escape,
+            physical_key: Some(egui::Key::Escape),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        });
+    });
+    poll_docking_job(&mut state, &ctx);
+
+    assert!(
+        cancel.load(std::sync::atomic::Ordering::Relaxed),
+        "the best-effort flag is still set"
+    );
+    assert_eq!(
+        state.tasks.task_run(task).unwrap().status,
+        TaskStatus::Running,
+        "an Unsupported cancel must not move the task to Cancelling"
+    );
+    assert!(state.jobs.docking.is_some(), "still running, put back");
+}
+
+#[test]
 fn optimization_progress_accumulates_the_energy_trace() {
     use crate::engines::forcefield::OptimizationReport;
     use crate::frontend::jobs::{OptimizationWorkerMessage, RunningOptimization};
