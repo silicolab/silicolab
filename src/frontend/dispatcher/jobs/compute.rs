@@ -1,5 +1,7 @@
 use super::super::*;
 
+use crate::frontend::jobs::LocalJobSlot;
+
 /// Persist a locally-run QM calculation's artifacts into the active task's run
 /// directory, creating it on demand. A no-op when there is no active QM task run
 /// to anchor them to.
@@ -26,7 +28,8 @@ pub(crate) fn poll_engine_job(state: &mut AppState, ctx: &egui::Context) {
     let Some(mut running) = state.jobs.take_engine() else {
         return;
     };
-    let task_run_id = state.active_task_run;
+    let job_id = state.jobs.local_execution(LocalJobSlot::Engine);
+    let task_run_id = job_id.and_then(|id| state.tasks.runs.task_run_id_for_job(&id.to_string()));
     let mut before = state.optimization_origin.take();
     let fingerprint_before = state.entries_fingerprint();
 
@@ -41,13 +44,6 @@ pub(crate) fn poll_engine_job(state: &mut AppState, ctx: &egui::Context) {
     let mut saw_progress = false;
     let mut commit_history = false;
     let engine_name = running.engine;
-    // The same engine-job machinery backs both "build the MD system" and "run
-    // MD"; the job_kind says which task to mark done on completion.
-    let task_kind = if running.job_kind == "build-md" {
-        TaskKind::BuildMdSystem
-    } else {
-        TaskKind::RunMd
-    };
 
     while let Ok(message) = running.receiver.try_recv() {
         match message {
@@ -71,15 +67,27 @@ pub(crate) fn poll_engine_job(state: &mut AppState, ctx: &egui::Context) {
                 if is_md_run {
                     set_md_run_origin(state, entry_id, trajectory);
                 }
+                if let Some(job_id) = &job_id {
+                    let role = if is_md_run { "md" } else { "structure" };
+                    record_materialization(
+                        state,
+                        &job_id.to_string(),
+                        role,
+                        Some(entry_id),
+                        &[entry_id],
+                    );
+                }
                 state.set_message(success.summary);
                 saw_progress = false;
                 commit_history = false;
-                complete_active_task(state, task_kind, TaskStatus::Completed);
+                complete_local_job(state, job_id, TaskStatus::Completed);
+                state.jobs.take_local_execution(LocalJobSlot::Engine);
                 finished = true;
             }
             EngineWorkerMessage::Failed(error) => {
                 state.set_message(format!("{engine_name} failed: {error}"));
-                complete_active_task(state, task_kind, TaskStatus::Failed);
+                complete_local_job(state, job_id, TaskStatus::Failed);
+                state.jobs.take_local_execution(LocalJobSlot::Engine);
                 finished = true;
             }
         }
@@ -110,6 +118,7 @@ pub(crate) fn poll_optimization_job(state: &mut AppState, ctx: &egui::Context) {
     let Some(mut running) = state.jobs.take_optimizer() else {
         return;
     };
+    let job_id = state.jobs.local_execution(LocalJobSlot::Optimizer);
     let mut before = state.optimization_origin.take();
     let fingerprint_before = state.entries_fingerprint();
 
@@ -158,18 +167,14 @@ pub(crate) fn poll_optimization_job(state: &mut AppState, ctx: &egui::Context) {
                 commit_history = true;
                 state.set_source_path(None);
                 state.set_message(optimization_finished_message(report));
-                complete_active_task(state, TaskKind::OptimizeGeometry, TaskStatus::Completed);
-                complete_active_task(
-                    state,
-                    TaskKind::OptimizeCrystalGeometry,
-                    TaskStatus::Completed,
-                );
+                complete_local_job(state, job_id, TaskStatus::Completed);
+                state.jobs.take_local_execution(LocalJobSlot::Optimizer);
                 finished = true;
             }
             OptimizationWorkerMessage::Failed(error) => {
                 state.set_message(format!("forcefield optimization failed: {error}"));
-                complete_active_task(state, TaskKind::OptimizeGeometry, TaskStatus::Failed);
-                complete_active_task(state, TaskKind::OptimizeCrystalGeometry, TaskStatus::Failed);
+                complete_local_job(state, job_id, TaskStatus::Failed);
+                state.jobs.take_local_execution(LocalJobSlot::Optimizer);
                 finished = true;
             }
         }
@@ -200,7 +205,8 @@ pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
     let Some(mut running) = state.jobs.take_qm() else {
         return;
     };
-    let task_run_id = state.active_task_run;
+    let job_id = state.jobs.local_execution(LocalJobSlot::Qm);
+    let task_run_id = job_id.and_then(|id| state.tasks.runs.task_run_id_for_job(&id.to_string()));
     let fingerprint_before = state.entries_fingerprint();
 
     if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
@@ -223,7 +229,8 @@ pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
             QmWorkerMessage::Finished(outcome) => {
                 if running.cancel_requested {
                     state.set_message("QM calculation cancelled".to_string());
-                    complete_active_qm_task(state, TaskStatus::Cancelled);
+                    complete_local_job(state, job_id, TaskStatus::Cancelled);
+                    state.jobs.take_local_execution(LocalJobSlot::Qm);
                     finished = true;
                     continue;
                 }
@@ -237,15 +244,32 @@ pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
                 save_qm_run_artifacts(state, &outcome);
                 // A QM run is a heavy calculation; its optimized geometry is
                 // surfaced as a new entry (the original structure is preserved),
-                // matching the convention for entry-producing tasks.
-                if let Some(optimized) = outcome.optimized_structure {
-                    let save_path = structure_io::default_structure_save_path(&optimized, None);
-                    let entry_id = add_and_show_entry(state, optimized, None, save_path);
-                    if let Some(task_run_id) = task_run_id {
-                        record_task_result_entry(state, task_run_id, entry_id);
+                // matching the convention for entry-producing tasks. A single-point
+                // energy or frequency run produces no entry but still records a
+                // report in the ledger, so its outcome is durably marked applied.
+                let already =
+                    job_id.is_some_and(|id| outcome_already_materialized(state, &id.to_string()));
+                if !already {
+                    if let Some(optimized) = outcome.optimized_structure {
+                        let save_path = structure_io::default_structure_save_path(&optimized, None);
+                        let entry_id = add_and_show_entry(state, optimized, None, save_path);
+                        if let Some(task_run_id) = task_run_id {
+                            record_task_result_entry(state, task_run_id, entry_id);
+                        }
+                        set_qm_run_origin(state, entry_id);
+                        changed = true;
+                        if let Some(job_id) = &job_id {
+                            record_materialization(
+                                state,
+                                &job_id.to_string(),
+                                "optimized",
+                                Some(entry_id),
+                                &[entry_id],
+                            );
+                        }
+                    } else if let Some(job_id) = &job_id {
+                        record_materialization(state, &job_id.to_string(), "report", None, &[]);
                     }
-                    set_qm_run_origin(state, entry_id);
-                    changed = true;
                 }
                 // The run just became the newest QM result of whichever entry it
                 // anchors to — the new geometry, or the input structure when there
@@ -261,17 +285,19 @@ pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
                         " (not converged)"
                     }
                 ));
-                complete_active_qm_task(state, TaskStatus::Completed);
+                complete_local_job(state, job_id, TaskStatus::Completed);
+                state.jobs.take_local_execution(LocalJobSlot::Qm);
                 finished = true;
             }
             QmWorkerMessage::Failed(error) => {
                 if running.cancel_requested {
                     state.set_message("QM calculation cancelled".to_string());
-                    complete_active_qm_task(state, TaskStatus::Cancelled);
+                    complete_local_job(state, job_id, TaskStatus::Cancelled);
                 } else {
                     state.set_message(format!("QM calculation failed: {error}"));
-                    complete_active_qm_task(state, TaskStatus::Failed);
+                    complete_local_job(state, job_id, TaskStatus::Failed);
                 }
+                state.jobs.take_local_execution(LocalJobSlot::Qm);
                 finished = true;
             }
         }

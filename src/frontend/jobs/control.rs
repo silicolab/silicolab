@@ -525,7 +525,7 @@ fn running_qm_jobs(state: &AppState) -> Vec<LiveJobSnapshot> {
 
 pub fn remote_job_snapshot(row: &registry::RemoteJob) -> LiveJobSnapshot {
     LiveJobSnapshot {
-        id: JobControlId::Remote(row.run_uuid.clone()),
+        id: JobControlId::Remote(row.job_id.clone()),
         backend: JobBackend::RemoteRegistry,
         kind: JobKind::RemoteEngine,
         status: remote_status(row.status),
@@ -544,7 +544,7 @@ pub fn remote_job_snapshot(row: &registry::RemoteJob) -> LiveJobSnapshot {
             (None, None) => None,
         },
         task_run_id: None,
-        run_uuid: Some(row.run_uuid.clone()),
+        run_uuid: Some(row.job_id.clone()),
         host_label: Some(row.host_label.clone()),
     }
 }
@@ -573,7 +573,7 @@ fn cancel_remote_controlled_job(
     {
         return Ok(CancelOutcome::Requested {
             id: JobControlId::Remote(run_uuid.to_string()),
-            task_run_id: state.tasks.task_run_by_uuid(run_uuid).map(|task| task.id),
+            task_run_id: state.tasks.runs.task_run_id_for_job(run_uuid),
         });
     }
     let conn = registry::open()?;
@@ -588,7 +588,7 @@ fn cancel_remote_controlled_job(
             reason: format!("remote job is already {}", row.status.token()),
         });
     }
-    let id = JobControlId::Remote(row.run_uuid.clone());
+    let id = JobControlId::Remote(row.job_id.clone());
     let Some(host) = state.config.remote_hosts.get(&row.host_id).cloned() else {
         return Ok(CancelOutcome::NotCancellable {
             id,
@@ -603,7 +603,7 @@ fn cancel_remote_controlled_job(
     }
     registry::record_observation(
         &conn,
-        &row.run_uuid,
+        &row.job_id,
         registry::RemoteObservationUpdate {
             status: registry::RemoteJobStatus::Cancelling,
             exit_code: row.exit_code,
@@ -614,11 +614,8 @@ fn cancel_remote_controlled_job(
             polled_at_ms: registry::now_ms(),
         },
     )?;
-    sync_remote_job_ui_row(state, &row.run_uuid, registry::RemoteJobStatus::Cancelling);
-    let task_run_id = state
-        .tasks
-        .task_run_by_uuid(&row.run_uuid)
-        .map(|task| task.id);
+    sync_remote_job_ui_row(state, &row.job_id, registry::RemoteJobStatus::Cancelling);
+    let task_run_id = state.tasks.runs.task_run_id_for_job(&row.job_id);
     if let Some(task_run_id) = task_run_id {
         mark_task_cancelling(state, task_run_id);
     }
@@ -627,7 +624,7 @@ fn cancel_remote_controlled_job(
         host,
     ));
     Ok(CancelOutcome::Requested {
-        id: JobControlId::Remote(row.run_uuid),
+        id: JobControlId::Remote(row.job_id),
         task_run_id,
     })
 }
@@ -649,7 +646,7 @@ fn sync_remote_job_ui_row(state: &mut AppState, run_uuid: &str, status: registry
         .ui
         .remote_jobs
         .iter_mut()
-        .find(|row| row.run_uuid == run_uuid)
+        .find(|row| row.job_id == run_uuid)
     {
         row.status = status;
         row.last_polled_at_ms = Some(registry::now_ms());

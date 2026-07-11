@@ -50,8 +50,10 @@ fn structure_roundtrips_through_project_databases() {
     entries.add_entry(structure, None, PathBuf::from("ethene.cif"));
     let snapshot = ProjectSnapshot {
         name: "Test".to_string(),
+        project_id: String::new(),
         entries,
         tasks: TaskManager::default(),
+        materializations: Default::default(),
         view: ProjectViewSettings::default(),
         history: History::default(),
         assistant: ProjectAssistantSnapshot::default(),
@@ -93,8 +95,10 @@ fn entry_origin_roundtrips_through_project_databases() {
     );
     let snapshot = ProjectSnapshot {
         name: "Origin".to_string(),
+        project_id: String::new(),
         entries,
         tasks: TaskManager::default(),
+        materializations: Default::default(),
         view: ProjectViewSettings::default(),
         history: History::default(),
         assistant: ProjectAssistantSnapshot::default(),
@@ -136,8 +140,10 @@ END
     entries.add_entry(structure, None, PathBuf::from("protein.pdb"));
     let snapshot = ProjectSnapshot {
         name: "Protein".to_string(),
+        project_id: String::new(),
         entries,
         tasks: TaskManager::default(),
+        materializations: Default::default(),
         view: ProjectViewSettings::default(),
         history: History::default(),
         assistant: ProjectAssistantSnapshot::default(),
@@ -176,7 +182,7 @@ fn compounds_schema_stores_geometry_as_a_single_blob() {
         .unwrap();
 
     // Geometry now lives in a single blob column with a revision for
-    // incremental saves; the old normalized per-atom tables are gone.
+    // incremental saves; there are no separate per-atom tables.
     for column in ["payload", "uncompressed_len", "revision", "format"] {
         assert!(
             column_names.iter().any(|name| name == column),
@@ -248,8 +254,10 @@ fn project_view_settings_roundtrip_surface_overrides() {
         &session,
         &ProjectSnapshot {
             name: "View".to_string(),
+            project_id: String::new(),
             entries: EntryStore::new_empty(),
             tasks: TaskManager::default(),
+            materializations: Default::default(),
             view,
             history: History::default(),
             assistant: ProjectAssistantSnapshot::default(),
@@ -327,8 +335,10 @@ fn entry_view_settings_roundtrip_without_leaking_to_other_entries() {
         &session,
         &ProjectSnapshot {
             name: "EntryView".to_string(),
+            project_id: String::new(),
             entries,
             tasks: TaskManager::default(),
+            materializations: Default::default(),
             view,
             history: History::default(),
             assistant: ProjectAssistantSnapshot::default(),
@@ -380,8 +390,10 @@ fn entries_without_open_tabs_are_loaded_lazily() {
         &session,
         &ProjectSnapshot {
             name: "Lazy".to_string(),
+            project_id: String::new(),
             entries,
             tasks: TaskManager::default(),
+            materializations: Default::default(),
             view: ProjectViewSettings::default(),
             history: History::default(),
             assistant: ProjectAssistantSnapshot::default(),
@@ -417,8 +429,10 @@ fn unchanged_compounds_are_not_rewritten() {
     entries.add_entry(carbon("mol"), None, PathBuf::from("a.xyz"));
     let snapshot = ProjectSnapshot {
         name: "Inc".to_string(),
+        project_id: String::new(),
         entries,
         tasks: TaskManager::default(),
+        materializations: Default::default(),
         view: ProjectViewSettings::default(),
         history: History::default(),
         assistant: ProjectAssistantSnapshot::default(),
@@ -469,8 +483,10 @@ fn undo_history_survives_save_and_load() {
         &session,
         &ProjectSnapshot {
             name: "Undo".to_string(),
+            project_id: String::new(),
             entries,
             tasks: TaskManager::default(),
+            materializations: Default::default(),
             view: ProjectViewSettings::default(),
             history,
             assistant: ProjectAssistantSnapshot::default(),
@@ -552,8 +568,10 @@ fn assistant_history_survives_save_and_load() {
         &session,
         &ProjectSnapshot {
             name: "Assistant".to_string(),
+            project_id: String::new(),
             entries: EntryStore::new_empty(),
             tasks: TaskManager::default(),
+            materializations: Default::default(),
             view: ProjectViewSettings::default(),
             history: History::default(),
             assistant: assistant.clone(),
@@ -594,8 +612,10 @@ fn corrupt_assistant_state_warns_but_project_loads() {
         &session,
         &ProjectSnapshot {
             name: "CorruptAssistant".to_string(),
+            project_id: String::new(),
             entries: EntryStore::new_empty(),
             tasks: TaskManager::default(),
+            materializations: Default::default(),
             view: ProjectViewSettings::default(),
             history: History::default(),
             assistant: ProjectAssistantSnapshot {

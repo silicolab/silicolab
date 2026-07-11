@@ -8,8 +8,14 @@ use crate::{
     domain::Structure,
 };
 
-pub(crate) fn load_compound_revisions(db: &Connection) -> Result<HashMap<i64, i64>> {
-    let mut statement = db.prepare("select id, revision from compounds")?;
+/// `compounds_table` is the qualified table name: `"compounds"` on a connection
+/// whose main database is `compounds.db`, or `"compounds.compounds"` when it is
+/// ATTACHed alongside `project.db` for an atomic multi-database save.
+pub(crate) fn load_compound_revisions(
+    db: &Connection,
+    compounds_table: &str,
+) -> Result<HashMap<i64, i64>> {
+    let mut statement = db.prepare(&format!("select id, revision from {compounds_table}"))?;
     let rows = statement.query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?;
     let mut map = HashMap::new();
     for row in rows {
@@ -21,6 +27,7 @@ pub(crate) fn load_compound_revisions(db: &Connection) -> Result<HashMap<i64, i6
 
 pub(crate) fn save_structure(
     db: &Connection,
+    compounds_table: &str,
     compound_id: i64,
     revision: i64,
     structure: &Structure,
@@ -34,7 +41,9 @@ pub(crate) fn save_structure(
         "structure"
     };
     db.execute(
-        "insert or replace into compounds (id, title, kind, atom_count, bond_count, revision, format, payload, uncompressed_len) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+        &format!(
+            "insert or replace into {compounds_table} (id, title, kind, atom_count, bond_count, revision, format, payload, uncompressed_len) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)"
+        ),
         params![
             compound_id,
             structure.title,

@@ -1,9 +1,39 @@
 use std::path::PathBuf;
 
 use anyhow::Result;
-use rusqlite::Connection;
+use rusqlite::{Connection, params};
 
 use crate::backend::tasks::{TaskManager, TaskRun, TaskStatus, task_controller_by_id};
+
+/// Write specific task rows to `project.db` without rewriting the whole table —
+/// the narrow persist that lets a status change reach disk immediately. Keyed by
+/// `id`, so it inserts a new row or replaces an existing one.
+pub(crate) fn upsert_task_runs(conn: &Connection, tasks: &[&TaskRun]) -> Result<()> {
+    for task in tasks {
+        conn.execute(
+            "insert or replace into task_runs (
+                id, run_uuid, controller_id, status, run_dir,
+                source_entry_id, result_entry_id, engine_label,
+                created_at_ms, finished_at_ms
+            ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                task.id as i64,
+                task.run_uuid,
+                task.controller_id,
+                task_status_token(task.status),
+                task.run_dir
+                    .as_ref()
+                    .map(|dir| dir.to_string_lossy().to_string()),
+                task.source_entry_id.map(|value| value as i64),
+                task.result_entry_id.map(|value| value as i64),
+                task.engine_label.as_deref(),
+                task.created_at_ms as i64,
+                task.finished_at_ms.map(|value| value as i64),
+            ],
+        )?;
+    }
+    Ok(())
+}
 
 pub(crate) fn load_tasks(db: &Connection) -> Result<TaskManager> {
     let mut manager = TaskManager::default();
@@ -80,6 +110,7 @@ pub(crate) fn task_status_token(status: TaskStatus) -> &'static str {
         TaskStatus::Completed => "completed",
         TaskStatus::Failed => "failed",
         TaskStatus::Cancelled => "cancelled",
+        TaskStatus::Interrupted => "interrupted",
     }
 }
 
@@ -91,6 +122,37 @@ fn parse_task_status(token: &str) -> TaskStatus {
         "completed" => TaskStatus::Completed,
         "failed" => TaskStatus::Failed,
         "cancelled" => TaskStatus::Cancelled,
+        "interrupted" => TaskStatus::Interrupted,
         _ => TaskStatus::Ready,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::backend::storage::create_project_schema;
+    use crate::backend::tasks::TaskRun;
+
+    #[test]
+    fn interrupted_status_round_trips_through_upsert_and_load() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_project_schema(&conn).unwrap();
+        let controller = task_controller_by_id("qm-energy").copied().unwrap();
+
+        let mut run = TaskRun::from_controller(7, controller);
+        run.status = TaskStatus::Running;
+        upsert_task_runs(&conn, &[&run]).unwrap();
+        assert_eq!(
+            load_tasks(&conn).unwrap().task_run(7).unwrap().status,
+            TaskStatus::Running
+        );
+
+        // The narrow persist overwrites the single row in place.
+        run.status = TaskStatus::Interrupted;
+        upsert_task_runs(&conn, &[&run]).unwrap();
+        let loaded = load_tasks(&conn).unwrap();
+        let task = loaded.task_run(7).unwrap();
+        assert_eq!(task.status, TaskStatus::Interrupted);
+        assert_eq!(task.controller_id, "qm-energy");
     }
 }

@@ -6,11 +6,11 @@ use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
 
 use crate::{
-    backend::project::{PROJECT_FORMAT_VERSION, ProjectSession},
+    backend::project::{PROJECT_FORMAT_VERSION, ProjectId, ProjectSession},
     domain::Structure,
 };
 
-pub fn initialize_project_databases(session: &ProjectSession) -> Result<()> {
+pub fn initialize_project_databases(session: &ProjectSession) -> Result<ProjectId> {
     std::fs::create_dir_all(&session.silicolab_dir)
         .with_context(|| format!("failed to create {}", session.silicolab_dir.display()))?;
     let project_db = Connection::open(&session.project_db)
@@ -27,7 +27,20 @@ pub fn initialize_project_databases(session: &ProjectSession) -> Result<()> {
         "insert or replace into project_meta (key, value) values ('format_version', ?1)",
         params![PROJECT_FORMAT_VERSION.to_string()],
     )?;
-    Ok(())
+    ensure_project_id(&project_db)
+}
+
+/// Mint the stable project id once, then return the persisted value. `insert or
+/// ignore` makes a re-init on an existing project keep its original id rather than
+/// overwrite it.
+fn ensure_project_id(db: &Connection) -> Result<ProjectId> {
+    db.execute(
+        "insert or ignore into project_meta (key, value) values ('project_id', ?1)",
+        params![ProjectId::new().as_str()],
+    )?;
+    let stored =
+        project_meta(db, "project_id")?.context("project_id missing immediately after insert")?;
+    Ok(ProjectId::from_stored(stored))
 }
 
 pub fn load_project_snapshot(session: &ProjectSession) -> Result<ProjectSnapshot> {
@@ -39,8 +52,13 @@ pub fn load_project_snapshot(session: &ProjectSession) -> Result<ProjectSnapshot
     create_compounds_schema(&compounds_db)?;
 
     let name = project_meta(&project_db, "name")?.unwrap_or_else(|| session.name.clone());
+    // A project created before ids existed self-heals: mint and persist one on
+    // first open so the id is stable from here on.
+    let project_id = ensure_project_id(&project_db)?.as_str().to_string();
     let entries = load_entries(&project_db, &compounds_db)?;
-    let tasks = load_tasks(&project_db)?;
+    let mut tasks = load_tasks(&project_db)?;
+    tasks.runs = load_run_graph(&project_db)?;
+    let materializations = load_materializations(&project_db)?;
     let view = load_project_view_settings(&project_db)?;
     let mut history = load_history(&project_db)?;
     history.set_active_entry(entries.active_entry_id());
@@ -54,8 +72,10 @@ pub fn load_project_snapshot(session: &ProjectSession) -> Result<ProjectSnapshot
 
     Ok(ProjectSnapshot {
         name,
+        project_id,
         entries,
         tasks,
+        materializations,
         view,
         history,
         assistant,
@@ -98,39 +118,75 @@ pub fn save_project_snapshot_ref(
     snapshot: &ProjectSnapshotRef<'_>,
     persist_history: bool,
 ) -> Result<()> {
+    // Entry rows, compound geometry, task rows, and the materialization ledger all
+    // commit in ONE transaction spanning both project databases, so a crash can
+    // never leave geometry written without its ledger (or vice versa). ATTACH plus
+    // rollback-journal is what makes that multi-database commit atomic — the project
+    // databases must therefore never be switched to WAL. `foreign_keys` is enabled
+    // for the ledger's referential integrity; both PRAGMA and ATTACH must run before
+    // the transaction begins.
+    {
+        // The compounds schema is create-if-missing on its own connection so the
+        // table is present before ATTACH (which cannot run inside a transaction).
+        let compounds_db = Connection::open(&session.compounds_db)
+            .with_context(|| format!("failed to open {}", session.compounds_db.display()))?;
+        create_compounds_schema(&compounds_db)?;
+    }
     let mut project_db = Connection::open(&session.project_db)
         .with_context(|| format!("failed to open {}", session.project_db.display()))?;
-    let mut compounds_db = Connection::open(&session.compounds_db)
-        .with_context(|| format!("failed to open {}", session.compounds_db.display()))?;
     create_project_schema(&project_db)?;
-    create_compounds_schema(&compounds_db)?;
+    project_db.pragma_update(None, "foreign_keys", true)?;
+    project_db.execute(
+        "attach database ?1 as compounds",
+        params![path_to_string(&session.compounds_db)],
+    )?;
 
-    let project_tx = project_db.transaction()?;
-    project_tx.execute("delete from project_meta", [])?;
-    project_tx.execute(
+    let tx = project_db.transaction()?;
+    write_project_snapshot_tx(&tx, snapshot, persist_history)?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// The full-project write, inside the shared multi-database transaction. Every
+/// small metadata table is rewritten; compound geometry is written incrementally
+/// (only changed revisions). Geometry lives in the ATTACHed `compounds.compounds`.
+fn write_project_snapshot_tx(
+    tx: &Connection,
+    snapshot: &ProjectSnapshotRef<'_>,
+    persist_history: bool,
+) -> Result<()> {
+    const COMPOUNDS: &str = "compounds.compounds";
+
+    // Preserve the minted project id across the meta rewrite; every other key is
+    // reinserted below.
+    tx.execute("delete from project_meta where key != 'project_id'", [])?;
+    tx.execute(
         "insert into project_meta (key, value) values ('name', ?1)",
         params![snapshot.name],
     )?;
-    project_tx.execute(
+    tx.execute(
         "insert into project_meta (key, value) values ('format_version', ?1)",
         params![PROJECT_FORMAT_VERSION.to_string()],
     )?;
 
-    project_tx.execute("delete from groups", [])?;
+    tx.execute("delete from groups", [])?;
     for (index, group) in snapshot.entries.groups.iter().enumerate() {
-        project_tx.execute(
+        tx.execute(
             "insert into groups (id, name, sort_order) values (?1, ?2, ?3)",
             params![group.id, group.name, index as i64],
         )?;
     }
 
-    project_tx.execute("delete from entries", [])?;
-    let compound_tx = compounds_db.transaction()?;
-    let stored_revisions = load_compound_revisions(&compound_tx)?;
+    // Deleting entries first cascades ledger association rows and nulls dangling
+    // `primary_entry_id`s (foreign keys are on); the ledger is rebuilt at the end.
+    tx.execute("delete from entries", [])?;
+    let stored_revisions = load_compound_revisions(tx, COMPOUNDS)?;
     let mut referenced_compounds = HashSet::new();
+    let mut live_entry_ids = HashSet::new();
     for entry in &snapshot.entries.records {
         let compound_id = entry.compound_id.unwrap_or(entry.id as i64);
         referenced_compounds.insert(compound_id);
+        live_entry_ids.insert(entry.id);
         // Only re-encode a compound when its geometry actually changed. Unloaded
         // entries keep their (unchanged) revision, so they are always skipped and
         // never overwritten with their placeholder structure.
@@ -140,13 +196,14 @@ pub fn save_project_snapshot_ref(
                 .is_none_or(|stored| *stored != entry.revision as i64);
         if needs_write {
             save_structure(
-                &compound_tx,
+                tx,
+                COMPOUNDS,
                 compound_id,
                 entry.revision as i64,
                 &entry.structure,
             )?;
         }
-        project_tx.execute(
+        tx.execute(
             "insert into entries (id, name, group_id, compound_id, source_path, save_path, revision, origin_kind, origin_trajectory) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
             params![
                 entry.id as i64,
@@ -164,25 +221,28 @@ pub fn save_project_snapshot_ref(
     // Drop geometry for entries that no longer exist.
     for stored_id in stored_revisions.keys() {
         if !referenced_compounds.contains(stored_id) {
-            compound_tx.execute("delete from compounds where id = ?1", params![stored_id])?;
+            tx.execute(
+                &format!("delete from {COMPOUNDS} where id = ?1"),
+                params![stored_id],
+            )?;
         }
     }
 
-    project_tx.execute("delete from tabs", [])?;
+    tx.execute("delete from tabs", [])?;
     for (index, tab) in snapshot.entries.tabs.iter().enumerate() {
-        project_tx.execute(
+        tx.execute(
             "insert into tabs (position, entry_id) values (?1, ?2)",
             params![index as i64, tab.entry_id as i64],
         )?;
     }
-    project_tx.execute(
+    tx.execute(
         "insert into project_meta (key, value) values ('active_tab', ?1)",
         params![snapshot.entries.active_tab.to_string()],
     )?;
 
-    project_tx.execute("delete from task_runs", [])?;
+    tx.execute("delete from task_runs", [])?;
     for task in &snapshot.tasks.tasks {
-        project_tx.execute(
+        tx.execute(
             "insert into task_runs (
                 id,
                 run_uuid,
@@ -209,15 +269,17 @@ pub fn save_project_snapshot_ref(
             ],
         )?;
     }
-    save_project_view_settings(&project_tx, snapshot.view)?;
-    save_assistant_state(&project_tx, snapshot.assistant)?;
+    write_run_graph(tx, &snapshot.tasks.runs)?;
+    save_project_view_settings(tx, snapshot.view)?;
+    save_assistant_state(tx, snapshot.assistant)?;
 
     if persist_history {
-        save_history(&project_tx, snapshot.history)?;
+        save_history(tx, snapshot.history)?;
     }
 
-    compound_tx.commit()?;
-    project_tx.commit()?;
+    // The ledger is written last, in the same transaction as the entries it
+    // records, and reconciled against the entry ids that survived this save.
+    write_materializations(tx, snapshot.materializations, &live_entry_ids)?;
     Ok(())
 }
 

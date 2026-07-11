@@ -43,6 +43,7 @@ fn task_status_badge(pal: &crate::frontend::theme::Palette, status: TaskStatus) 
         TaskStatus::Completed => pal.status_green,
         TaskStatus::Failed => pal.status_red,
         TaskStatus::Cancelled => pal.status_amber,
+        TaskStatus::Interrupted => pal.status_red,
     };
 
     RichText::new(status.label()).strong().color(color)

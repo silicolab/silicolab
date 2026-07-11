@@ -17,6 +17,33 @@ pub const PROJECT_DB: &str = "project.db";
 pub const COMPOUNDS_DB: &str = "compounds.db";
 pub const PROJECT_FORMAT_VERSION: u32 = 1;
 
+/// Stable, path-independent project identity, minted once at creation and stored
+/// in `project_meta`. Moving the project directory keeps it; an in-app Save As
+/// mints a fresh one. Detached remote jobs are re-associated to their owner by
+/// this id, not by a filesystem path.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ProjectId(String);
+
+impl Default for ProjectId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProjectId {
+    pub fn new() -> Self {
+        Self(uuid::Uuid::new_v4().to_string())
+    }
+
+    pub fn from_stored(value: String) -> Self {
+        Self(value)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ProjectSession {
     pub root: PathBuf,
@@ -24,6 +51,9 @@ pub struct ProjectSession {
     pub project_db: PathBuf,
     pub compounds_db: PathBuf,
     pub name: String,
+    /// Populated once the project is created or opened (its id read from
+    /// `project_meta`); `None` for a session built by path alone before that read.
+    pub project_id: Option<ProjectId>,
 }
 
 impl ProjectSession {
@@ -35,6 +65,7 @@ impl ProjectSession {
             silicolab_dir,
             root,
             name,
+            project_id: None,
         }
     }
 }
@@ -77,8 +108,8 @@ pub fn create_project(root: &Path, name: &str) -> Result<ProjectSession> {
     let project_root = root.join(trimmed);
     std::fs::create_dir_all(project_root.join(SILICOLAB_DIR))
         .with_context(|| format!("failed to create {}", project_root.display()))?;
-    let session = ProjectSession::from_root(project_root, trimmed.to_string());
-    initialize_project_databases(&session)?;
+    let mut session = ProjectSession::from_root(project_root, trimmed.to_string());
+    session.project_id = Some(initialize_project_databases(&session)?);
     crate::backend::housekeeping::write_manifest(&session)?;
     Ok(session)
 }
@@ -98,6 +129,7 @@ pub fn open_project(path: &Path) -> Result<(ProjectSession, ProjectSnapshot)> {
     crate::backend::housekeeping::check_manifest_compatibility(&session)?;
     let snapshot = load_project_snapshot(&session)?;
     session.name = snapshot.name.clone();
+    session.project_id = Some(ProjectId::from_stored(snapshot.project_id.clone()));
     Ok((session, snapshot))
 }
 

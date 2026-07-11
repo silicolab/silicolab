@@ -207,6 +207,11 @@ pub(crate) fn start_pending_optimization(state: &mut AppState) {
             state.ui.pending_optimization = None;
             state.jobs.set_optimizer(job);
             if let Some(task_run_id) = state.active_task_run {
+                begin_local_job(
+                    state,
+                    crate::frontend::jobs::LocalJobSlot::Optimizer,
+                    task_run_id,
+                );
                 state.tasks.mark_status(task_run_id, TaskStatus::Running);
             }
             state.set_message("forcefield optimization running; press Esc to stop".to_string());

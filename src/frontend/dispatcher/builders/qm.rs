@@ -132,6 +132,7 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
             };
             state.jobs.set_qm(running);
             if let Some(task_run_id) = state.active_task_run {
+                begin_local_job(state, crate::frontend::jobs::LocalJobSlot::Qm, task_run_id);
                 state.tasks.mark_status(task_run_id, TaskStatus::Running);
             }
             state.set_message("QM calculation running; press Esc to stop".to_string());

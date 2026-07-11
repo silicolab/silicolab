@@ -72,6 +72,50 @@ pub(crate) fn create_project_schema(db: &Connection) -> Result<()> {
             uncompressed_len integer not null,
             updated_at_ms integer not null
         );
+        create table if not exists run_attempts (
+            run_attempt_id  integer primary key,
+            task_run_id     integer not null,
+            attempt_no      integer not null,
+            run_name        text,
+            run_dir         text,
+            execution_state text,
+            import_state    text,
+            created_at_ms   integer not null default 0,
+            finished_at_ms  integer,
+            unique (task_run_id, attempt_no)
+        );
+        create table if not exists job_executions (
+            job_id            text primary key,
+            run_attempt_id    integer not null references run_attempts(run_attempt_id),
+            ordinal           integer not null,
+            stage             text,
+            placement         text not null,
+            placement_host    text,
+            job_kind          text,
+            required          integer not null default 1,
+            execution_state   text not null,
+            observation_state text,
+            cancel_capability text,
+            import_state      text not null default 'not_required',
+            exit_code         integer,
+            error             text,
+            created_at_ms     integer not null default 0,
+            finished_at_ms    integer,
+            unique (run_attempt_id, ordinal)
+        );
+        create table if not exists job_materializations (
+            job_id            text primary key,
+            applied_at_ms     integer not null,
+            primary_entry_id  integer references entries(id) on delete set null
+        );
+        create table if not exists job_materialization_entries (
+            job_id    text    not null,
+            ordinal   integer not null,
+            role      text    not null,
+            entry_id  integer not null references entries(id) on delete cascade,
+            primary key (job_id, ordinal),
+            foreign key (job_id) references job_materializations(job_id) on delete restrict
+        );
         ",
     )?;
     ensure_task_run_columns(db)?;

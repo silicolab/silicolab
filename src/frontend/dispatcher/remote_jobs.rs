@@ -64,17 +64,30 @@ pub(crate) fn start_remote_engine(
             return;
         }
     };
-    let project_root = state
-        .workspace
-        .project()
-        .map(|project| project.root.to_string_lossy().to_string());
+    let project = state.workspace.project();
+    let project_root = project.map(|project| project.root.to_string_lossy().to_string());
+    let project_id = project
+        .and_then(|project| project.project_id.as_ref())
+        .map(|id| id.as_str().to_string());
+    // The registry row is keyed by this job execution's minted JobId — the durable
+    // identity the reverse bridges resolve back to a task through the run graph, no
+    // longer the task's `run_uuid`.
+    let job_id = begin_job_execution(
+        state,
+        task_run_id,
+        crate::backend::run_attempt::Placement::Remote {
+            host: Some(host.label.clone()),
+        },
+        Some(task.controller_id.to_string()),
+    );
     let handle = crate::frontend::remote_jobs::spawn_remote_submit(
         host.clone(),
         engine,
         resources,
-        task.run_uuid.clone(),
+        job_id.to_string(),
         Some(task_run_id),
         task.controller_id.to_string(),
+        project_id,
         project_root,
         local_run_dir,
     );
@@ -122,6 +135,7 @@ pub(crate) fn poll_remote_submit(state: &mut AppState, ctx: &egui::Context) {
                 cluster,
                 engine_id,
                 job_kind,
+                project_id,
                 project_root,
                 local_run_dir,
                 deployment_id,
@@ -145,7 +159,7 @@ pub(crate) fn poll_remote_submit(state: &mut AppState, ctx: &egui::Context) {
                 }
             }
             let row = registry::RemoteJob {
-                run_uuid,
+                job_id: run_uuid,
                 host_id,
                 host_label: host_label.clone(),
                 remote_dir,
@@ -154,7 +168,8 @@ pub(crate) fn poll_remote_submit(state: &mut AppState, ctx: &egui::Context) {
                 cluster,
                 engine_id,
                 job_kind,
-                project_root,
+                project_id,
+                project_root_hint: project_root,
                 local_run_dir: local_run_dir.to_string_lossy().to_string(),
                 status: phase_status(initial_phase),
                 submitted_at_ms: registry::now_ms(),
@@ -393,16 +408,31 @@ fn observed_status(
 ///
 /// This is the gate every engine's remote applier shares before it materializes a
 /// result entry + run-dir artifacts. It deliberately admits the `(None, None)`
-/// case: a build submitted with no project open used to be silently discarded.
+/// case — a build submitted with no project open — whose result would otherwise be silently discarded.
 pub(crate) fn outcome_belongs_to_current_workspace(
     state: &AppState,
     row: &registry::RemoteJob,
 ) -> bool {
-    let current_root = state
+    let current_project_id = state
         .workspace
         .project()
-        .map(|project| project.root.to_string_lossy().to_string());
-    project_root_matches(row.project_root.as_deref(), current_root.as_deref())
+        .and_then(|project| project.project_id.as_ref())
+        .map(|id| id.as_str().to_string());
+    // `project_id` is the path-independent authority: a moved project keeps
+    // its id, so ownership is decided by it whenever both the job and the open
+    // project carry one. The path hint is a fallback only for the ownerless/scratch
+    // case (a job or project predating ids), which preserves the `(None, None)`
+    // scratch match.
+    match (row.project_id.as_deref(), current_project_id.as_deref()) {
+        (Some(job_project), Some(open_project)) => job_project == open_project,
+        _ => {
+            let current_root = state
+                .workspace
+                .project()
+                .map(|project| project.root.to_string_lossy().to_string());
+            project_root_matches(row.project_root_hint.as_deref(), current_root.as_deref())
+        }
+    }
 }
 
 /// Pure core of [`outcome_belongs_to_current_workspace`], split out so the gate is
@@ -448,18 +478,30 @@ fn apply_remote_qm_outcome(
     save_qm_artifacts(state, &run_dir, &outcome);
 
     let belongs_here = outcome_belongs_to_current_workspace(state, row);
-    let task_id = state
-        .tasks
-        .task_run_by_uuid(&row.run_uuid)
-        .map(|task| task.id);
+    let already = outcome_already_materialized(state, &row.job_id);
+    let task_id = state.tasks.runs.task_run_id_for_job(&row.job_id);
 
-    if belongs_here && let Some(optimized) = outcome.optimized_structure {
-        let save_path = structure_io::default_structure_save_path(&optimized, None);
-        let entry_id = add_and_show_entry(state, optimized, None, save_path);
-        if let Some(task_id) = task_id {
-            record_task_result_entry(state, task_id, entry_id);
+    if belongs_here && !already {
+        match outcome.optimized_structure {
+            Some(optimized) => {
+                let save_path = structure_io::default_structure_save_path(&optimized, None);
+                let entry_id = add_and_show_entry(state, optimized, None, save_path);
+                if let Some(task_id) = task_id {
+                    record_task_result_entry(state, task_id, entry_id);
+                }
+                set_qm_run_origin(state, entry_id);
+                record_materialization(
+                    state,
+                    &row.job_id,
+                    "optimized",
+                    Some(entry_id),
+                    &[entry_id],
+                );
+            }
+            // A single-point energy or frequency run produces no entry; the ledger
+            // still records that its outcome was applied, so it is idempotent.
+            None => record_materialization(state, &row.job_id, "report", None, &[]),
         }
-        set_qm_run_origin(state, entry_id);
     }
     // The run is now the newest QM result of whichever entry it anchors to, so
     // the memoized per-entry chart availability is stale — including for a
@@ -480,10 +522,84 @@ fn apply_remote_qm_outcome(
     ));
 }
 
-fn mark_remote_task(state: &mut AppState, run_uuid: &str, status: TaskStatus) {
-    if let Some(task_id) = state.tasks.task_run_by_uuid(run_uuid).map(|task| task.id) {
+fn mark_remote_task(state: &mut AppState, job_id: &str, status: TaskStatus) {
+    if let Some(task_id) = state.tasks.runs.task_run_id_for_job(job_id) {
         mark_task_status(state, task_id, status);
     }
+}
+
+/// Open-project compensation: import any remote result that finished while a
+/// *different* project was open. Every successfully-finished registry row owned by
+/// the opened project (by its path-independent `project_id`) that is not yet in the
+/// ledger is imported from its already-downloaded `outcome.json`. A missing or
+/// unreadable file leaves the row unmaterialized — a pending recovery surfaced to
+/// the user, never silently dropped — to be retried by a later remote refresh
+/// rather than blocking open on an SSH round trip.
+pub(crate) fn compensate_open_project(state: &mut AppState) {
+    let Some(project_id) = state
+        .workspace
+        .project()
+        .and_then(|project| project.project_id.as_ref())
+        .map(|id| id.as_str().to_string())
+    else {
+        return;
+    };
+    let rows = (|| -> anyhow::Result<Vec<registry::RemoteJob>> {
+        registry::list_completed_for_project_id(&registry::open()?, &project_id)
+    })()
+    .unwrap_or_default();
+    import_completed_remote_jobs(state, rows);
+}
+
+/// Import each completed, not-yet-materialized remote row from its local
+/// `outcome.json`, counting recoveries and pending-recovery rows. Split from
+/// [`compensate_open_project`] so it is testable without the global registry: the
+/// gate + local-outcome read + applier reuse is the whole policy.
+pub(crate) fn import_completed_remote_jobs(state: &mut AppState, rows: Vec<registry::RemoteJob>) {
+    let mut recovered = 0usize;
+    let mut pending = 0usize;
+    for row in rows {
+        if outcome_already_materialized(state, &row.job_id) {
+            continue;
+        }
+        match read_local_outcome(&row.local_run_dir) {
+            Some(outcome) => {
+                apply_remote_outcome(state, &row, outcome);
+                recovered += 1;
+            }
+            None => {
+                pending += 1;
+                state.output_log.push(format!(
+                    "remote job {} finished but its result is pending recovery \
+                     (outcome file missing); it will retry on the next Refresh Remote",
+                    short_uuid(&row.job_id)
+                ));
+            }
+        }
+    }
+    if recovered > 0 {
+        // Persist the imported entries + ledger atomically now rather than waiting
+        // for the debounced autosave, so the recovery is durable from open.
+        let _ = persist_project(state, false);
+        state.set_message(format!(
+            "Recovered {recovered} remote result(s) for this project"
+        ));
+    }
+    if pending > 0 {
+        state.set_message(format!(
+            "{pending} remote result(s) pending recovery — use Refresh Remote to retry"
+        ));
+    }
+}
+
+/// Read and parse a completed remote job's already-downloaded `outcome.json` from
+/// its local run directory. `None` when the file is absent or unreadable — the
+/// pending-recovery signal, kept local (no SSH) so open never blocks on the network.
+fn read_local_outcome(local_run_dir: &str) -> Option<crate::wire::EngineOutcome> {
+    let path =
+        std::path::Path::new(local_run_dir).join(crate::engines::remote::launcher::OUTCOME_FILE);
+    let bytes = std::fs::read(path).ok()?;
+    serde_json::from_slice(&bytes).ok()
 }
 
 /// Remove a remote job's scratch dir over SSH (a quick, bounded `rm -rf` of the
@@ -545,7 +661,117 @@ fn short_uuid(uuid: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
-    use super::project_root_matches;
+    use super::*;
+    use crate::backend::storage::jobs as registry;
+
+    fn qm_remote_row(job_id: &str, run_dir: &std::path::Path) -> registry::RemoteJob {
+        registry::RemoteJob {
+            job_id: job_id.to_string(),
+            host_id: "h".to_string(),
+            host_label: "H".to_string(),
+            remote_dir: "~/.silicolab/runs/x".to_string(),
+            scheduler: "direct".to_string(),
+            launch_handle: "1".to_string(),
+            cluster: None,
+            engine_id: "hartree".to_string(),
+            job_kind: "qm-energy".to_string(),
+            project_id: None,
+            project_root_hint: None,
+            local_run_dir: run_dir.to_string_lossy().to_string(),
+            status: registry::RemoteJobStatus::Done,
+            submitted_at_ms: 0,
+            last_polled_at_ms: None,
+            exit_code: None,
+            scheduler_state: None,
+            reason: None,
+            console_offset: 0,
+            unknown_since_ms: None,
+        }
+    }
+
+    #[test]
+    fn remote_qm_report_records_once_and_creates_no_entry() {
+        // §9 import cardinality (0 entry): a single-point energy report creates no
+        // entry but records a ledger row proving the outcome was applied, so a
+        // repeated apply neither duplicates nor is treated as un-imported.
+        let run_dir = std::path::PathBuf::from("target/test-qm-report-idempotency");
+        let _ = std::fs::remove_dir_all(&run_dir);
+        std::fs::create_dir_all(&run_dir).unwrap();
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let row = qm_remote_row("job-qm", &run_dir);
+        let outcome = crate::engines::qm::QmOutcome {
+            energy_hartree: -1.5,
+            converged: true,
+            optimized_structure: None,
+            summary: "energy -1.5 Eh".to_string(),
+            scf_trace: Vec::new(),
+            opt_trace: Vec::new(),
+            frequencies: Vec::new(),
+        };
+
+        apply_remote_qm_outcome(&mut state, &row, outcome.clone());
+        assert!(
+            state.entries.records.is_empty(),
+            "an energy report creates no entry"
+        );
+        let record = state
+            .materializations
+            .get("job-qm")
+            .expect("the report is recorded in the ledger");
+        assert!(record.primary_entry_id.is_none());
+        assert!(record.entries.is_empty());
+
+        apply_remote_qm_outcome(&mut state, &row, outcome);
+        assert!(state.entries.records.is_empty());
+        assert_eq!(state.materializations.len(), 1);
+    }
+
+    #[test]
+    fn open_project_compensation_imports_present_outcome_and_flags_missing() {
+        // §9 terminal compensation: a completed row whose outcome.json is on disk is
+        // imported (ledger record); one whose file is gone stays unmaterialized —
+        // surfaced as a pending recovery, never silently marked done.
+        let root = std::path::PathBuf::from("target/test-compensation");
+        let _ = std::fs::remove_dir_all(&root);
+        let present_dir = root.join("present");
+        std::fs::create_dir_all(&present_dir).unwrap();
+        let outcome = crate::wire::EngineOutcome::Qm(crate::engines::qm::QmOutcome {
+            energy_hartree: -2.0,
+            converged: true,
+            optimized_structure: None,
+            summary: "energy -2.0 Eh".to_string(),
+            scf_trace: Vec::new(),
+            opt_trace: Vec::new(),
+            frequencies: Vec::new(),
+        });
+        std::fs::write(
+            present_dir.join(crate::engines::remote::launcher::OUTCOME_FILE),
+            serde_json::to_vec(&outcome).unwrap(),
+        )
+        .unwrap();
+
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        let present = qm_remote_row("job-present", &present_dir);
+        let missing = qm_remote_row("job-missing", &root.join("missing"));
+
+        import_completed_remote_jobs(&mut state, vec![present, missing]);
+
+        assert!(
+            state.materializations.contains("job-present"),
+            "the downloaded outcome is imported"
+        );
+        assert!(
+            !state.materializations.contains("job-missing"),
+            "a missing outcome stays pending, not marked done"
+        );
+        assert!(
+            state
+                .output_log
+                .iter()
+                .any(|line| line.contains("pending recovery")),
+            "the pending recovery is surfaced, not silently dropped"
+        );
+    }
 
     #[test]
     fn ownerless_job_in_scratch_session_belongs_here() {

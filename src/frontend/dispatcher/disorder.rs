@@ -64,6 +64,11 @@ pub(crate) fn start_pending_disorder(state: &mut AppState) {
     job.result_entry_id = entry_id;
     state.jobs.set_disorder(job);
     if let Some(task_run_id) = state.active_task_run {
+        begin_local_job(
+            state,
+            crate::frontend::jobs::LocalJobSlot::Disorder,
+            task_run_id,
+        );
         mark_task_status(state, task_run_id, TaskStatus::Running);
     }
     state.set_message("Packing disordered system; press Esc to stop".to_string());
@@ -239,6 +244,9 @@ pub(crate) fn poll_disorder_job(state: &mut AppState, ctx: &egui::Context) {
         return;
     };
     let entry_id = running.result_entry_id;
+    let job_id = state
+        .jobs
+        .local_execution(crate::frontend::jobs::LocalJobSlot::Disorder);
     let fingerprint_before = state.entries_fingerprint();
 
     if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
@@ -272,17 +280,19 @@ pub(crate) fn poll_disorder_job(state: &mut AppState, ctx: &egui::Context) {
                     );
                 }
                 state.set_message(disorder_finished_message(&report));
-                complete_active_task(
-                    state,
-                    TaskKind::BuildDisorderedSystem,
-                    TaskStatus::Completed,
-                );
+                complete_local_job(state, job_id, TaskStatus::Completed);
+                state
+                    .jobs
+                    .take_local_execution(crate::frontend::jobs::LocalJobSlot::Disorder);
                 running.latest_report = Some(report);
                 finished = true;
             }
             DisorderWorkerMessage::Failed(error) => {
                 state.set_message(format!("Packing failed: {error}"));
-                complete_active_task(state, TaskKind::BuildDisorderedSystem, TaskStatus::Failed);
+                complete_local_job(state, job_id, TaskStatus::Failed);
+                state
+                    .jobs
+                    .take_local_execution(crate::frontend::jobs::LocalJobSlot::Disorder);
                 finished = true;
             }
         }

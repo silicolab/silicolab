@@ -509,7 +509,7 @@ fn remote_row(
     status: crate::backend::storage::jobs::RemoteJobStatus,
 ) -> crate::backend::storage::jobs::RemoteJob {
     crate::backend::storage::jobs::RemoteJob {
-        run_uuid: run_uuid.to_string(),
+        job_id: run_uuid.to_string(),
         host_id: "hpc".to_string(),
         host_label: "Cluster".to_string(),
         remote_dir: format!("~/.silicolab/runs/{run_uuid}"),
@@ -518,7 +518,8 @@ fn remote_row(
         cluster: None,
         engine_id: "hartree".to_string(),
         job_kind: "qm-energy".to_string(),
-        project_root: Some("/work/proj".to_string()),
+        project_id: Some("proj-id".to_string()),
+        project_root_hint: Some("/work/proj".to_string()),
         local_run_dir: "/tmp/run".to_string(),
         status,
         submitted_at_ms: 1000,

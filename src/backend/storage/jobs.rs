@@ -4,7 +4,7 @@
 //! while the laptop is closed. Their identity and launch handle therefore live
 //! in a **global** SQLite database (`jobs.db` in the app config dir), not in
 //! per-project state. On a fresh session the non-terminal rows are listed, each
-//! `RemoteTarget` is rebuilt deterministically from `host_id` + `run_uuid`, and
+//! `RemoteTarget` is rebuilt deterministically from `host_id` + `job_id`, and
 //! liveness is probed again.
 //!
 //! The access pattern mirrors the per-project store verbatim: `Connection::open`
@@ -71,11 +71,13 @@ impl RemoteJobStatus {
 
 /// One row of the `remote_jobs` table — the minimal durable state for a detached
 /// remote run. Everything about the remote path is reconstructable from
-/// `host_id` + `run_uuid` via `RemoteTarget::for_run`.
+/// `host_id` + `job_id` via `RemoteTarget::for_run`.
 #[derive(Debug, Clone)]
 pub struct RemoteJob {
-    /// Durable identity — the task's `run_uuid` (primary key).
-    pub run_uuid: String,
+    /// Global execution identity (primary key). Currently equal to the owning
+    /// `TaskRun::run_uuid` value, which the reverse lookups still key on; it
+    /// becomes a distinct [`compute_core::job::JobId`] when the runtime adopts it.
+    pub job_id: String,
     /// `RemoteHost::id`; indexed so a reconnect lists a host's rows cheaply.
     pub host_id: String,
     /// Denormalized label for display without a config lookup.
@@ -91,8 +93,11 @@ pub struct RemoteJob {
     pub engine_id: String,
     /// Engine-specific job kind (e.g. the task controller id).
     pub job_kind: String,
-    /// Owning project, for re-association on reopen.
-    pub project_root: Option<String>,
+    /// Stable owning-project id, the authority for re-association on reopen.
+    pub project_id: Option<String>,
+    /// Owning project's root path — only a hint (a moved project keeps its id but
+    /// not its path).
+    pub project_root_hint: Option<String>,
     /// Local dir `outcome.json`/logs retrieve to.
     pub local_run_dir: String,
     pub status: RemoteJobStatus,
@@ -135,7 +140,7 @@ fn create_schema(conn: &Connection) -> Result<()> {
     conn.execute_batch(
         "
         create table if not exists remote_jobs (
-            run_uuid text primary key,
+            job_id text primary key,
             host_id text not null,
             host_label text,
             remote_dir text,
@@ -144,7 +149,7 @@ fn create_schema(conn: &Connection) -> Result<()> {
             cluster text,
             engine_id text,
             job_kind text,
-            project_root text,
+            project_root_hint text,
             local_run_dir text,
             status text not null default 'queued',
             submitted_at_ms integer not null default 0,
@@ -154,6 +159,7 @@ fn create_schema(conn: &Connection) -> Result<()> {
             ,reason text
             ,console_offset integer not null default 0
             ,unknown_since_ms integer
+            ,project_id text
         );
         create index if not exists remote_jobs_host_idx on remote_jobs (host_id);
         ",
@@ -204,8 +210,12 @@ fn ensure_columns(conn: &Connection) -> Result<()> {
         "alter table remote_jobs add column job_kind text",
     )?;
     add_column(
-        "project_root",
-        "alter table remote_jobs add column project_root text",
+        "project_root_hint",
+        "alter table remote_jobs add column project_root_hint text",
+    )?;
+    add_column(
+        "project_id",
+        "alter table remote_jobs add column project_id text",
     )?;
     add_column(
         "local_run_dir",
@@ -236,17 +246,17 @@ fn ensure_columns(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Insert or replace a job row (a full-row upsert keyed by `run_uuid`).
+/// Insert or replace a job row (a full-row upsert keyed by `job_id`).
 pub fn upsert(conn: &Connection, job: &RemoteJob) -> Result<()> {
     conn.execute(
         "insert or replace into remote_jobs (
-            run_uuid, host_id, host_label, remote_dir, scheduler, launch_handle, cluster,
-            engine_id, job_kind, project_root, local_run_dir, status,
+            job_id, host_id, host_label, remote_dir, scheduler, launch_handle, cluster,
+            engine_id, job_kind, project_root_hint, local_run_dir, status,
             submitted_at_ms, last_polled_at_ms, exit_code, scheduler_state, reason,
-            console_offset, unknown_since_ms
-        ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)",
+            console_offset, unknown_since_ms, project_id
+        ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20)",
         params![
-            job.run_uuid,
+            job.job_id,
             job.host_id,
             job.host_label,
             job.remote_dir,
@@ -255,7 +265,7 @@ pub fn upsert(conn: &Connection, job: &RemoteJob) -> Result<()> {
             job.cluster,
             job.engine_id,
             job.job_kind,
-            job.project_root,
+            job.project_root_hint,
             job.local_run_dir,
             job.status.token(),
             job.submitted_at_ms,
@@ -265,6 +275,7 @@ pub fn upsert(conn: &Connection, job: &RemoteJob) -> Result<()> {
             job.reason,
             job.console_offset as i64,
             job.unknown_since_ms,
+            job.project_id,
         ],
     )?;
     Ok(())
@@ -282,12 +293,12 @@ pub struct RemoteObservationUpdate<'a> {
 
 pub fn record_observation(
     conn: &Connection,
-    run_uuid: &str,
+    job_id: &str,
     update: RemoteObservationUpdate<'_>,
 ) -> Result<()> {
     conn.execute(
-        "update remote_jobs set status = ?2, exit_code = ?3, scheduler_state = ?4, reason = ?5, console_offset = ?6, unknown_since_ms = ?7, last_polled_at_ms = ?8 where run_uuid = ?1",
-        params![run_uuid, update.status.token(), update.exit_code, update.scheduler_state, update.reason, update.console_offset as i64, update.unknown_since_ms, update.polled_at_ms],
+        "update remote_jobs set status = ?2, exit_code = ?3, scheduler_state = ?4, reason = ?5, console_offset = ?6, unknown_since_ms = ?7, last_polled_at_ms = ?8 where job_id = ?1",
+        params![job_id, update.status.token(), update.exit_code, update.scheduler_state, update.reason, update.console_offset as i64, update.unknown_since_ms, update.polled_at_ms],
     )?;
     Ok(())
 }
@@ -303,34 +314,45 @@ pub fn list_non_terminal(conn: &Connection) -> Result<Vec<RemoteJob>> {
 }
 
 /// All rows for a project, newest first (for the per-project task surface).
-pub fn list_for_project(conn: &Connection, project_root: &str) -> Result<Vec<RemoteJob>> {
+pub fn list_for_project(conn: &Connection, project_root_hint: &str) -> Result<Vec<RemoteJob>> {
     query(
         conn,
-        "where project_root = ?1 order by submitted_at_ms desc",
-        params![project_root],
+        "where project_root_hint = ?1 order by submitted_at_ms desc",
+        params![project_root_hint],
     )
 }
 
-/// One row by `run_uuid`.
-pub fn get(conn: &Connection, run_uuid: &str) -> Result<Option<RemoteJob>> {
-    Ok(query(conn, "where run_uuid = ?1", params![run_uuid])?
+/// Successfully-finished rows owned by a project (matched by the path-independent
+/// `project_id`), oldest first — the set open-project compensation checks against
+/// the ledger to import any result that finished while another project was open.
+pub fn list_completed_for_project_id(
+    conn: &Connection,
+    project_id: &str,
+) -> Result<Vec<RemoteJob>> {
+    query(
+        conn,
+        "where project_id = ?1 and status = 'done' order by submitted_at_ms",
+        params![project_id],
+    )
+}
+
+/// One row by `job_id`.
+pub fn get(conn: &Connection, job_id: &str) -> Result<Option<RemoteJob>> {
+    Ok(query(conn, "where job_id = ?1", params![job_id])?
         .into_iter()
         .next())
 }
 
 /// Drop a row (after the remote scratch is removed, or the run is forgotten).
-pub fn remove(conn: &Connection, run_uuid: &str) -> Result<()> {
-    conn.execute(
-        "delete from remote_jobs where run_uuid = ?1",
-        params![run_uuid],
-    )?;
+pub fn remove(conn: &Connection, job_id: &str) -> Result<()> {
+    conn.execute("delete from remote_jobs where job_id = ?1", params![job_id])?;
     Ok(())
 }
 
-const COLUMNS: &str = "run_uuid, host_id, host_label, remote_dir, scheduler, \
-     launch_handle, cluster, engine_id, job_kind, project_root, local_run_dir, status, \
+const COLUMNS: &str = "job_id, host_id, host_label, remote_dir, scheduler, \
+     launch_handle, cluster, engine_id, job_kind, project_root_hint, local_run_dir, status, \
      submitted_at_ms, last_polled_at_ms, exit_code, scheduler_state, reason, console_offset, \
-     unknown_since_ms";
+     unknown_since_ms, project_id";
 
 fn query(conn: &Connection, tail: &str, params: impl rusqlite::Params) -> Result<Vec<RemoteJob>> {
     let sql = format!("select {COLUMNS} from remote_jobs {tail}");
@@ -344,7 +366,7 @@ fn query(conn: &Connection, tail: &str, params: impl rusqlite::Params) -> Result
 fn row_to_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<RemoteJob> {
     let status: String = row.get(11)?;
     Ok(RemoteJob {
-        run_uuid: row.get(0)?,
+        job_id: row.get(0)?,
         host_id: row.get(1)?,
         host_label: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
         remote_dir: row.get::<_, Option<String>>(3)?.unwrap_or_default(),
@@ -353,7 +375,7 @@ fn row_to_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<RemoteJob> {
         cluster: row.get(6)?,
         engine_id: row.get::<_, Option<String>>(7)?.unwrap_or_default(),
         job_kind: row.get::<_, Option<String>>(8)?.unwrap_or_default(),
-        project_root: row.get(9)?,
+        project_root_hint: row.get(9)?,
         local_run_dir: row.get::<_, Option<String>>(10)?.unwrap_or_default(),
         // An unknown token degrades to Lost rather than failing the load.
         status: RemoteJobStatus::from_token(&status).unwrap_or(RemoteJobStatus::Lost),
@@ -364,6 +386,7 @@ fn row_to_job(row: &rusqlite::Row<'_>) -> rusqlite::Result<RemoteJob> {
         reason: row.get(16)?,
         console_offset: row.get::<_, i64>(17)?.max(0) as u64,
         unknown_since_ms: row.get(18)?,
+        project_id: row.get(19)?,
     })
 }
 
@@ -379,18 +402,19 @@ pub fn now_ms() -> i64 {
 mod tests {
     use super::*;
 
-    fn sample(run_uuid: &str) -> RemoteJob {
+    fn sample(job_id: &str) -> RemoteJob {
         RemoteJob {
-            run_uuid: run_uuid.to_string(),
+            job_id: job_id.to_string(),
             host_id: "hpc".to_string(),
             host_label: "Cluster".to_string(),
-            remote_dir: format!("~/.silicolab/runs/{run_uuid}"),
+            remote_dir: format!("~/.silicolab/runs/{job_id}"),
             scheduler: "direct".to_string(),
             launch_handle: "12345".to_string(),
             cluster: None,
             engine_id: "hartree".to_string(),
             job_kind: "qm-energy".to_string(),
-            project_root: Some("/work/proj".to_string()),
+            project_id: Some("proj-id".to_string()),
+            project_root_hint: Some("/work/proj".to_string()),
             local_run_dir: "/tmp/run".to_string(),
             status: RemoteJobStatus::Running,
             submitted_at_ms: 1000,
@@ -460,7 +484,7 @@ mod tests {
         let conn = open_at(&path).expect("reopen");
         let pending = list_non_terminal(&conn).expect("list");
         assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].run_uuid, "a");
+        assert_eq!(pending[0].job_id, "a");
 
         record_observation(
             &conn,
@@ -499,12 +523,12 @@ mod tests {
         let (conn, path) = temp_db();
         upsert(&conn, &sample("a")).expect("insert a");
         let mut other = sample("b");
-        other.project_root = Some("/work/other".to_string());
+        other.project_root_hint = Some("/work/other".to_string());
         upsert(&conn, &other).expect("insert b");
 
         let proj = list_for_project(&conn, "/work/proj").expect("list");
         assert_eq!(proj.len(), 1);
-        assert_eq!(proj[0].run_uuid, "a");
+        assert_eq!(proj[0].job_id, "a");
 
         let _ = std::fs::remove_file(&path);
     }
@@ -517,7 +541,7 @@ mod tests {
         ));
         let conn = Connection::open(&path).unwrap();
         conn.execute_batch(
-            "create table remote_jobs (run_uuid text primary key, host_id text not null, status text not null);",
+            "create table remote_jobs (job_id text primary key, host_id text not null, status text not null);",
         )
         .unwrap();
         drop(conn);
@@ -531,6 +555,8 @@ mod tests {
             .unwrap();
         for column in [
             "cluster",
+            "project_root_hint",
+            "project_id",
             "scheduler_state",
             "reason",
             "console_offset",

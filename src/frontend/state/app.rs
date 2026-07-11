@@ -8,6 +8,7 @@ use crate::{
         config::{AppConfig, RecentProject},
         entries::EntryStore,
         history::{EditSnapshot, History},
+        materialization::MaterializationLedger,
         project::WorkspaceSession,
         storage::ProjectSnapshot,
         tasks::TaskManager,
@@ -42,6 +43,10 @@ pub struct AppState {
     pub entries: EntryStore,
     pub history: History,
     pub tasks: TaskManager,
+    /// The project's idempotent record of which job produced which result entries
+    /// (see [`crate::backend::materialization`]). Loaded on open, persisted in the
+    /// atomic entries+ledger save transaction.
+    pub materializations: MaterializationLedger,
     pub jobs: JobManager,
     pub ui: UiState,
     pub message: String,
@@ -100,6 +105,10 @@ impl AppState {
             .as_ref()
             .map(|snapshot| snapshot.tasks.clone())
             .unwrap_or_default();
+        let materializations = project_snapshot
+            .as_ref()
+            .map(|snapshot| snapshot.materializations.clone())
+            .unwrap_or_default();
         let mut state = Self {
             workspace,
             config,
@@ -107,6 +116,7 @@ impl AppState {
             entries,
             history: History::default(),
             tasks,
+            materializations,
             jobs: JobManager::default(),
             ui: UiState::default(),
             message: message.clone(),
@@ -357,6 +367,9 @@ impl AppState {
     pub fn has_project_changes_to_save(&self) -> bool {
         self.workspace.is_project()
             && (self.autosave_deadline.is_some()
+                || self.tasks.has_dirty_task_runs()
+                || self.tasks.runs.is_dirty()
+                || self.materializations.is_dirty()
                 || self.entries_fingerprint() != self.last_saved_entries_fingerprint
                 || self.assistant_fingerprint() != self.last_saved_assistant_fingerprint
                 || self.project_save_error.is_some())
@@ -430,8 +443,14 @@ impl AppState {
         let project = self.workspace.project()?;
         Some(ProjectSnapshot {
             name: project.name.clone(),
+            project_id: project
+                .project_id
+                .as_ref()
+                .map(|id| id.as_str().to_string())
+                .unwrap_or_default(),
             entries: self.entries.clone(),
             tasks: self.tasks.clone(),
+            materializations: self.materializations.clone(),
             view: self.project_view_settings(),
             history: self.history.clone(),
             assistant: self.ui.agent.project_snapshot(),
