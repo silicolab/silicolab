@@ -84,6 +84,16 @@ pub(crate) fn persist_project(state: &mut AppState, persist_history: bool) -> an
     }
 }
 
+/// A full-project save is pending. Entries and the materialization ledger reach
+/// disk only in that atomic save, so it — not a narrow flush — must be the first
+/// writer of any row that references them: a task row carrying `result_entry_id`
+/// or a run-graph row marked `import_state = Applied` written ahead of it would
+/// point at an entry or ledger record that a crash in the gap left unsaved.
+/// Deferring costs nothing, since the pending save rewrites these same rows.
+fn full_save_pending(state: &AppState) -> bool {
+    state.autosave_deadline().is_some() || state.materializations.is_dirty()
+}
+
 /// Write task rows whose status changed since the last save straight to
 /// `project.db`, without a full-project save. Task status is not part of the
 /// entry fingerprint that gates autosave, so without this a completed run (e.g. a
@@ -102,6 +112,9 @@ pub(crate) fn flush_dirty_task_runs(state: &mut AppState) {
         state.tasks.clear_dirty_task_runs();
         return;
     };
+    if full_save_pending(state) {
+        return;
+    }
     let ids = state.tasks.take_dirty_task_runs();
     let result = {
         let rows: Vec<&crate::backend::tasks::TaskRun> = state
@@ -140,6 +153,9 @@ pub(crate) fn flush_dirty_run_graph(state: &mut AppState) {
         state.tasks.runs.mark_saved();
         return;
     };
+    if full_save_pending(state) {
+        return;
+    }
     let result = (|| -> anyhow::Result<()> {
         let mut conn = rusqlite::Connection::open(&db_path)?;
         let tx = conn.transaction()?;
@@ -630,5 +646,60 @@ mod tests {
         assert!(state.ui.chart.is_none());
         assert!(state.ui.chart_availability.is_empty());
         assert!(state.ui.task_chart_thumbnails.is_empty());
+    }
+
+    /// A completed task's `result_entry_id` reaches disk only through the atomic
+    /// entries+ledger save; the every-frame narrow flush must not write that row
+    /// ahead of it, or a crash in the gap leaves the task pointing at an entry
+    /// that was never persisted. The flush therefore defers while a full save is
+    /// pending — signalled either by a scheduled autosave (an unsaved entry) or a
+    /// dirty ledger (an unsaved materialization) — and only then persists.
+    #[test]
+    fn narrow_task_flush_defers_to_a_pending_full_save() {
+        let root = std::env::temp_dir().join(format!("sl-flush-defer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let session = crate::backend::project::create_project(&root, "flush").unwrap();
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        state.workspace = crate::backend::project::WorkspaceSession::Project(session);
+
+        let controller = *crate::backend::tasks::task_controller_by_id("qm-optimize").unwrap();
+        let task = state.tasks.create_task_run(controller);
+        state.tasks.set_result_entry_id(task, Some(42));
+        state.tasks.mark_status(task, TaskStatus::Completed);
+        assert!(state.tasks.has_dirty_task_runs());
+
+        // A scheduled autosave (an unsaved entry) defers the flush.
+        state.request_autosave(0.0, 0.5);
+        flush_dirty_task_runs(&mut state);
+        assert!(
+            state.tasks.has_dirty_task_runs(),
+            "must defer while an autosave is pending",
+        );
+
+        // So does a dirty ledger (an unsaved materialization), even with no autosave.
+        state.clear_autosave_deadline();
+        state
+            .materializations
+            .record(crate::backend::materialization::Materialization::single(
+                "job-1".to_string(),
+                0,
+                42,
+                "result",
+            ));
+        flush_dirty_task_runs(&mut state);
+        assert!(
+            state.tasks.has_dirty_task_runs(),
+            "must defer while the ledger is dirty",
+        );
+
+        // Once nothing is pending, the entry is already durable, so the flush writes.
+        state.materializations.mark_saved();
+        flush_dirty_task_runs(&mut state);
+        assert!(
+            !state.tasks.has_dirty_task_runs(),
+            "must persist once no full save is pending",
+        );
+
+        std::fs::remove_dir_all(&root).ok();
     }
 }

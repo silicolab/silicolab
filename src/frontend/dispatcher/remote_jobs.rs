@@ -569,9 +569,9 @@ pub(crate) fn compensate_open_project(state: &mut AppState) {
 }
 
 /// Import each completed, not-yet-materialized remote row from its local
-/// `outcome.json`, counting recoveries and pending-recovery rows. Split from
-/// [`compensate_open_project`] so it is testable without the global registry: the
-/// gate + local-outcome read + applier reuse is the whole policy.
+/// `outcome.json`, counting recoveries and pending-recovery rows. The policy is a
+/// gate, a local-outcome read, and applier reuse; it takes `rows` rather than the
+/// global registry, so it runs without one.
 pub(crate) fn import_completed_remote_jobs(state: &mut AppState, rows: Vec<registry::RemoteJob>) {
     let mut recovered = 0usize;
     let mut pending = 0usize;
