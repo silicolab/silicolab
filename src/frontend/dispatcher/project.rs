@@ -48,6 +48,11 @@ pub(crate) fn persist_project(state: &mut AppState, persist_history: bool) -> an
     // Any pending coalesced autosave is subsumed by this save.
     state.clear_autosave_deadline();
     let Some(project) = state.workspace.project() else {
+        // A scratch workspace has no database, so the ledger can never be
+        // persisted; resolving its dirty flag here stops `flush_pending_autosave`
+        // from re-arming a save every frame and pinning `full_save_pending`. The
+        // narrow flushes clear their own scratch state the same way.
+        state.materializations.mark_saved();
         return Ok(());
     };
     // Save from borrowed references into the live state rather than cloning the
@@ -701,5 +706,31 @@ mod tests {
         );
 
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// A scratch workspace has no database to persist the ledger into, so
+    /// `persist_project` must resolve its dirty flag on the early-return path.
+    /// Left set, the flag would re-arm the autosave every frame and pin
+    /// `full_save_pending` for the whole session, permanently deferring the
+    /// narrow flushes.
+    #[test]
+    fn scratch_persist_resolves_a_dirty_ledger() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        state
+            .materializations
+            .record(crate::backend::materialization::Materialization::report(
+                "job-1".to_string(),
+                0,
+            ));
+        assert!(state.materializations.is_dirty());
+        assert!(full_save_pending(&state));
+
+        persist_project(&mut state, false).unwrap();
+
+        assert!(
+            !state.materializations.is_dirty(),
+            "scratch persist must resolve the ledger's dirty flag",
+        );
+        assert!(!full_save_pending(&state));
     }
 }
