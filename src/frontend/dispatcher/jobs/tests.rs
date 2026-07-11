@@ -336,6 +336,72 @@ fn single_point_run_anchors_its_report_to_the_input_entry() {
 }
 
 #[test]
+fn local_qm_completion_materializes_and_attributes_through_the_run_graph() {
+    // QM vertical slice (local placement): a finished local QM run adds its
+    // optimized geometry as an entry, records the outcome in the ledger, and
+    // advances the execution to Succeeded/Applied — all attributed through
+    // JobId → RunAttempt → TaskRun, with no active_task_run involved.
+    use crate::backend::run_attempt::{Placement, ResultImport};
+    use crate::backend::tasks::{TaskStatus, task_controller_by_id};
+    use crate::frontend::jobs::LocalJobSlot;
+    use crate::job::ExecutionState;
+
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let task = state
+        .tasks
+        .create_task_run(*task_controller_by_id("qm-optimize").unwrap());
+    state.tasks.mark_status(task, TaskStatus::Running);
+    let job_id = state
+        .tasks
+        .runs
+        .begin_execution(task, Placement::Local, None, 0);
+    state.jobs.bind_local_execution(LocalJobSlot::Qm, job_id);
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(QmWorkerMessage::Finished(Box::new(
+        crate::engines::qm::QmOutcome {
+            energy_hartree: -1.0,
+            converged: true,
+            optimized_structure: Some(crate::domain::Structure::empty()),
+            summary: "energy -1.0 Eh".to_string(),
+            scf_trace: Vec::new(),
+            opt_trace: Vec::new(),
+            frequencies: Vec::new(),
+        },
+    )))
+    .unwrap();
+    drop(tx);
+    state.jobs.qm = Some(RunningQmJob {
+        cancel: crate::wire::JobCancelHandle::from_flag(std::sync::Arc::new(
+            std::sync::atomic::AtomicBool::new(false),
+        )),
+        receiver: rx,
+        latest_stage: None,
+        cancel_requested: false,
+    });
+
+    let ctx = egui::Context::default();
+    poll_qm_job(&mut state, &ctx);
+
+    let task_run = state.tasks.task_run(task).unwrap();
+    assert_eq!(task_run.status, TaskStatus::Completed);
+    assert!(
+        task_run.result_entry_id.is_some(),
+        "the optimized geometry is recorded as the result entry"
+    );
+    assert!(state.materializations.contains(&job_id.to_string()));
+    let execution = state
+        .tasks
+        .runs
+        .executions()
+        .iter()
+        .find(|execution| execution.job_id == job_id)
+        .unwrap();
+    assert_eq!(execution.execution_state, ExecutionState::Succeeded);
+    assert_eq!(execution.import_state, ResultImport::Applied);
+}
+
+#[test]
 fn channel_lost_without_a_terminal_message_interrupts_the_local_job() {
     use crate::backend::run_attempt::Placement;
     use crate::backend::tasks::{TaskStatus, task_controller_by_id};
