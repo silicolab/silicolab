@@ -281,7 +281,9 @@ fn agent_job_snapshots_include_latest_stage() {
 
     assert_eq!(snapshots.len(), 1);
     assert_eq!(snapshots[0].id, JobControlId::Agent(9));
-    assert_eq!(snapshots[0].kind, JobKind::AssistantQm);
+    // An agent QM job is a plain Qm kind; the AgentLive backend marks it assistant.
+    assert_eq!(snapshots[0].kind, JobKind::Qm);
+    assert_eq!(snapshots[0].backend, JobBackend::AgentLive);
     assert_eq!(snapshots[0].stage.as_deref(), Some("SCF"));
     assert_eq!(snapshots[0].task_run_id, Some(44));
 }
@@ -297,7 +299,9 @@ fn remote_job_snapshot_maps_last_known_registry_state() {
 
     assert_eq!(snapshot.id, JobControlId::Remote("run-1".to_string()));
     assert_eq!(snapshot.backend, JobBackend::RemoteRegistry);
-    assert_eq!(snapshot.kind, JobKind::RemoteEngine);
+    // A remote job is a plain Engine kind; RemoteRegistry marks it remote, and its
+    // QM-ness (below) is recovered from job_kind, not a dedicated variant.
+    assert_eq!(snapshot.kind, JobKind::Engine);
     assert_eq!(snapshot.status, JobStatus::Running);
     assert_eq!(snapshot.cancel, crate::job::CancelCapability::Preemptive);
     assert_eq!(snapshot.engine_id.as_deref(), Some("hartree"));

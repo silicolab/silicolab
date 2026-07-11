@@ -31,6 +31,10 @@ pub enum JobBackend {
     RemoteRegistry,
 }
 
+/// What a job computes — orthogonal to where it runs (the snapshot's
+/// [`JobBackend`]) and to its remote/agent placement. A job is a
+/// `Qm`/`Docking`/`Engine` job wherever it runs, and the QM-ness of an
+/// engine/remote job is recovered from its `job_kind`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum JobKind {
     Optimizer,
@@ -38,10 +42,6 @@ pub enum JobKind {
     Qm,
     Docking,
     Engine,
-    AssistantQm,
-    AssistantDocking,
-    AssistantEngine,
-    RemoteEngine,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -108,15 +108,11 @@ impl JobKind {
             Self::Qm => "qm",
             Self::Docking => "docking",
             Self::Engine => "engine",
-            Self::AssistantQm => "assistant-qm",
-            Self::AssistantDocking => "assistant-docking",
-            Self::AssistantEngine => "assistant-engine",
-            Self::RemoteEngine => "remote-engine",
         }
     }
 
     pub fn is_qm(&self) -> bool {
-        matches!(self, Self::Qm | Self::AssistantQm)
+        matches!(self, Self::Qm)
     }
 }
 
@@ -539,7 +535,10 @@ pub fn remote_job_snapshot(row: &registry::RemoteJob) -> LiveJobSnapshot {
     LiveJobSnapshot {
         id: JobControlId::Remote(row.job_id.clone()),
         backend: JobBackend::RemoteRegistry,
-        kind: JobKind::RemoteEngine,
+        // A remote job runs an ordinary engine; it is distinguished as remote by the
+        // RemoteRegistry backend, not a dedicated kind. QM-ness is recovered from
+        // `job_kind` (e.g. "qm-energy").
+        kind: JobKind::Engine,
         status: remote_status(row.status),
         // A remote job is cancelled by killing its scheduler job / process group,
         // which acts immediately — a preemptive capability. Whether a cancel is
@@ -703,9 +702,11 @@ fn local_snapshot(
 }
 
 fn agent_snapshot(tracked: &super::agent::TrackedAgentJob) -> LiveJobSnapshot {
+    // The agent runs the same engines; the AgentLive backend marks them as
+    // assistant-launched, so the kind is the plain Qm/Docking/Engine.
     let (kind, stage, engine_id, job_kind, capability, cancel_requested) = match &tracked.job {
         AgentHeavyJob::Qm(job) => (
-            JobKind::AssistantQm,
+            JobKind::Qm,
             job.latest_stage.clone(),
             None,
             None,
@@ -713,7 +714,7 @@ fn agent_snapshot(tracked: &super::agent::TrackedAgentJob) -> LiveJobSnapshot {
             job.cancel_requested,
         ),
         AgentHeavyJob::Docking(_) => (
-            JobKind::AssistantDocking,
+            JobKind::Docking,
             None,
             None,
             None,
@@ -721,7 +722,7 @@ fn agent_snapshot(tracked: &super::agent::TrackedAgentJob) -> LiveJobSnapshot {
             false,
         ),
         AgentHeavyJob::Engine(job) => (
-            JobKind::AssistantEngine,
+            JobKind::Engine,
             job.latest_stage.clone(),
             Some(job.engine.to_string()),
             Some(job.job_kind.to_string()),

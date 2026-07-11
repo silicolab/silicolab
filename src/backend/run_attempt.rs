@@ -253,6 +253,29 @@ impl RunGraph {
             .map(|attempt| attempt.task_run_id)
     }
 
+    /// A human label for where a task's current attempt actually ran, derived from
+    /// its latest [`JobExecution`] rather than a predicted catalog field.
+    /// `None` for a task that has not begun an execution (an inline task, or one not
+    /// yet run) — there is no real placement to report yet.
+    pub fn placement_label(&self, task_run_id: u64) -> Option<String> {
+        let attempt = self
+            .attempts
+            .iter()
+            .filter(|attempt| attempt.task_run_id == task_run_id)
+            .max_by_key(|attempt| attempt.attempt_no)?;
+        let execution = self
+            .executions
+            .iter()
+            .filter(|execution| execution.run_attempt_id == attempt.run_attempt_id)
+            .max_by_key(|execution| execution.ordinal)?;
+        Some(match &execution.placement {
+            Placement::Local => "Local".to_string(),
+            Placement::Remote { host: Some(host) } => format!("Remote · {host}"),
+            Placement::Remote { host: None } => "Remote".to_string(),
+            Placement::Agent => "Agent".to_string(),
+        })
+    }
+
     /// Whether a task has any remote execution — so the crash reconcile leaves it to
     /// the remote reconnect/compensation path instead of marking it `Interrupted`.
     pub fn task_has_remote_execution(&self, task_run_id: u64) -> bool {

@@ -175,7 +175,9 @@ pub(crate) fn render_task_monitor_panel(
                 task.controller_id,
                 task.title.clone(),
                 task.status,
-                task.backend.label(),
+                // Where it actually ran, derived from the real execution,
+                // not a predicted catalog label; None until it begins one.
+                state.tasks.runs.placement_label(task.id),
                 task.outcome.label(),
                 task.theme.clone(),
                 task.method.clone(),
@@ -198,7 +200,7 @@ pub(crate) fn render_task_monitor_panel(
                 controller_id,
                 title,
                 status,
-                backend,
+                placement,
                 outcome,
                 theme,
                 method,
@@ -250,11 +252,13 @@ pub(crate) fn render_task_monitor_panel(
                                 });
                             });
                             ui.add_space(4.0);
-                            ui.label(
-                                RichText::new(format!("{controller_id} / {backend} / {outcome}"))
-                                    .small()
-                                    .color(pal.text_tertiary),
-                            );
+                            let meta = match &placement {
+                                Some(placement) => {
+                                    format!("{controller_id} / {placement} / {outcome}")
+                                }
+                                None => format!("{controller_id} / {outcome}"),
+                            };
+                            ui.label(RichText::new(meta).small().color(pal.text_tertiary));
                             if let Some(engine_label) = engine_label {
                                 ui.label(
                                     RichText::new(format!("Engine: {engine_label}"))
@@ -383,7 +387,13 @@ fn render_active_task_summary(state: &AppState, ui: &mut egui::Ui) {
 
     // Collect into owned data first so the borrow on state.tasks ends before
     // we read state.jobs below.
-    let running: Vec<(String, TaskStatus, &'static str, &'static str, &'static str)> = state
+    let running: Vec<(
+        String,
+        TaskStatus,
+        &'static str,
+        Option<String>,
+        &'static str,
+    )> = state
         .tasks
         .running_task_runs()
         .iter()
@@ -392,7 +402,7 @@ fn render_active_task_summary(state: &AppState, ui: &mut egui::Ui) {
                 t.title.clone(),
                 t.status,
                 t.controller_id,
-                t.backend.label(),
+                state.tasks.runs.placement_label(t.id),
                 t.outcome.label(),
             )
         })
@@ -411,16 +421,16 @@ fn render_active_task_summary(state: &AppState, ui: &mut egui::Ui) {
                     .color(pal.text_tertiary),
             );
         } else {
-            for (title, status, controller_id, backend, outcome) in &running {
+            for (title, status, controller_id, placement, outcome) in &running {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(title.as_str()).strong());
                     ui.label(status_badge(&pal, status.label(), task_tone(*status)));
                 });
-                ui.label(
-                    RichText::new(format!("{controller_id} / {backend} / {outcome}"))
-                        .small()
-                        .color(pal.text_tertiary),
-                );
+                let meta = match placement {
+                    Some(placement) => format!("{controller_id} / {placement} / {outcome}"),
+                    None => format!("{controller_id} / {outcome}"),
+                };
+                ui.label(RichText::new(meta).small().color(pal.text_tertiary));
                 ui.add_space(4.0);
             }
         }

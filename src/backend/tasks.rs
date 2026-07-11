@@ -69,7 +69,6 @@ pub struct TaskController {
     pub kind: TaskKind,
     pub panel: TaskPanelKind,
     pub outcome: TaskOutcome,
-    pub backend: TaskBackend,
     pub uses_run_directory: bool,
 }
 
@@ -100,23 +99,6 @@ impl TaskOutcome {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TaskBackend {
-    InlineNative,
-    BackgroundNative,
-    ExternalEngine,
-}
-
-impl TaskBackend {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::InlineNative => "inline-native",
-            Self::BackgroundNative => "background-native",
-            Self::ExternalEngine => "external-engine",
-        }
-    }
-}
-
 const TASK_CONTROLLERS: &[TaskController] = &[
     TaskController {
         id: "build-reticular",
@@ -129,7 +111,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::BuildReticularStructure,
         panel: TaskPanelKind::ReticularBuilder,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -143,7 +124,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::BuildNanosheet,
         panel: TaskPanelKind::NanosheetBuilder,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -157,7 +137,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::CreateBuildingBlock,
         panel: TaskPanelKind::BuildingBlockEditor,
         outcome: TaskOutcome::FileOnly,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -171,7 +150,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::OptimizeGeometry,
         panel: TaskPanelKind::OptimizationPrompt,
         outcome: TaskOutcome::EditInPlace,
-        backend: TaskBackend::BackgroundNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -185,7 +163,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::OptimizeCrystalGeometry,
         panel: TaskPanelKind::OptimizationPrompt,
         outcome: TaskOutcome::EditInPlace,
-        backend: TaskBackend::BackgroundNative,
         uses_run_directory: false,
     },
     // The three QM tasks share the QmPrompt panel; each opens it with a
@@ -201,7 +178,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::RunQmEnergy,
         panel: TaskPanelKind::QmPrompt,
         outcome: TaskOutcome::Report,
-        backend: TaskBackend::BackgroundNative,
         uses_run_directory: true,
     },
     TaskController {
@@ -215,7 +191,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::RunQmOptimize,
         panel: TaskPanelKind::QmPrompt,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::BackgroundNative,
         uses_run_directory: true,
     },
     TaskController {
@@ -229,7 +204,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::RunQmFrequencies,
         panel: TaskPanelKind::QmPrompt,
         outcome: TaskOutcome::Report,
-        backend: TaskBackend::BackgroundNative,
         uses_run_directory: true,
     },
     TaskController {
@@ -245,7 +219,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::RunQmTransitionState,
         panel: TaskPanelKind::QmPrompt,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::BackgroundNative,
         uses_run_directory: true,
     },
     TaskController {
@@ -259,7 +232,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::TranslateIntoFirstUnitCell,
         panel: TaskPanelKind::None,
         outcome: TaskOutcome::EditInPlace,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -273,7 +245,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::ExpandSupercell,
         panel: TaskPanelKind::SupercellPrompt,
         outcome: TaskOutcome::EditInPlace,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -288,7 +259,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::PrepareProtein,
         panel: TaskPanelKind::ProteinPrepPrompt,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -302,7 +272,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::BuildMdSystem,
         panel: TaskPanelKind::MdSystemPrompt,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: true,
     },
     TaskController {
@@ -317,7 +286,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::BuildDisorderedSystem,
         panel: TaskPanelKind::DisorderedSystemPrompt,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::BackgroundNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -331,7 +299,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::AddHydrogens,
         panel: TaskPanelKind::None,
         outcome: TaskOutcome::EditInPlace,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -345,7 +312,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::RecomputeBonds,
         panel: TaskPanelKind::None,
         outcome: TaskOutcome::EditInPlace,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
     TaskController {
@@ -359,7 +325,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::RunMd,
         panel: TaskPanelKind::MdRunPrompt,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::ExternalEngine,
         uses_run_directory: true,
     },
     TaskController {
@@ -374,7 +339,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::RunDocking,
         panel: TaskPanelKind::DockingPrompt,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::BackgroundNative,
         uses_run_directory: true,
     },
     TaskController {
@@ -390,7 +354,6 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         kind: TaskKind::ModifyProteinPtm,
         panel: TaskPanelKind::PtmPrompt,
         outcome: TaskOutcome::CreateEntry,
-        backend: TaskBackend::InlineNative,
         uses_run_directory: false,
     },
 ];
@@ -458,7 +421,6 @@ pub struct TaskRun {
     pub kind: TaskKind,
     pub panel: TaskPanelKind,
     pub outcome: TaskOutcome,
-    pub backend: TaskBackend,
     pub uses_run_directory: bool,
     pub status: TaskStatus,
     pub run_dir: Option<PathBuf>,
@@ -491,7 +453,6 @@ impl TaskRun {
             kind: controller.kind,
             panel: controller.panel,
             outcome: controller.outcome,
-            backend: controller.backend,
             uses_run_directory: controller.uses_run_directory,
             status: TaskStatus::Ready,
             run_dir: None,
@@ -722,7 +683,6 @@ mod tests {
         assert_eq!(run.title, "Molecular Geometry Optimization");
         assert_eq!(run.status, TaskStatus::WaitingInput);
         assert_eq!(manager.active_panel, Some(run_id));
-        assert!(matches!(run.backend, super::TaskBackend::BackgroundNative));
     }
 
     #[test]
