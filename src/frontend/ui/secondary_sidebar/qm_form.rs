@@ -148,11 +148,13 @@ pub(crate) fn render_molecular_qm_form(
         QmKind::Frequencies,
         "Vibrational frequencies",
     );
-    ui.radio_value(
-        &mut prompt.kind,
-        QmKind::TransitionState,
-        "Transition-state search",
-    );
+    if prompt.engine == crate::engines::qm::QmEngine::Hartree {
+        ui.radio_value(
+            &mut prompt.kind,
+            QmKind::TransitionState,
+            "Transition-state search",
+        );
+    }
 
     if prompt.kind == QmKind::TransitionState {
         render_qm_transition_state_form(ui, prompt, entry_options);
@@ -165,16 +167,18 @@ pub(crate) fn render_molecular_qm_form(
     // the shared dot style is not misread as "mutually exclusive with the
     // calculation above". `ui.radio` is purely visual here — the click
     // handler flips the bool; it does not join the calculation-kind group.
-    ui.separator();
-    ui.label("Options:");
-    if ui
-        .radio(
-            prompt.options.compute_properties,
-            "Compute dipole, charges & bond orders",
-        )
-        .clicked()
-    {
-        prompt.options.compute_properties = !prompt.options.compute_properties;
+    if prompt.engine == crate::engines::qm::QmEngine::Hartree {
+        ui.separator();
+        ui.label("Options:");
+        if ui
+            .radio(
+                prompt.options.compute_properties,
+                "Compute dipole, charges & bond orders",
+            )
+            .clicked()
+        {
+            prompt.options.compute_properties = !prompt.options.compute_properties;
+        }
     }
 
     render_qm_advanced(ui, prompt);
@@ -536,6 +540,9 @@ fn render_qm_advanced(ui: &mut egui::Ui, prompt: &mut crate::frontend::state::Qm
                 Some(QmSolvation::Alpb(n)) => (3, n.clone()),
                 Some(QmSolvation::Gbsa(n)) => (4, n.clone()),
             };
+            if prompt.engine == crate::engines::qm::QmEngine::Orca && model > 2 {
+                model = 0;
+            }
             ui.horizontal(|ui| {
                 ui.label("Solvation:");
                 egui::ComboBox::from_id_salt("qm_solv_model")
@@ -548,14 +555,13 @@ fn render_qm_advanced(ui: &mut egui::Ui, prompt: &mut crate::frontend::state::Qm
                     })
                     .show_ui(ui, |ui| {
                         crate::frontend::theme::stabilize_selectable_rows(ui);
-                        for (value, label) in [
-                            (0, "none"),
-                            (1, "C-PCM"),
-                            (2, "SMD"),
-                            (3, "ALPB"),
-                            (4, "GBSA"),
-                        ] {
+                        for (value, label) in [(0, "none"), (1, "C-PCM"), (2, "SMD")] {
                             ui.selectable_value(&mut model, value as u8, label);
+                        }
+                        if prompt.engine == crate::engines::qm::QmEngine::Hartree {
+                            for (value, label) in [(3, "ALPB"), (4, "GBSA")] {
+                                ui.selectable_value(&mut model, value as u8, label);
+                            }
                         }
                     });
                 if model != 0 {
@@ -576,6 +582,10 @@ fn render_qm_advanced(ui: &mut egui::Ui, prompt: &mut crate::frontend::state::Qm
                 4 => Some(QmSolvation::Gbsa(name)),
                 _ => None,
             };
+
+            if prompt.engine == crate::engines::qm::QmEngine::Orca {
+                return;
+            }
 
             // SCF backend.
             ui.horizontal(|ui| {

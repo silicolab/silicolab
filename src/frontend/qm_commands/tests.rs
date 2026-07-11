@@ -30,6 +30,13 @@ fn water() -> Structure {
     )
 }
 
+fn molecular(job: crate::engines::qm::QmJob) -> crate::engines::qm::QmRequest {
+    match job.calculation {
+        crate::engines::qm::QmCalculation::Molecular(request) => request,
+        crate::engines::qm::QmCalculation::Periodic(_) => panic!("expected molecular QM job"),
+    }
+}
+
 #[test]
 fn qm_recommend_reports_a_level_of_theory() {
     let mut state = AppState::scratch(Default::default(), Vec::new());
@@ -92,7 +99,7 @@ fn build_agent_qm_request_maps_subcommands() {
     let save_path = default_structure_save_path(&water(), None);
     state.entries.add_entry(water(), None, save_path);
 
-    let request = super::build_agent_qm_request(
+    let job = super::build_agent_qm_request(
         &state,
         &[
             "optimize".to_string(),
@@ -101,6 +108,7 @@ fn build_agent_qm_request_maps_subcommands() {
         ],
     )
     .expect("agent qm request should build");
+    let request = molecular(job);
     assert!(matches!(request.kind, super::QmKind::Optimize));
     assert_eq!(request.basis, "sto-3g");
     // Unknown subcommand is rejected.
@@ -114,21 +122,23 @@ fn qm_ts_subcommand_builds_a_coordinate_scan() {
     let save_path = default_structure_save_path(&water(), None);
     state.entries.add_entry(water(), None, save_path);
 
-    let request = super::build_agent_qm_request(
-        &state,
-        &[
-            "ts".to_string(),
-            "--scan-bond".to_string(),
-            "1,3".to_string(),
-            "--scan-from".to_string(),
-            "0.9".to_string(),
-            "--scan-to".to_string(),
-            "1.6".to_string(),
-            "--basis".to_string(),
-            "sto-3g".to_string(),
-        ],
-    )
-    .expect("qm ts coordinate scan should build");
+    let request = molecular(
+        super::build_agent_qm_request(
+            &state,
+            &[
+                "ts".to_string(),
+                "--scan-bond".to_string(),
+                "1,3".to_string(),
+                "--scan-from".to_string(),
+                "0.9".to_string(),
+                "--scan-to".to_string(),
+                "1.6".to_string(),
+                "--basis".to_string(),
+                "sto-3g".to_string(),
+            ],
+        )
+        .expect("qm ts coordinate scan should build"),
+    );
     assert!(matches!(request.kind, super::QmKind::TransitionState));
     match request.ts.expect("ts config").guess {
         QmTsGuess::CoordinateScan(scan) => {
@@ -139,15 +149,17 @@ fn qm_ts_subcommand_builds_a_coordinate_scan() {
     }
 
     // A bare `qm ts` is a single-guess search from the current geometry.
-    let single = super::build_agent_qm_request(
-        &state,
-        &[
-            "ts".to_string(),
-            "--basis".to_string(),
-            "sto-3g".to_string(),
-        ],
-    )
-    .expect("bare qm ts should build");
+    let single = molecular(
+        super::build_agent_qm_request(
+            &state,
+            &[
+                "ts".to_string(),
+                "--basis".to_string(),
+                "sto-3g".to_string(),
+            ],
+        )
+        .expect("bare qm ts should build"),
+    );
     assert!(matches!(
         single.ts.expect("ts config").guess,
         QmTsGuess::Single
@@ -163,7 +175,7 @@ fn agent_qm_request_runs_off_thread() {
     let save_path = default_structure_save_path(&water(), None);
     state.entries.add_entry(water(), None, save_path);
 
-    let request = super::build_agent_qm_request(
+    let job = super::build_agent_qm_request(
         &state,
         &[
             "energy".to_string(),
@@ -177,7 +189,7 @@ fn agent_qm_request_runs_off_thread() {
 
     // Spawn the same job the agent's heavy path uses and poll it to
     // completion, exactly as `poll_heavy_qm` does (minus the agent loop).
-    let job = spawn_qm_job(crate::engines::qm::QmJob::Molecular(request), None);
+    let job = spawn_qm_job(job, None);
     let deadline = Instant::now() + Duration::from_secs(120);
     let mut summary = None;
     while Instant::now() < deadline {

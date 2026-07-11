@@ -8,6 +8,28 @@ sidebar:
 SilicoLab can launch without optional external tools. Install these programs
 only when you need the features that call them.
 
+## ORCA
+
+The built-in Hartree engine is the default for quantum chemistry. ORCA is
+an optional alternative for molecular single-point energies, geometry
+optimizations, and vibrational frequencies. Transition-state and periodic QM
+calculations currently use Hartree.
+
+Install ORCA separately, then open **Settings > Compute targets**. In the ORCA
+row for **This machine**, enter the executable path and select **Verify**.
+SilicoLab deliberately does not search for ORCA or choose it automatically.
+
+For ORCA inside WSL on Windows, set **Command prefix** to `wsl.exe -e` and set
+**Program** to the executable's Linux path, such as `/opt/orca/orca`. For a
+native installation, leave the command prefix empty. Select ORCA explicitly in
+the QM task panel or use `qm energy --engine orca` in a script.
+
+ORCA starts with one CPU core. Requesting more cores enables ORCA's `%pal`
+parallel mode and requires `mpirun` to be available in the target environment.
+
+Remote hosts have their own ORCA program setting. Enter a path valid on that
+host; a local path is never copied to a remote target.
+
 ## GROMACS
 
 Molecular dynamics simulations require

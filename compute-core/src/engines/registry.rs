@@ -124,21 +124,40 @@ pub struct EngineSpec {
     /// An absolute POSIX path is inert on a native Windows probe — it simply is
     /// not a file — so one list serves every platform.
     pub candidate_executables: &'static [&'static str],
-    pub version_arg: Option<&'static str>,
-    /// A substring the engine's own `version_arg` output always contains. Guards
+    pub version_args: &'static [&'static str],
+    /// Some engines print their identity before returning a non-zero usage status
+    /// when started without an input file.
+    pub identity_allows_nonzero_exit: bool,
+    /// A substring the engine's version-probe output always contains. Guards
     /// against a same-named binary that is not this engine, and against a missing
     /// binary whose error text would otherwise look like output.
     pub identity_marker: &'static str,
+    /// If true, discovery is disabled and the user must supply a program path.
+    pub requires_configured_path: bool,
 }
 
-const ENGINE_SPECS: &[EngineSpec] = &[EngineSpec {
-    id: EngineId::GROMACS,
-    name: "GROMACS",
-    description: "Molecular dynamics and minimization (gmx).",
-    candidate_executables: &["gmx", "/usr/local/gromacs/bin/gmx", "gmx_mpi", "gmx_d"],
-    version_arg: Some("--version"),
-    identity_marker: "GROMACS",
-}];
+const ENGINE_SPECS: &[EngineSpec] = &[
+    EngineSpec {
+        id: EngineId::GROMACS,
+        name: "GROMACS",
+        description: "Molecular dynamics and minimization (gmx).",
+        candidate_executables: &["gmx", "/usr/local/gromacs/bin/gmx", "gmx_mpi", "gmx_d"],
+        version_args: &["--version"],
+        identity_allows_nonzero_exit: false,
+        identity_marker: "GROMACS",
+        requires_configured_path: false,
+    },
+    EngineSpec {
+        id: EngineId::ORCA,
+        name: "ORCA",
+        description: "Optional molecular quantum chemistry for energies, optimizations, and frequencies.",
+        candidate_executables: &["orca"],
+        version_args: &[],
+        identity_allows_nonzero_exit: true,
+        identity_marker: "ORCA",
+        requires_configured_path: true,
+    },
+];
 
 /// The detection spec for `id`, or `None` for a built-in engine (no executable).
 pub fn engine_spec(id: EngineId) -> Option<&'static EngineSpec> {
@@ -243,6 +262,9 @@ fn local_status(overrides: &EngineLaunches, spec: &EngineSpec) -> EngineStatus {
             },
         };
     }
+    if spec.requires_configured_path {
+        return EngineStatus::NotConfigured;
+    }
     // A binary sitting on PATH is a launch, not a proof: it has not been run.
     match probe_native(spec) {
         Some(program) => EngineStatus::Unverified {
@@ -264,6 +286,9 @@ pub fn probe_native(spec: &EngineSpec) -> Option<String> {
 /// preferred; on Windows, an available WSL launcher falls back to the first
 /// conventional engine command inside the distribution.
 pub fn local_launch_candidate(spec: &EngineSpec) -> Option<EngineLaunch> {
+    if spec.requires_configured_path {
+        return None;
+    }
     if let Some(program) = probe_native(spec) {
         return Some(EngineLaunch::native(program));
     }
@@ -276,7 +301,7 @@ pub fn local_launch_candidate(spec: &EngineSpec) -> Option<EngineLaunch> {
         })
 }
 
-/// Run `<launch> <version_arg>` on this machine and decide whether it *is* this
+/// Run an engine's version probe on this machine and decide whether it *is* this
 /// engine: it must exit cleanly and print the spec's identity marker. On success
 /// returns the version it reported; on failure, a reason phrased for the settings
 /// panel, distinguishing "would not start" from "started, but is not this engine".
@@ -284,24 +309,23 @@ pub fn local_launch_candidate(spec: &EngineSpec) -> Option<EngineLaunch> {
 /// Slow — a WSL-prefixed launch cold-starts the VM. Never call from the UI thread.
 /// The remote twin of this is `engines::remote::verify_remote_launch`.
 pub fn verify_launch(launch: &EngineLaunch, spec: &EngineSpec) -> Result<String, String> {
-    let Some(version_arg) = spec.version_arg else {
-        return Err(format!("{} has no version check", spec.name));
-    };
     let config = launch.to_process_config(
         std::env::temp_dir(),
-        [version_arg.to_string()],
+        spec.version_args.iter().map(|arg| (*arg).to_string()),
         Some(Duration::from_secs(20)),
     );
     let result = process::run(config).map_err(|error| format!("could not run it: {error}"))?;
     let blob = format!("{}{}", result.stdout, result.stderr);
-    if !result.success() {
+    let identifies = blob.contains(spec.identity_marker);
+    if !result.success() && !(spec.identity_allows_nonzero_exit && identifies) {
+        let args = spec.version_args.join(" ");
         return Err(format!(
-            "`{} {version_arg}` failed: {}",
+            "`{} {args}` failed: {}",
             launch.display_command(),
             first_line(&blob).unwrap_or("no output")
         ));
     }
-    if !blob.contains(spec.identity_marker) {
+    if !identifies {
         return Err(format!(
             "it runs, but does not identify itself as {}",
             spec.name
@@ -317,6 +341,9 @@ pub fn verify_launch(launch: &EngineLaunch, spec: &EngineSpec) -> Result<String,
 ///
 /// Slow, for the same reason [`verify_launch`] is. Never call from the UI thread.
 pub fn probe_local(spec: &EngineSpec) -> Option<(EngineLaunch, String)> {
+    if spec.requires_configured_path {
+        return None;
+    }
     let native = probe_native(spec)
         .map(EngineLaunch::native)
         .and_then(|launch| verify_launch(&launch, spec).ok().map(|v| (launch, v)));
@@ -340,10 +367,15 @@ fn first_line(blob: &str) -> Option<&str> {
 /// Pull a version string out of a `--version` blob. Prefers a `Label: value`
 /// line whose label contains "version" (GROMACS prints
 /// `GROMACS version:    2026.2`), which avoids false positives like the
-/// echoed `gmx --version` command line. Falls back to the first non-empty
-/// line. Also used by `engines::remote` to parse a remote `--version` blob.
+/// echoed `gmx --version` command line. Also recognizes ORCA's `Program
+/// Version` banner. Used by `engines::remote` for the same probe output.
 pub(crate) fn extract_version(blob: &str) -> Option<String> {
     for line in blob.lines().map(str::trim) {
+        if let Some(rest) = line.strip_prefix("Program Version")
+            && let Some(version) = rest.split_whitespace().next()
+        {
+            return Some(version.to_string());
+        }
         if let Some((label, value)) = line.split_once(':')
             && label.to_ascii_lowercase().contains("version")
         {
@@ -353,10 +385,7 @@ pub(crate) fn extract_version(blob: &str) -> Option<String> {
             }
         }
     }
-    blob.lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .map(str::to_string)
+    None
 }
 
 #[cfg(test)]
@@ -494,6 +523,12 @@ mod tests {
             GROMACS version:    2026.2\n\
             Precision:          mixed\n";
         assert_eq!(extract_version(blob).as_deref(), Some("2026.2"));
+    }
+
+    #[test]
+    fn extract_version_reads_orca_banner() {
+        let blob = "Program Version 6.0.0  -  RELEASE";
+        assert_eq!(extract_version(blob).as_deref(), Some("6.0.0"));
     }
 
     /// Acceptance check for the Windows + GROMACS-in-WSL environment. Ignored

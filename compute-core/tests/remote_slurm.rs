@@ -5,7 +5,7 @@
 use std::time::{Duration, Instant};
 
 use compute_core::domain::{Atom, Structure};
-use compute_core::engines::qm::{QmJob, QmKind, QmMethod, QmOptions, QmRequest};
+use compute_core::engines::qm::{QmEngine, QmJob, QmKind, QmMethod, QmOptions, QmRequest};
 use compute_core::engines::remote::launcher::{
     Launcher, RemoteJobPhase, detect_slurm, retrieve_outcome,
 };
@@ -31,16 +31,19 @@ fn request() -> EngineRequest {
         ],
     );
     EngineRequest::builtin(
-        Engine::Qm(QmJob::Molecular(QmRequest {
-            structure,
-            method: QmMethod::Rhf,
-            basis: "sto-3g".to_string(),
-            charge: 0,
-            multiplicity: 1,
-            kind: QmKind::SinglePoint,
-            options: QmOptions::default(),
-            ts: None,
-        })),
+        Engine::Qm(QmJob::molecular(
+            QmEngine::Hartree,
+            QmRequest {
+                structure,
+                method: QmMethod::Rhf,
+                basis: "sto-3g".to_string(),
+                charge: 0,
+                multiplicity: 1,
+                kind: QmKind::SinglePoint,
+                options: QmOptions::default(),
+                ts: None,
+            },
+        )),
         None,
     )
 }

@@ -21,6 +21,7 @@ pub struct EngineId(pub &'static str);
 impl EngineId {
     pub const UFF: Self = Self("uff");
     pub const HARTREE: Self = Self("hartree");
+    pub const ORCA: Self = Self("orca");
     pub const GROMACS: Self = Self("gromacs");
     pub const DOCKING: Self = Self("docking");
 

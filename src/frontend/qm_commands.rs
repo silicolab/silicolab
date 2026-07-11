@@ -9,9 +9,9 @@
 //!   geometry, a reactant→product pair (`--product`), or a driven coordinate
 //!   (`--scan-bond`/`--scan-angle`/`--scan-dihedral`).
 //!
-//! All run synchronously via [`crate::engines::qm`] (pure-Rust hartree), which
-//! suits headless `.sls`/CLI use and small molecules; the GUI drives the same
-//! engine on a worker thread so long calculations don't block rendering.
+//! Commands run synchronously for headless `.sls`/CLI use; the GUI drives the
+//! same selected backend on a worker thread so long calculations do not block
+//! rendering.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, atomic::AtomicBool};
@@ -20,10 +20,10 @@ use anyhow::{Result, anyhow, bail};
 
 use crate::{
     engines::qm::{
-        CpcmDielectric, KMesh, PeriodicFunctional, PeriodicQmRequest, QmDispersion,
-        QmInternalCoordinate, QmJob, QmKind, QmMethod, QmOptions, QmRequest, QmScfBackend,
-        QmSolvation, QmTsAlgorithm, QmTsConfig, QmTsCoordinateScan, QmTsCoordinates, QmTsEndpoints,
-        QmTsGuess, periodic,
+        CpcmDielectric, KMesh, PeriodicFunctional, PeriodicQmRequest, QmCalculation, QmDispersion,
+        QmEngine, QmInternalCoordinate, QmJob, QmKind, QmMethod, QmOptions, QmRequest,
+        QmScfBackend, QmSolvation, QmTsAlgorithm, QmTsConfig, QmTsCoordinateScan, QmTsCoordinates,
+        QmTsEndpoints, QmTsGuess, periodic,
     },
     frontend::state::AppState,
     io::structure_paths::default_structure_save_path,
@@ -36,6 +36,7 @@ pub fn qm_command(state: &mut AppState, args: &[String]) -> Result<String> {
         bail!(
             "usage: qm <energy|optimize|freq|ts|periodic> [options]\n\
              \n\
+             engine:   --engine hartree|orca   (default: hartree; ORCA path must be configured)\n\
              core:     --method <m>   hf|rhf|uhf|rohf|mp2|ccsd|ccsd(t), a functional \
              (pbe, b3lyp, r2scan, wb97m-v, b2plyp, …) with an optional -d3/-d4 suffix, \
              or a composite (r2scan-3c, b97-3c, pbeh-3c, b3lyp-3c)\n\
@@ -110,11 +111,42 @@ fn qm_recommend(args: &[String]) -> Result<String> {
 /// Assemble a [`QmRequest`] from the active structure and parsed `--flags`.
 /// Shared by the synchronous `run` and the agent's async `run_qm` tool so the two
 /// build the exact same request.
-fn assemble_qm_request(state: &AppState, kind: QmKind, args: &[String]) -> Result<QmRequest> {
+fn assemble_qm_job(state: &AppState, kind: QmKind, args: &[String]) -> Result<QmJob> {
     if state.structure().atoms.is_empty() {
         bail!("no active structure; open one before `qm`");
     }
     let flags = QmFlags::parse(args)?;
+    let engine = match flags.str("engine") {
+        None | Some("hartree") => QmEngine::Hartree,
+        Some("orca") => QmEngine::Orca,
+        Some(other) => bail!("--engine must be hartree or orca, got `{other}`"),
+    };
+    if engine == QmEngine::Orca && kind == QmKind::TransitionState {
+        bail!("ORCA support currently covers energy, optimize, and freq only");
+    }
+    if engine == QmEngine::Orca {
+        for option in [
+            "direct",
+            "ri",
+            "cosx",
+            "ri-mp2",
+            "x2c",
+            "all-electron",
+            "grid",
+            "smear",
+            "fod",
+            "sph",
+            "symmetry-number",
+            "qrrho-w0",
+            "alpb",
+            "gbsa",
+            "properties",
+        ] {
+            if flags.flag(option) || flags.str(option).is_some() {
+                bail!("--{option} is available only with the Hartree engine");
+            }
+        }
+    }
     let (method, suffix_dispersion) = flags
         .str("method")
         .map(QmMethod::parse)
@@ -128,16 +160,19 @@ fn assemble_qm_request(state: &AppState, kind: QmKind, args: &[String]) -> Resul
     } else {
         None
     };
-    Ok(QmRequest {
-        structure: state.structure().clone(),
-        method,
-        basis,
-        charge,
-        multiplicity,
-        kind,
-        options,
-        ts,
-    })
+    Ok(QmJob::molecular(
+        engine,
+        QmRequest {
+            structure: state.structure().clone(),
+            method,
+            basis,
+            charge,
+            multiplicity,
+            kind,
+            options,
+            ts,
+        },
+    ))
 }
 
 /// Assemble the [`QmTsConfig`] for a `qm ts` run from parsed flags. The guess
@@ -257,7 +292,7 @@ fn parse_scan_coordinate(flags: &QmFlags) -> Result<Option<QmInternalCoordinate>
 
 /// Map a `qm <subcommand>` line (subcommand + flags) to a [`QmRequest`] for the
 /// agent's async tool. Mirrors [`qm_command`]'s subcommand dispatch.
-pub fn build_agent_qm_request(state: &AppState, args: &[String]) -> Result<QmRequest> {
+pub fn build_agent_qm_request(state: &AppState, args: &[String]) -> Result<QmJob> {
     let Some(sub) = args.first().map(String::as_str) else {
         bail!("usage: qm <energy|optimize|freq> [options]");
     };
@@ -270,7 +305,7 @@ pub fn build_agent_qm_request(state: &AppState, args: &[String]) -> Result<QmReq
             bail!("unknown qm subcommand `{other}` (expected energy, optimize, freq, or ts)")
         }
     };
-    assemble_qm_request(state, kind, &args[1..])
+    assemble_qm_job(state, kind, &args[1..])
 }
 
 fn kind_keyword(kind: QmKind) -> &'static str {
@@ -283,16 +318,19 @@ fn kind_keyword(kind: QmKind) -> &'static str {
 }
 
 fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
-    let request = assemble_qm_request(state, kind, args)?;
+    let job = assemble_qm_job(state, kind, args)?;
+    let QmCalculation::Molecular(request) = &job.calculation else {
+        unreachable!("molecular command built a periodic job");
+    };
 
     // Reject in-core jobs whose ERI tensor would blow the RAM budget before we
     // start allocating. Periodic runs go through run_periodic_command and are
     // exempt (no nao⁴ in-core tensor).
     let budget = crate::backend::hardware::qm_incore_budget_bytes();
-    let verdict = crate::engines::qm::memory_verdict(&request, budget);
-    match &verdict {
-        crate::engines::qm::MemoryVerdict::Ok => {}
-        crate::engines::qm::MemoryVerdict::ExceedsCanDirect { .. } => {
+    let verdict = crate::engines::qm::memory_verdict(request, budget);
+    match (&job.engine, &verdict) {
+        (QmEngine::Orca, _) | (_, crate::engines::qm::MemoryVerdict::Ok) => {}
+        (_, crate::engines::qm::MemoryVerdict::ExceedsCanDirect { .. }) => {
             bail!(
                 "{} Re-run `qm {}` with --direct (integral-direct SCF) or --ri, \
                  or choose a smaller basis.",
@@ -300,7 +338,7 @@ fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
                 kind_keyword(kind),
             );
         }
-        crate::engines::qm::MemoryVerdict::ExceedsMustReduce { .. } => {
+        (_, crate::engines::qm::MemoryVerdict::ExceedsMustReduce { .. }) => {
             bail!(
                 "{} This calculation type needs in-core integrals; choose a smaller \
                  basis set or a smaller system.",
@@ -311,13 +349,24 @@ fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
 
     // Synchronous: a throwaway cancel flag and a no-op progress sink.
     let cancel = Arc::new(AtomicBool::new(false));
-    let result = run_qm_calculation(
-        QmJob::Molecular(request),
-        Some(state.config.compute_core_count.max(1)),
-        cancel,
-        |_| {},
-    )?;
-    let outcome = result.outcome;
+    let cores = Some(match job.engine {
+        QmEngine::Hartree => state.config.compute_core_count.max(1),
+        QmEngine::Orca => 1,
+    });
+    let outcome = match job.engine {
+        QmEngine::Hartree => run_qm_calculation(job, cores, cancel, |_| {})?.outcome,
+        QmEngine::Orca => {
+            let launch = crate::backend::engine_launch::resolve_engine_launch(
+                crate::backend::engine_launch::LaunchTarget::Local(&state.config.engine_overrides),
+                crate::engines::registry::EngineId::ORCA,
+            )?
+            .launch;
+            let QmCalculation::Molecular(request) = job.calculation else {
+                unreachable!("ORCA command built a periodic job");
+            };
+            crate::engines::orca::run_orca(request, launch, cores, cancel, |_| {})?
+        }
+    };
 
     // A QM run is a heavy calculation; surface its optimized geometry as a new
     // entry (the original is preserved), matching the GUI task and MD commands.
@@ -337,7 +386,7 @@ fn run_periodic_command(state: &mut AppState, args: &[String]) -> Result<String>
     let request = assemble_periodic_request(state, args)?;
     let cancel = Arc::new(AtomicBool::new(false));
     let result = run_qm_calculation(
-        QmJob::Periodic(request),
+        QmJob::periodic(request),
         Some(state.config.compute_core_count.max(1)),
         cancel,
         |_| {},

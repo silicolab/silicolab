@@ -30,7 +30,10 @@ SilicoLab works without them until you use the corresponding feature.
 
 - **GROMACS** — required for molecular dynamics simulations.
 
-Quantum chemistry is available through the built-in Hartree engine.
+ORCA is an optional external engine for molecular single-point energies,
+geometry optimizations, and vibrational frequencies. Quantum chemistry uses
+the built-in Hartree engine by default; ORCA is never required or selected
+automatically.
 
 See [External tools](./external-tools/) for setup notes, including GPU
 acceleration. See [Remote execution](./remote-execution/) to run heavy jobs on

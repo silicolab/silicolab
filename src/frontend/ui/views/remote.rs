@@ -109,6 +109,7 @@ fn render_host_engines(
                 probe,
                 // A remote path is not on this filesystem; there is nothing to browse.
                 browsable: false,
+                auto_discovery: !spec.requires_configured_path,
             },
             draft,
             actions,

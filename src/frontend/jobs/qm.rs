@@ -23,14 +23,28 @@ pub enum QmWorkerMessage {
 /// thread and return the live handle. The worker streams coarse stage updates,
 /// then a `Finished` outcome or `Failed` error. Caller stores the handle in
 /// [`JobManager`].
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn spawn_qm_job(job: QmJob, threads: Option<usize>) -> RunningQmJob {
+    spawn_qm_job_with_launches(
+        job,
+        threads,
+        crate::engines::registry::EngineLaunches::new(),
+    )
+    .expect("built-in QM job does not require an external launch")
+}
+
+pub fn spawn_qm_job_with_launches(
+    job: QmJob,
+    threads: Option<usize>,
+    launches: crate::engines::registry::EngineLaunches,
+) -> anyhow::Result<RunningQmJob> {
     let executor = if cfg!(test) {
         Executor::InProcess
     } else {
         Executor::LocalSubprocess
     };
-    // hartree is built in: a QM job needs no external launch.
-    let running = run_job(EngineRequest::builtin(Engine::Qm(job), threads), executor);
+    let request = EngineRequest::new(Engine::Qm(job), threads, launches)?;
+    let running = run_job(request, executor);
     // Production runs QM in a subprocess so Cancel can kill an opaque hartree
     // calculation without requiring in-process preemption hooks. Tests keep the
     // in-process path because Rust's test harness is not the self-exec worker.
@@ -54,10 +68,10 @@ pub fn spawn_qm_job(job: QmJob, threads: Option<usize>) -> RunningQmJob {
         }
     });
 
-    RunningQmJob {
+    Ok(RunningQmJob {
         cancel,
         receiver,
         latest_stage: None,
         cancel_requested: false,
-    }
+    })
 }

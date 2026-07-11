@@ -192,6 +192,7 @@ impl TsPromptForm {
 /// User-editable configuration for a quantum-chemistry (hartree) calculation.
 #[derive(Debug, Clone)]
 pub struct QmPrompt {
+    pub engine: crate::engines::qm::QmEngine,
     pub method: crate::engines::qm::QmMethod,
     /// Free-text functional name backing the "custom functional" field. When the
     /// method dropdown selects "Custom functional…", the panel reads this into
@@ -278,6 +279,7 @@ impl QmPrompt {
             QmKind::Optimize | QmKind::Frequencies | QmKind::TransitionState => "def2-svp",
         };
         Self {
+            engine: crate::engines::qm::QmEngine::Hartree,
             method: QmMethod::Dft("b3lyp".to_string()),
             custom_functional: String::new(),
             basis: basis.to_string(),
@@ -331,7 +333,7 @@ impl QmPrompt {
         use crate::engines::qm::{KMesh, PeriodicQmRequest, QmJob};
         if self.periodic {
             let form = &self.periodic_form;
-            QmJob::Periodic(PeriodicQmRequest {
+            QmJob::periodic(PeriodicQmRequest {
                 structure,
                 functional: form.functional,
                 basis: form.basis.clone(),
@@ -344,7 +346,7 @@ impl QmPrompt {
                 stress: form.stress,
             })
         } else {
-            QmJob::Molecular(self.to_request(structure, product))
+            QmJob::molecular(self.engine, self.to_request(structure, product))
         }
     }
 

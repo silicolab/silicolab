@@ -81,7 +81,10 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
             return;
         }
     }
-    if !prompt.periodic && resolve_remote_host(state, &prompt.prefs.target).is_none() {
+    if prompt.engine == crate::engines::qm::QmEngine::Hartree
+        && !prompt.periodic
+        && resolve_remote_host(state, &prompt.prefs.target).is_none()
+    {
         let request = prompt.to_request(state.structure().clone(), ts_product.clone());
         let verdict = memory_verdict(&request, crate::backend::hardware::qm_incore_budget_bytes());
         if let Some(notification) = qm_memory_notification(&verdict, "this machine") {
@@ -91,6 +94,21 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
     }
     let job = prompt.to_job(state.structure().clone(), ts_product);
     let remote_host = resolve_remote_host(state, &prompt.prefs.target);
+    let mut local_launches = crate::engines::registry::EngineLaunches::new();
+    if remote_host.is_none() && prompt.engine == crate::engines::qm::QmEngine::Orca {
+        let resolved = crate::backend::engine_launch::resolve_engine_launch(
+            crate::backend::engine_launch::LaunchTarget::Local(&state.config.engine_overrides),
+            crate::engines::registry::EngineId::ORCA,
+        );
+        let Ok(resolved) = resolved else {
+            state.set_message(
+                "set the ORCA program path in Settings -> Compute targets before running"
+                    .to_string(),
+            );
+            return;
+        };
+        local_launches.insert(crate::engines::registry::EngineId::ORCA, resolved.launch);
+    }
     state.set_source_path(None);
     state.ui.editor = None;
     state.ui.pending_qm = None;
@@ -100,7 +118,18 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
         Some(host) => start_remote_qm(state, job, host, prompt.prefs.job_resources()),
         None => {
             reserve_qm_run_dir(state);
-            let running = spawn_qm_job(job, Some(qm_thread_count(state, &prompt.prefs)));
+            let running = crate::frontend::jobs::spawn_qm_job_with_launches(
+                job,
+                Some(qm_thread_count(state, &prompt.prefs)),
+                local_launches,
+            );
+            let running = match running {
+                Ok(running) => running,
+                Err(error) => {
+                    state.set_message(format!("could not bind the QM engine launch: {error}"));
+                    return;
+                }
+            };
             state.jobs.set_qm(running);
             if let Some(task_run_id) = state.active_task_run {
                 state.tasks.mark_status(task_run_id, TaskStatus::Running);

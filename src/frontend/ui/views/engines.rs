@@ -87,6 +87,7 @@ pub(crate) fn render_engine_settings(
                 status,
                 probe,
                 browsable: true,
+                auto_discovery: !spec.requires_configured_path,
             },
             draft,
             actions,

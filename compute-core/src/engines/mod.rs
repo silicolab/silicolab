@@ -2,6 +2,7 @@ pub mod docking;
 pub mod forcefield;
 pub mod gromacs;
 pub mod methods;
+pub mod orca;
 pub mod process;
 pub mod qm;
 pub mod registry;

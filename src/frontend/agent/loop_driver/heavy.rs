@@ -8,7 +8,6 @@ use crate::frontend::agent::session::{AssistantConversationId, PendingTurn, Tran
 use crate::frontend::jobs::{
     AgentHeavyJob, DockingWorkerMessage, EngineWorkerMessage, QmWorkerMessage, RunningDockingJob,
     RunningEngineJob, RunningQmJob, TrackedAgentJob, spawn_docking_job, spawn_gromacs_pipeline_job,
-    spawn_qm_job,
 };
 use crate::frontend::state::AppState;
 use crate::io::llm::types::ToolCall;
@@ -154,10 +153,20 @@ pub fn spawn_heavy(state: &mut AppState, call: &ToolCall, kind: HeavyKind, ctx: 
 
     let spawned: Result<AgentHeavyJob, String> = match kind {
         HeavyKind::Qm => crate::frontend::qm_commands::build_agent_qm_request(state, args)
-            .map(|request| {
-                AgentHeavyJob::Qm(spawn_qm_job(
-                    crate::engines::qm::QmJob::Molecular(request),
-                    None,
+            .and_then(|job| {
+                let mut launches = crate::engines::registry::EngineLaunches::new();
+                if job.engine == crate::engines::qm::QmEngine::Orca {
+                    let launch = crate::backend::engine_launch::resolve_engine_launch(
+                        crate::backend::engine_launch::LaunchTarget::Local(
+                            &state.config.engine_overrides,
+                        ),
+                        crate::engines::registry::EngineId::ORCA,
+                    )?
+                    .launch;
+                    launches.insert(crate::engines::registry::EngineId::ORCA, launch);
+                }
+                Ok(AgentHeavyJob::Qm(
+                    crate::frontend::jobs::spawn_qm_job_with_launches(job, None, launches)?,
                 ))
             })
             .map_err(|error| error.to_string()),

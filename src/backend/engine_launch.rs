@@ -48,6 +48,9 @@ impl LaunchTarget<'_> {
     /// Resolve an unconfigured launch. Local discovery never starts the engine;
     /// remote discovery runs in the remote submission worker and verifies it.
     fn resolve_unconfigured(&self, spec: &EngineSpec) -> Option<(EngineLaunch, Option<String>)> {
+        if spec.requires_configured_path {
+            return None;
+        }
         match self {
             Self::Local(_) => {
                 crate::engines::registry::local_launch_candidate(spec).map(|launch| (launch, None))
@@ -62,6 +65,9 @@ impl LaunchTarget<'_> {
 
     /// Find a verified launch for an explicit Verify action.
     fn probe_verified(&self, spec: &EngineSpec) -> Option<(EngineLaunch, String)> {
+        if spec.requires_configured_path {
+            return None;
+        }
         match self {
             Self::Local(_) => crate::engines::registry::probe_local(spec),
             Self::Remote(host) => {
@@ -161,6 +167,13 @@ fn launch_spec(id: EngineId) -> Result<&'static EngineSpec> {
 }
 
 fn not_found_message(target: &LaunchTarget<'_>, spec: &EngineSpec) -> String {
+    if spec.requires_configured_path {
+        return format!(
+            "{} requires a user-specified program path in Settings -> Compute targets for {}.",
+            spec.name,
+            target.describe()
+        );
+    }
     let first = spec.candidate_executables.first().copied().unwrap_or("it");
     match target {
         LaunchTarget::Local(_) => format!(

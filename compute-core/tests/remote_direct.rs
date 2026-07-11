@@ -17,7 +17,7 @@
 //! (parity is bounded, never bit-for-bit).
 
 use compute_core::domain::{Atom, Structure};
-use compute_core::engines::qm::{QmJob, QmKind, QmMethod, QmOptions, QmRequest};
+use compute_core::engines::qm::{QmEngine, QmJob, QmKind, QmMethod, QmOptions, QmRequest};
 use compute_core::engines::remote::launcher::{Launcher, RemoteExecution};
 use compute_core::engines::remote::{RemoteTarget, deploy};
 use compute_core::hosts::RemoteHost;
@@ -43,16 +43,19 @@ fn h2_single_point() -> EngineRequest {
         ],
     );
     EngineRequest::builtin(
-        Engine::Qm(QmJob::Molecular(QmRequest {
-            structure,
-            method: QmMethod::Rhf,
-            basis: "sto-3g".to_string(),
-            charge: 0,
-            multiplicity: 1,
-            kind: QmKind::SinglePoint,
-            options: QmOptions::default(),
-            ts: None,
-        })),
+        Engine::Qm(QmJob::molecular(
+            QmEngine::Hartree,
+            QmRequest {
+                structure,
+                method: QmMethod::Rhf,
+                basis: "sto-3g".to_string(),
+                charge: 0,
+                multiplicity: 1,
+                kind: QmKind::SinglePoint,
+                options: QmOptions::default(),
+                ts: None,
+            },
+        )),
         None,
     )
 }
