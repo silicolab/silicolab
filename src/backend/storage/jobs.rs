@@ -67,6 +67,22 @@ impl RemoteJobStatus {
                 | RemoteJobStatus::Cancelled
         )
     }
+
+    /// The engine-neutral [`ExecutionState`](crate::job::ExecutionState) this
+    /// registry status projects — the execution axis, orthogonal to observability.
+    /// `Lost` is a definite remote termination with no outcome, so it
+    /// projects to `Failed`.
+    pub fn execution_state(self) -> crate::job::ExecutionState {
+        use crate::job::ExecutionState;
+        match self {
+            RemoteJobStatus::Queued => ExecutionState::Queued,
+            RemoteJobStatus::Running => ExecutionState::Running,
+            RemoteJobStatus::Cancelling => ExecutionState::Cancelling,
+            RemoteJobStatus::Done => ExecutionState::Succeeded,
+            RemoteJobStatus::Failed | RemoteJobStatus::Lost => ExecutionState::Failed,
+            RemoteJobStatus::Cancelled => ExecutionState::Cancelled,
+        }
+    }
 }
 
 /// One row of the `remote_jobs` table — the minimal durable state for a detached
@@ -74,9 +90,9 @@ impl RemoteJobStatus {
 /// `host_id` + `job_id` via `RemoteTarget::for_run`.
 #[derive(Debug, Clone)]
 pub struct RemoteJob {
-    /// Global execution identity (primary key). Currently equal to the owning
-    /// `TaskRun::run_uuid` value, which the reverse lookups still key on; it
-    /// becomes a distinct [`compute_core::job::JobId`] when the runtime adopts it.
+    /// Global execution identity (primary key): the [`compute_core::job::JobId`] the
+    /// submitting `JobExecution` minted, as a string. Attribution back to a task
+    /// resolves through the run graph (`task_run_id_for_job`), not a `run_uuid`.
     pub job_id: String,
     /// `RemoteHost::id`; indexed so a reconnect lists a host's rows cheaply.
     pub host_id: String,
@@ -109,6 +125,20 @@ pub struct RemoteJob {
     pub reason: Option<String>,
     pub console_offset: u64,
     pub unknown_since_ms: Option<i64>,
+}
+
+impl RemoteJob {
+    /// Whether this remote job can currently be observed — the observability
+    /// axis, orthogonal to [`RemoteJobStatus::execution_state`]. A pending
+    /// `unknown_since_ms` freshness marker means the last poll could not reach the
+    /// job, so the observation is `Unreachable` while its execution status is left
+    /// untouched; a poll that settles a definite phase clears it back to `Observed`.
+    pub fn observation_state(&self) -> crate::job::ObservationState {
+        match self.unknown_since_ms {
+            Some(_) => crate::job::ObservationState::Unreachable,
+            None => crate::job::ObservationState::Observed,
+        }
+    }
 }
 
 /// Path to the global registry database, alongside `settings.json`.

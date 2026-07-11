@@ -3,6 +3,7 @@ use std::sync::atomic::Ordering;
 use crate::backend::storage::jobs as registry;
 use crate::backend::tasks::TaskStatus;
 use crate::frontend::state::AppState;
+use crate::job::CancelCapability;
 
 use super::agent::AgentHeavyJob;
 use super::manager::JobManager;
@@ -54,13 +55,6 @@ pub enum JobStatus {
     Cancelled,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CancelCapability {
-    Cooperative,
-    RemoteLauncher,
-    None,
-}
-
 impl JobControlId {
     pub fn token(&self) -> String {
         match self {
@@ -79,6 +73,19 @@ impl LocalJobSlot {
             Self::Qm => "qm",
             Self::Docking => "docking",
             Self::Engine => "engine",
+        }
+    }
+
+    /// The static cancel capability of this slot's engine. Docking wraps a
+    /// single opaque Vina search that cannot be interrupted once it starts, so it
+    /// is `Unsupported`; the others honour a cancel flag (mid-step, or by killing
+    /// the subprocess), so they are `Cooperative`.
+    pub fn cancel_capability(self) -> CancelCapability {
+        match self {
+            Self::Docking => CancelCapability::Unsupported,
+            Self::Optimizer | Self::Disorder | Self::Qm | Self::Engine => {
+                CancelCapability::Cooperative
+            }
         }
     }
 }
@@ -131,20 +138,6 @@ impl JobStatus {
     }
 }
 
-impl CancelCapability {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Cooperative => "cooperative",
-            Self::RemoteLauncher => "remote-launcher",
-            Self::None => "none",
-        }
-    }
-
-    pub fn can_cancel(self) -> bool {
-        !matches!(self, Self::None)
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LiveJobSnapshot {
     pub id: JobControlId,
@@ -159,6 +152,23 @@ pub struct LiveJobSnapshot {
     pub task_run_id: Option<u64>,
     pub run_uuid: Option<String>,
     pub host_label: Option<String>,
+}
+
+impl LiveJobSnapshot {
+    /// Whether a Cancel action should be offered right now: the engine's static
+    /// [`CancelCapability`] must permit it, and the job must still be in a state a
+    /// cancel can act on (not already terminal, and not already cancelling).
+    pub fn can_cancel(&self) -> bool {
+        self.cancel.can_cancel()
+            && !matches!(
+                self.status,
+                JobStatus::Cancelling
+                    | JobStatus::Done
+                    | JobStatus::Failed
+                    | JobStatus::Lost
+                    | JobStatus::Cancelled
+            )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,7 +234,6 @@ impl JobManager {
             );
             if running.cancel_requested {
                 snapshot.status = JobStatus::Cancelling;
-                snapshot.cancel = CancelCapability::None;
             }
             jobs.push(snapshot);
         }
@@ -427,7 +436,7 @@ pub fn format_job_row(job: &LiveJobSnapshot) -> String {
         job_status_display(job),
         job.stage.as_deref().unwrap_or("-"),
         job.backend.label(),
-        job.cancel.label(),
+        job.cancel.token(),
     )
 }
 
@@ -529,11 +538,10 @@ pub fn remote_job_snapshot(row: &registry::RemoteJob) -> LiveJobSnapshot {
         backend: JobBackend::RemoteRegistry,
         kind: JobKind::RemoteEngine,
         status: remote_status(row.status),
-        cancel: if row.status.is_terminal() {
-            CancelCapability::None
-        } else {
-            CancelCapability::RemoteLauncher
-        },
+        // A remote job is cancelled by killing its scheduler job / process group,
+        // which acts immediately — a preemptive capability. Whether a cancel is
+        // offered *now* is gated on the (non-terminal) status by `can_cancel`.
+        cancel: CancelCapability::Preemptive,
         label: format!("remote {} on {}", row.job_kind, row.host_label),
         engine_id: Some(row.engine_id.clone()),
         job_kind: Some(row.job_kind.clone()),
@@ -678,7 +686,7 @@ fn local_snapshot(
         backend: JobBackend::LocalLive,
         kind,
         status: JobStatus::Running,
-        cancel: CancelCapability::Cooperative,
+        cancel: slot.cancel_capability(),
         label: label.into(),
         engine_id: None,
         job_kind: None,
@@ -690,20 +698,29 @@ fn local_snapshot(
 }
 
 fn agent_snapshot(tracked: &super::agent::TrackedAgentJob) -> LiveJobSnapshot {
-    let (kind, stage, engine_id, job_kind, cancel_requested) = match &tracked.job {
+    let (kind, stage, engine_id, job_kind, capability, cancel_requested) = match &tracked.job {
         AgentHeavyJob::Qm(job) => (
             JobKind::AssistantQm,
             job.latest_stage.clone(),
             None,
             None,
+            CancelCapability::Cooperative,
             job.cancel_requested,
         ),
-        AgentHeavyJob::Docking(_) => (JobKind::AssistantDocking, None, None, None, false),
+        AgentHeavyJob::Docking(_) => (
+            JobKind::AssistantDocking,
+            None,
+            None,
+            None,
+            CancelCapability::Unsupported,
+            false,
+        ),
         AgentHeavyJob::Engine(job) => (
             JobKind::AssistantEngine,
             job.latest_stage.clone(),
             Some(job.engine.to_string()),
             Some(job.job_kind.to_string()),
+            CancelCapability::Cooperative,
             false,
         ),
     };
@@ -716,11 +733,7 @@ fn agent_snapshot(tracked: &super::agent::TrackedAgentJob) -> LiveJobSnapshot {
         } else {
             JobStatus::Running
         },
-        cancel: if cancel_requested {
-            CancelCapability::None
-        } else {
-            CancelCapability::Cooperative
-        },
+        cancel: capability,
         label: tracked.label.clone(),
         engine_id,
         job_kind,

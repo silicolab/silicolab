@@ -315,8 +315,8 @@ fn list_jobs_tool(state: &AppState) -> String {
                 "status": crate::frontend::jobs::job_status_display(job),
                 "stage": job.stage.clone(),
                 "backend": job.backend.label(),
-                "cancel_capability": job.cancel.label(),
-                "can_cancel": job.cancel.can_cancel(),
+                "cancel_capability": job.cancel.token(),
+                "can_cancel": job.can_cancel(),
             })
         })
         .collect::<Vec<_>>();

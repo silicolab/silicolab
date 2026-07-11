@@ -5,7 +5,10 @@ use std::fmt::Write as _;
 use crate::engines::docking::{
     DockingConfig, DockingInput, DockingKind, DockingOutcome, DockingRequest,
 };
-use crate::frontend::jobs::{DockingWorkerMessage, spawn_docking_job};
+use crate::frontend::jobs::{
+    DockingWorkerMessage, LocalJobSlot, RunningDockingJob, spawn_docking_job,
+};
+use crate::job::CancelSignal;
 
 /// File name of the saved multi-pose PDBQT inside a docking task's run directory.
 pub(crate) const DOCK_POSES_FILE: &str = "poses.pdbqt";
@@ -127,80 +130,73 @@ pub(crate) fn poll_docking_job(state: &mut AppState, ctx: &egui::Context) {
     let Some(running) = state.jobs.take_docking() else {
         return;
     };
-    let job_id = state
-        .jobs
-        .local_execution(crate::frontend::jobs::LocalJobSlot::Docking);
-    let task_run_id = job_id.and_then(|id| state.tasks.runs.task_run_id_for_job(&id.to_string()));
-    let fingerprint_before = state.entries_fingerprint();
-
-    if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-        running
-            .cancel
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        // The Vina search is one opaque call; cancel only takes effect once the
-        // current search returns (its result is then discarded).
-        state.set_message("docking stopping (the current search runs to completion)".to_string());
-    }
-
-    let mut finished = false;
-    let mut changed = false;
-    while let Ok(message) = running.receiver.try_recv() {
-        match message {
-            DockingWorkerMessage::Progress { stage } => {
-                state.set_message(format!("Docking: {stage}; press Esc to stop"));
-            }
-            DockingWorkerMessage::Finished(outcome) => {
-                let outcome = *outcome;
-                for line in outcome.summary.lines() {
-                    state.output_log.push(line.to_string());
-                }
-                let poses_path = save_dock_poses(state, &outcome);
-                let already =
-                    job_id.is_some_and(|id| outcome_already_materialized(state, &id.to_string()));
-                if !already {
-                    let pose_ids = add_dock_pose_entries(state, &outcome, task_run_id, poses_path);
-                    changed = !pose_ids.is_empty();
-                    if let Some(job_id) = &job_id {
-                        record_dock_materialization(state, &job_id.to_string(), &pose_ids);
-                    }
-                }
-                let best = outcome
-                    .poses
-                    .first()
-                    .map(|pose| pose.affinity)
-                    .unwrap_or(0.0);
-                state.set_message(format!(
-                    "Docking complete: {} pose(s), best {:+.2} kcal/mol",
-                    outcome.poses.len(),
-                    best
-                ));
-                complete_local_job(state, job_id, TaskStatus::Completed);
-                state
-                    .jobs
-                    .take_local_execution(crate::frontend::jobs::LocalJobSlot::Docking);
-                finished = true;
-            }
-            DockingWorkerMessage::Failed(error) => {
-                state.set_message(format!("docking failed: {error}"));
-                complete_local_job(state, job_id, TaskStatus::Failed);
-                state
-                    .jobs
-                    .take_local_execution(crate::frontend::jobs::LocalJobSlot::Docking);
-                finished = true;
-            }
-        }
-    }
-
-    if !finished {
+    if let Some(running) = drive(state, ctx, running) {
         state.jobs.set_docking(running);
-        request_next_optimization_poll(ctx);
-    } else {
-        if changed && state.entries_fingerprint() != fingerprint_before {
-            let now = ctx.input(|input| input.time);
-            state.request_autosave(now, AUTOSAVE_DEBOUNCE_SECS);
-        }
-        ctx.request_repaint();
     }
+}
+
+impl JobRuntime for RunningDockingJob {
+    fn slot(&self) -> LocalJobSlot {
+        LocalJobSlot::Docking
+    }
+
+    fn request_cancel(&mut self, state: &mut AppState) -> CancelSignal {
+        // The Vina search is one opaque call; the flag is honoured only before the
+        // search starts, so an in-flight search runs to completion. Report that
+        // truthfully as `Unsupported` — the job is not moved to `Cancelling`.
+        self.cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        state.set_message("docking stopping (the current search runs to completion)".to_string());
+        CancelSignal::Unsupported
+    }
+
+    fn poll(&mut self, state: &mut AppState, cx: &JobContext) -> JobPoll {
+        loop {
+            match self.receiver.try_recv() {
+                Ok(DockingWorkerMessage::Progress { stage }) => {
+                    state.set_message(format!("Docking: {stage}; press Esc to stop"));
+                }
+                Ok(DockingWorkerMessage::Finished(outcome)) => {
+                    apply_docking_outcome(state, cx, *outcome);
+                    return JobPoll::Terminal(TaskStatus::Completed);
+                }
+                Ok(DockingWorkerMessage::Failed(error)) => {
+                    state.set_message(format!("docking failed: {error}"));
+                    return JobPoll::Terminal(TaskStatus::Failed);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return JobPoll::Running,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return JobPoll::ChannelLost,
+            }
+        }
+    }
+}
+
+/// Apply a finished local docking search: save the poses, add one entry per pose,
+/// and record them in the ledger so a re-poll never re-creates them.
+fn apply_docking_outcome(state: &mut AppState, cx: &JobContext, outcome: DockingOutcome) {
+    for line in outcome.summary.lines() {
+        state.output_log.push(line.to_string());
+    }
+    let poses_path = save_dock_poses(state, &outcome);
+    let already = cx
+        .job_id
+        .is_some_and(|id| outcome_already_materialized(state, &id.to_string()));
+    if !already {
+        let pose_ids = add_dock_pose_entries(state, &outcome, cx.task_run_id, poses_path);
+        if let Some(job_id) = cx.job_id {
+            record_dock_materialization(state, &job_id.to_string(), &pose_ids);
+        }
+    }
+    let best = outcome
+        .poses
+        .first()
+        .map(|pose| pose.affinity)
+        .unwrap_or(0.0);
+    state.set_message(format!(
+        "Docking complete: {} pose(s), best {:+.2} kcal/mol",
+        outcome.poses.len(),
+        best
+    ));
 }
 
 /// Apply a retrieved remote docking outcome: log the summary, save the poses

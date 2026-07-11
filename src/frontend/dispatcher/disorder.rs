@@ -7,8 +7,11 @@
 use nalgebra::{Point3, Vector3};
 
 use crate::domain::{Structure, UnitCell};
-use crate::frontend::jobs::{DisorderWorkerMessage, spawn_disorder_job};
+use crate::frontend::jobs::{
+    DisorderWorkerMessage, LocalJobSlot, RunningDisorderJob, spawn_disorder_job,
+};
 use crate::frontend::state::{DisorderAmount, DisorderRegionKind, DisorderedSystemPrompt};
+use crate::job::CancelSignal;
 use crate::workflows::molecular_dynamics::solvation::splitmix64;
 use crate::workflows::packing::{
     PackLimits, PackRequest, PackSpecies, Region, RegionSense, count_for_concentration_molar,
@@ -240,73 +243,64 @@ fn build_region(prompt: &DisorderedSystemPrompt) -> Region {
 /// (mirrors `poll_optimization_job` streaming with `poll_engine_job`'s
 /// create-entry completion).
 pub(crate) fn poll_disorder_job(state: &mut AppState, ctx: &egui::Context) {
-    let Some(mut running) = state.jobs.take_disorder() else {
+    let Some(running) = state.jobs.take_disorder() else {
         return;
     };
-    let entry_id = running.result_entry_id;
-    let job_id = state
-        .jobs
-        .local_execution(crate::frontend::jobs::LocalJobSlot::Disorder);
-    let fingerprint_before = state.entries_fingerprint();
+    if let Some(running) = drive(state, ctx, running) {
+        state.jobs.set_disorder(running);
+    }
+}
 
-    if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-        running
-            .cancel
+impl JobRuntime for RunningDisorderJob {
+    fn slot(&self) -> LocalJobSlot {
+        LocalJobSlot::Disorder
+    }
+
+    fn request_cancel(&mut self, state: &mut AppState) -> CancelSignal {
+        self.cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
         state.set_message("Packing stopping; finishing the current pass".to_string());
+        CancelSignal::Accepted
     }
 
-    let mut finished = false;
-    while let Ok(message) = running.receiver.try_recv() {
-        match message {
-            DisorderWorkerMessage::Progress { structure, report } => {
-                write_disorder_structure(state, entry_id, structure);
-                state.set_message(format!(
-                    "Packing: {}/{} molecules placed; press Esc to stop",
-                    report.total_placed(),
-                    report.total_requested()
-                ));
-                running.latest_report = Some(report);
-            }
-            DisorderWorkerMessage::Finished { structure, report } => {
-                write_disorder_structure(state, entry_id, structure);
-                // The packed result may carry a simulation cell the placeholder
-                // lacked; refresh the export path so Save serializes to a
-                // cell-aware format (CIF) instead of the placeholder's XYZ.
-                if let Some(entry) = state.entries.entry_mut(entry_id) {
-                    entry.save_path = crate::io::structure_io::default_structure_save_path(
-                        &entry.structure,
-                        None,
-                    );
+    fn poll(&mut self, state: &mut AppState, _cx: &JobContext) -> JobPoll {
+        // Disorder streams into the entry created up front (`result_entry_id`),
+        // overwriting it in place; it adds no new entry and records no ledger row.
+        let entry_id = self.result_entry_id;
+        loop {
+            match self.receiver.try_recv() {
+                Ok(DisorderWorkerMessage::Progress { structure, report }) => {
+                    write_disorder_structure(state, entry_id, structure);
+                    state.set_message(format!(
+                        "Packing: {}/{} molecules placed; press Esc to stop",
+                        report.total_placed(),
+                        report.total_requested()
+                    ));
+                    self.latest_report = Some(report);
                 }
-                state.set_message(disorder_finished_message(&report));
-                complete_local_job(state, job_id, TaskStatus::Completed);
-                state
-                    .jobs
-                    .take_local_execution(crate::frontend::jobs::LocalJobSlot::Disorder);
-                running.latest_report = Some(report);
-                finished = true;
-            }
-            DisorderWorkerMessage::Failed(error) => {
-                state.set_message(format!("Packing failed: {error}"));
-                complete_local_job(state, job_id, TaskStatus::Failed);
-                state
-                    .jobs
-                    .take_local_execution(crate::frontend::jobs::LocalJobSlot::Disorder);
-                finished = true;
+                Ok(DisorderWorkerMessage::Finished { structure, report }) => {
+                    write_disorder_structure(state, entry_id, structure);
+                    // The packed result may carry a simulation cell the placeholder
+                    // lacked; refresh the export path so Save serializes to a
+                    // cell-aware format (CIF) instead of the placeholder's XYZ.
+                    if let Some(entry) = state.entries.entry_mut(entry_id) {
+                        entry.save_path = crate::io::structure_io::default_structure_save_path(
+                            &entry.structure,
+                            None,
+                        );
+                    }
+                    state.set_message(disorder_finished_message(&report));
+                    self.latest_report = Some(report);
+                    return JobPoll::Terminal(TaskStatus::Completed);
+                }
+                Ok(DisorderWorkerMessage::Failed(error)) => {
+                    state.set_message(format!("Packing failed: {error}"));
+                    return JobPoll::Terminal(TaskStatus::Failed);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return JobPoll::Running,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return JobPoll::ChannelLost,
             }
         }
-    }
-
-    if !finished {
-        state.jobs.set_disorder(running);
-        request_next_optimization_poll(ctx);
-    } else {
-        if state.entries_fingerprint() != fingerprint_before {
-            let now = ctx.input(|input| input.time);
-            state.request_autosave(now, AUTOSAVE_DEBOUNCE_SECS);
-        }
-        ctx.request_repaint();
     }
 }
 

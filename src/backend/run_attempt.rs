@@ -61,6 +61,55 @@ pub struct RunAttempt {
     pub finished_at_ms: Option<u64>,
 }
 
+/// Whether a job execution's outcome has been imported into the project.
+/// Distinct from execution success: a job can succeed remotely yet have its result
+/// still `Pending` (or `PendingRecovery` when its downloaded outcome file is gone).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResultImport {
+    /// The execution has nothing to import — a local run applies its result inline,
+    /// so there is no separate import step to track.
+    NotRequired,
+    /// Terminal with an outcome that has not yet been applied to this project (a
+    /// remote result awaiting a refresh or open-project compensation).
+    Pending,
+    /// The outcome has been materialized into the project (ledger recorded).
+    Applied,
+    /// Import was attempted and failed — e.g. the downloaded outcome was unreadable.
+    Failed,
+    /// Terminal remotely, but the downloaded outcome file is missing: surfaced to
+    /// the user for recovery, retried on the next remote refresh.
+    PendingRecovery,
+}
+
+impl ResultImport {
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::NotRequired => "not_required",
+            Self::Pending => "pending",
+            Self::Applied => "applied",
+            Self::Failed => "failed",
+            Self::PendingRecovery => "pending_recovery",
+        }
+    }
+
+    pub fn from_token(token: &str) -> Option<Self> {
+        Some(match token {
+            "not_required" => Self::NotRequired,
+            "pending" => Self::Pending,
+            "applied" => Self::Applied,
+            "failed" => Self::Failed,
+            "pending_recovery" => Self::PendingRecovery,
+            _ => return None,
+        })
+    }
+
+    /// Whether the import is settled with no outstanding work — the state a Task
+    /// must reach (alongside a successful execution) to display as complete.
+    pub fn is_complete(self) -> bool {
+        matches!(self, Self::NotRequired | Self::Applied)
+    }
+}
+
 /// One engine invocation. `job_id` is the global execution identity that
 /// supersedes `run_uuid`; `(run_attempt_id, ordinal)` orders executions within an
 /// attempt.
@@ -72,6 +121,9 @@ pub struct JobExecution {
     pub placement: Placement,
     pub job_kind: Option<String>,
     pub execution_state: ExecutionState,
+    /// Whether this execution's outcome has been imported — the durable home
+    /// for the pending-recovery signal, orthogonal to `execution_state`.
+    pub import_state: ResultImport,
     pub created_at_ms: u64,
     pub finished_at_ms: Option<u64>,
 }
@@ -162,6 +214,14 @@ impl RunGraph {
             .filter(|execution| execution.run_attempt_id == run_attempt_id)
             .count() as u32;
         let job_id = JobId::new();
+        // A remote execution's result is imported separately (on refresh or
+        // open-project compensation), so it starts `Pending`; a local run applies
+        // its result inline, so it needs no import step.
+        let import_state = if placement.is_remote() {
+            ResultImport::Pending
+        } else {
+            ResultImport::NotRequired
+        };
         self.executions.push(JobExecution {
             job_id,
             run_attempt_id,
@@ -169,6 +229,7 @@ impl RunGraph {
             placement,
             job_kind,
             execution_state: ExecutionState::Queued,
+            import_state,
             created_at_ms: now_ms,
             finished_at_ms: None,
         });
@@ -222,6 +283,65 @@ impl RunGraph {
                 execution.finished_at_ms = Some(now_ms);
             }
             self.dirty = true;
+        }
+    }
+
+    /// Set a job execution's import state. Called when the outcome is
+    /// materialized (`Applied`), when an open-project compensation cannot find the
+    /// downloaded outcome (`PendingRecovery`), or when it was unreadable (`Failed`).
+    /// A no-op when the `JobId` is not in this project's graph.
+    pub fn set_import_state(&mut self, job_id: &str, import_state: ResultImport) {
+        if let Some(execution) = self
+            .executions
+            .iter_mut()
+            .find(|execution| execution.job_id.to_string() == job_id)
+        {
+            if execution.import_state == import_state {
+                return;
+            }
+            execution.import_state = import_state;
+            self.dirty = true;
+        }
+    }
+
+    /// Reduce a task's current attempt's required executions to one import state:
+    /// `PendingRecovery` dominates, then `Failed`, then `Pending`; only when
+    /// none of those remain is the import considered settled (`Applied` when any
+    /// entry was imported, else `NotRequired`). All executions are required today.
+    pub fn attempt_import_state(&self, task_run_id: u64) -> ResultImport {
+        let Some(attempt) = self
+            .attempts
+            .iter()
+            .filter(|attempt| attempt.task_run_id == task_run_id)
+            .max_by_key(|attempt| attempt.attempt_no)
+        else {
+            return ResultImport::NotRequired;
+        };
+        let states = self
+            .executions
+            .iter()
+            .filter(|execution| execution.run_attempt_id == attempt.run_attempt_id)
+            .map(|execution| execution.import_state);
+        let mut any_applied = false;
+        let mut any_pending = false;
+        let mut any_failed = false;
+        for state in states {
+            match state {
+                ResultImport::PendingRecovery => return ResultImport::PendingRecovery,
+                ResultImport::Failed => any_failed = true,
+                ResultImport::Pending => any_pending = true,
+                ResultImport::Applied => any_applied = true,
+                ResultImport::NotRequired => {}
+            }
+        }
+        if any_failed {
+            ResultImport::Failed
+        } else if any_pending {
+            ResultImport::Pending
+        } else if any_applied {
+            ResultImport::Applied
+        } else {
+            ResultImport::NotRequired
         }
     }
 }
@@ -281,6 +401,60 @@ mod tests {
         );
         assert!(!graph.task_has_remote_execution(1));
         assert!(graph.task_has_remote_execution(2));
+    }
+
+    #[test]
+    fn remote_executions_start_pending_import_and_settle_to_applied() {
+        let mut graph = RunGraph::default();
+        let local = graph.begin_execution(1, Placement::Local, None, 0);
+        let remote = graph.begin_execution(2, Placement::Remote { host: None }, None, 0);
+        let import_of = |graph: &RunGraph, job: &JobId| {
+            graph
+                .executions()
+                .iter()
+                .find(|execution| &execution.job_id == job)
+                .unwrap()
+                .import_state
+        };
+        assert_eq!(import_of(&graph, &local), ResultImport::NotRequired);
+        assert_eq!(import_of(&graph, &remote), ResultImport::Pending);
+
+        graph.set_import_state(&remote.to_string(), ResultImport::Applied);
+        assert_eq!(import_of(&graph, &remote), ResultImport::Applied);
+    }
+
+    #[test]
+    fn attempt_import_state_reduces_by_severity() {
+        let mut graph = RunGraph::default();
+        // Two executions under one task's attempt.
+        graph.begin_execution(1, Placement::Remote { host: None }, None, 0);
+        let second = graph.begin_execution(1, Placement::Remote { host: None }, None, 0);
+        // Both Pending → the attempt is Pending.
+        assert_eq!(graph.attempt_import_state(1), ResultImport::Pending);
+        // One Applied, one Pending → still Pending (not all settled).
+        graph.set_import_state(&second.to_string(), ResultImport::Applied);
+        assert_eq!(graph.attempt_import_state(1), ResultImport::Pending);
+        // PendingRecovery dominates everything.
+        graph.set_import_state(&second.to_string(), ResultImport::PendingRecovery);
+        assert_eq!(graph.attempt_import_state(1), ResultImport::PendingRecovery);
+        assert!(!graph.attempt_import_state(1).is_complete());
+        // A task with no attempt has nothing to import.
+        assert_eq!(graph.attempt_import_state(99), ResultImport::NotRequired);
+        assert!(ResultImport::Applied.is_complete());
+    }
+
+    #[test]
+    fn result_import_tokens_round_trip() {
+        for state in [
+            ResultImport::NotRequired,
+            ResultImport::Pending,
+            ResultImport::Applied,
+            ResultImport::Failed,
+            ResultImport::PendingRecovery,
+        ] {
+            assert_eq!(ResultImport::from_token(state.token()), Some(state));
+        }
+        assert_eq!(ResultImport::from_token("bogus"), None);
     }
 
     #[test]

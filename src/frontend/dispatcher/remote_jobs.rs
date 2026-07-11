@@ -303,6 +303,15 @@ fn apply_remote_observation(
                 polled_at_ms: now,
             },
         );
+        // Mirror the confirmed status onto the run-graph JobExecution so the
+        // execution axis tracks the remote job. A pure timeout leaves `status` unchanged, so this never advances
+        // execution state on observability loss; ObservationState carries that,
+        // derived from `unknown_since_ms`. A no-op when the execution belongs to a
+        // project other than the one open (its JobId is not in this run graph).
+        state
+            .tasks
+            .runs
+            .set_execution_state(run_uuid, status.execution_state(), now.max(0) as u64);
         recorded = Some(status);
     }
     match outcome {
@@ -313,6 +322,10 @@ fn apply_remote_observation(
         }
         RemoteJobOutcome::OutcomeUnreadable(error, _) => {
             mark_remote_task(state, run_uuid, TaskStatus::Failed);
+            state
+                .tasks
+                .runs
+                .set_import_state(run_uuid, crate::backend::run_attempt::ResultImport::Failed);
             state.output_log.push(format!(
                 "remote job {} finished but its outcome was unreadable: {error}",
                 short_uuid(run_uuid)
@@ -382,6 +395,14 @@ fn phase_status(
     }
 }
 
+/// Fold one launcher observation into the registry status, keeping execution state
+/// separate from observability. A definite phase settles the status; a
+/// **pure timeout never does** — an unreachable job keeps its last confirmed status
+/// and only records how long it has gone unobserved (`unknown_since`, a freshness
+/// signal). A genuinely dead job is reported as an explicit `RemoteJobPhase::Lost`
+/// by the launcher (evidence the process group is gone) and settles above; it is
+/// never inferred from elapsed time here, so a slow or briefly-unreachable job is
+/// never misclassified as `Lost`.
 fn observed_status(
     prior: &registry::RemoteJob,
     phase: crate::engines::remote::launcher::RemoteJobPhase,
@@ -391,11 +412,7 @@ fn observed_status(
         return (phase_status(phase), None);
     }
     let unknown_since = prior.unknown_since_ms.unwrap_or(now_ms);
-    if now_ms.saturating_sub(unknown_since) >= 60_000 {
-        (registry::RemoteJobStatus::Lost, Some(unknown_since))
-    } else {
-        (prior.status, Some(unknown_since))
-    }
+    (prior.status, Some(unknown_since))
 }
 
 /// Whether a retrieved remote job's result belongs in the **currently open
@@ -569,6 +586,12 @@ pub(crate) fn import_completed_remote_jobs(state: &mut AppState, rows: Vec<regis
             }
             None => {
                 pending += 1;
+                // Record the pending-recovery durably on the execution, so it
+                // survives a restart and the UI can surface it, not just a log line.
+                state.tasks.runs.set_import_state(
+                    &row.job_id,
+                    crate::backend::run_attempt::ResultImport::PendingRecovery,
+                );
                 state.output_log.push(format!(
                     "remote job {} finished but its result is pending recovery \
                      (outcome file missing); it will retry on the next Refresh Remote",
@@ -660,138 +683,4 @@ fn short_uuid(uuid: &str) -> &str {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::backend::storage::jobs as registry;
-
-    fn qm_remote_row(job_id: &str, run_dir: &std::path::Path) -> registry::RemoteJob {
-        registry::RemoteJob {
-            job_id: job_id.to_string(),
-            host_id: "h".to_string(),
-            host_label: "H".to_string(),
-            remote_dir: "~/.silicolab/runs/x".to_string(),
-            scheduler: "direct".to_string(),
-            launch_handle: "1".to_string(),
-            cluster: None,
-            engine_id: "hartree".to_string(),
-            job_kind: "qm-energy".to_string(),
-            project_id: None,
-            project_root_hint: None,
-            local_run_dir: run_dir.to_string_lossy().to_string(),
-            status: registry::RemoteJobStatus::Done,
-            submitted_at_ms: 0,
-            last_polled_at_ms: None,
-            exit_code: None,
-            scheduler_state: None,
-            reason: None,
-            console_offset: 0,
-            unknown_since_ms: None,
-        }
-    }
-
-    #[test]
-    fn remote_qm_report_records_once_and_creates_no_entry() {
-        // §9 import cardinality (0 entry): a single-point energy report creates no
-        // entry but records a ledger row proving the outcome was applied, so a
-        // repeated apply neither duplicates nor is treated as un-imported.
-        let run_dir = std::path::PathBuf::from("target/test-qm-report-idempotency");
-        let _ = std::fs::remove_dir_all(&run_dir);
-        std::fs::create_dir_all(&run_dir).unwrap();
-        let mut state = AppState::scratch(Default::default(), Vec::new());
-        let row = qm_remote_row("job-qm", &run_dir);
-        let outcome = crate::engines::qm::QmOutcome {
-            energy_hartree: -1.5,
-            converged: true,
-            optimized_structure: None,
-            summary: "energy -1.5 Eh".to_string(),
-            scf_trace: Vec::new(),
-            opt_trace: Vec::new(),
-            frequencies: Vec::new(),
-        };
-
-        apply_remote_qm_outcome(&mut state, &row, outcome.clone());
-        assert!(
-            state.entries.records.is_empty(),
-            "an energy report creates no entry"
-        );
-        let record = state
-            .materializations
-            .get("job-qm")
-            .expect("the report is recorded in the ledger");
-        assert!(record.primary_entry_id.is_none());
-        assert!(record.entries.is_empty());
-
-        apply_remote_qm_outcome(&mut state, &row, outcome);
-        assert!(state.entries.records.is_empty());
-        assert_eq!(state.materializations.len(), 1);
-    }
-
-    #[test]
-    fn open_project_compensation_imports_present_outcome_and_flags_missing() {
-        // §9 terminal compensation: a completed row whose outcome.json is on disk is
-        // imported (ledger record); one whose file is gone stays unmaterialized —
-        // surfaced as a pending recovery, never silently marked done.
-        let root = std::path::PathBuf::from("target/test-compensation");
-        let _ = std::fs::remove_dir_all(&root);
-        let present_dir = root.join("present");
-        std::fs::create_dir_all(&present_dir).unwrap();
-        let outcome = crate::wire::EngineOutcome::Qm(crate::engines::qm::QmOutcome {
-            energy_hartree: -2.0,
-            converged: true,
-            optimized_structure: None,
-            summary: "energy -2.0 Eh".to_string(),
-            scf_trace: Vec::new(),
-            opt_trace: Vec::new(),
-            frequencies: Vec::new(),
-        });
-        std::fs::write(
-            present_dir.join(crate::engines::remote::launcher::OUTCOME_FILE),
-            serde_json::to_vec(&outcome).unwrap(),
-        )
-        .unwrap();
-
-        let mut state = AppState::scratch(Default::default(), Vec::new());
-        let present = qm_remote_row("job-present", &present_dir);
-        let missing = qm_remote_row("job-missing", &root.join("missing"));
-
-        import_completed_remote_jobs(&mut state, vec![present, missing]);
-
-        assert!(
-            state.materializations.contains("job-present"),
-            "the downloaded outcome is imported"
-        );
-        assert!(
-            !state.materializations.contains("job-missing"),
-            "a missing outcome stays pending, not marked done"
-        );
-        assert!(
-            state
-                .output_log
-                .iter()
-                .any(|line| line.contains("pending recovery")),
-            "the pending recovery is surfaced, not silently dropped"
-        );
-    }
-
-    #[test]
-    fn ownerless_job_in_scratch_session_belongs_here() {
-        // The reported regression: a build submitted with no project open (`None`)
-        // and refreshed in a scratch session (`None`) was discarded by the old
-        // `is_some()` guard. Equality of origins now materializes it into scratch.
-        assert!(project_root_matches(None, None));
-    }
-
-    #[test]
-    fn matching_project_belongs_here() {
-        assert!(project_root_matches(Some("/work/a"), Some("/work/a")));
-    }
-
-    #[test]
-    fn mismatched_origin_is_left_for_its_own_workspace() {
-        // A different project open, an owned job with no project open, or an
-        // ownerless job with a project open: none is dumped into the wrong place.
-        assert!(!project_root_matches(Some("/work/a"), Some("/work/b")));
-        assert!(!project_root_matches(Some("/work/a"), None));
-        assert!(!project_root_matches(None, Some("/work/b")));
-    }
-}
+mod tests;

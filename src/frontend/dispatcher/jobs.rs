@@ -2,11 +2,13 @@ use super::*;
 
 mod compute;
 mod poll;
+mod runtime;
 #[cfg(test)]
 mod tests;
 
 pub(crate) use compute::*;
 pub(crate) use poll::*;
+pub(crate) use runtime::*;
 
 /// Begin (or resume) playback of one of an entry's MD-run trajectories. The
 /// trajectory files live in the run directory and are decoded in the background;

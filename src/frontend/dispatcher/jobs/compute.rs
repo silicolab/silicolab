@@ -1,6 +1,10 @@
 use super::super::*;
 
-use crate::frontend::jobs::LocalJobSlot;
+use super::{JobContext, JobPoll, JobRuntime, drive};
+use crate::frontend::jobs::{
+    EngineSuccess, LocalJobSlot, RunningEngineJob, RunningOptimization, RunningQmJob,
+};
+use crate::job::CancelSignal;
 
 /// Persist a locally-run QM calculation's artifacts into the active task's run
 /// directory, creating it on demand. A no-op when there is no active QM task run
@@ -25,293 +29,277 @@ pub(crate) fn save_qm_run_artifacts(state: &mut AppState, outcome: &crate::engin
 }
 
 pub(crate) fn poll_engine_job(state: &mut AppState, ctx: &egui::Context) {
-    let Some(mut running) = state.jobs.take_engine() else {
+    let Some(running) = state.jobs.take_engine() else {
         return;
     };
-    let job_id = state.jobs.local_execution(LocalJobSlot::Engine);
-    let task_run_id = job_id.and_then(|id| state.tasks.runs.task_run_id_for_job(&id.to_string()));
-    let mut before = state.optimization_origin.take();
-    let fingerprint_before = state.entries_fingerprint();
-
-    if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-        running
-            .cancel
-            .store(true, std::sync::atomic::Ordering::Relaxed);
-        state.set_message(format!("{} {} stopping", running.engine, running.job_kind));
-    }
-
-    let mut finished = false;
-    let mut saw_progress = false;
-    let mut commit_history = false;
-    let engine_name = running.engine;
-
-    while let Ok(message) = running.receiver.try_recv() {
-        match message {
-            EngineWorkerMessage::Stage(stage) => {
-                state.set_message(format!("{engine_name}: {stage}"));
-                running.latest_stage = Some(stage);
-            }
-            EngineWorkerMessage::Log(line) => {
-                running.append_log(line);
-            }
-            EngineWorkerMessage::Finished(success) => {
-                // The badge tracks the job kind, not the trajectory, so a relax-only run
-                // (which writes no `.xtc`) is still marked; build jobs are not.
-                let is_md_run = success.job_kind == "run-md";
-                let trajectory = success.trajectory.clone();
-                let save_path = structure_io::default_structure_save_path(&success.structure, None);
-                let entry_id = add_and_show_entry(state, success.structure, None, save_path);
-                if let Some(task_run_id) = task_run_id {
-                    record_task_result_entry(state, task_run_id, entry_id);
-                }
-                if is_md_run {
-                    set_md_run_origin(state, entry_id, trajectory);
-                }
-                if let Some(job_id) = &job_id {
-                    let role = if is_md_run { "md" } else { "structure" };
-                    record_materialization(
-                        state,
-                        &job_id.to_string(),
-                        role,
-                        Some(entry_id),
-                        &[entry_id],
-                    );
-                }
-                state.set_message(success.summary);
-                saw_progress = false;
-                commit_history = false;
-                complete_local_job(state, job_id, TaskStatus::Completed);
-                state.jobs.take_local_execution(LocalJobSlot::Engine);
-                finished = true;
-            }
-            EngineWorkerMessage::Failed(error) => {
-                state.set_message(format!("{engine_name} failed: {error}"));
-                complete_local_job(state, job_id, TaskStatus::Failed);
-                state.jobs.take_local_execution(LocalJobSlot::Engine);
-                finished = true;
-            }
-        }
-    }
-
-    if !finished {
-        state.optimization_origin = before;
+    if let Some(running) = drive(state, ctx, running) {
         state.jobs.set_engine(running);
-        ctx.request_repaint_after(engine_poll_frame());
-    } else {
-        if commit_history || saw_progress {
-            if let Some(before) = before.take() {
-                state.history.push_undo(before);
-            }
-        } else {
-            before.take();
-        }
-        // A completed build adds/edits an entry; persist that result (debounced).
-        if state.entries_fingerprint() != fingerprint_before {
-            let now = ctx.input(|input| input.time);
-            state.request_autosave(now, AUTOSAVE_DEBOUNCE_SECS);
-        }
-        ctx.request_repaint();
     }
 }
 
+impl JobRuntime for RunningEngineJob {
+    fn slot(&self) -> LocalJobSlot {
+        LocalJobSlot::Engine
+    }
+
+    fn request_cancel(&mut self, state: &mut AppState) -> CancelSignal {
+        // The `gmx` subprocess is spawned with this flag, so an in-flight mdrun is
+        // killed and the pipeline stops between stages.
+        self.cancel
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        state.set_message(format!("{} {} stopping", self.engine, self.job_kind));
+        CancelSignal::Accepted
+    }
+
+    fn poll(&mut self, state: &mut AppState, cx: &JobContext) -> JobPoll {
+        let engine_name = self.engine;
+        loop {
+            match self.receiver.try_recv() {
+                Ok(EngineWorkerMessage::Stage(stage)) => {
+                    state.set_message(format!("{engine_name}: {stage}"));
+                    self.latest_stage = Some(stage);
+                }
+                Ok(EngineWorkerMessage::Log(line)) => self.append_log(line),
+                Ok(EngineWorkerMessage::Finished(success)) => {
+                    apply_engine_outcome(state, cx, *success);
+                    // A completed build discards its pre-build undo snapshot.
+                    state.optimization_origin = None;
+                    return JobPoll::Terminal(TaskStatus::Completed);
+                }
+                Ok(EngineWorkerMessage::Failed(error)) => {
+                    state.set_message(format!("{engine_name} failed: {error}"));
+                    state.optimization_origin = None;
+                    return JobPoll::Terminal(TaskStatus::Failed);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return JobPoll::Running,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return JobPoll::ChannelLost,
+            }
+        }
+    }
+}
+
+/// Apply a finished engine run: add the result structure as a new entry, mark it
+/// an MD-run output when it produced a trajectory, and record it in the ledger.
+fn apply_engine_outcome(state: &mut AppState, cx: &JobContext, success: EngineSuccess) {
+    // The badge tracks the job kind, not the trajectory, so a relax-only run (which
+    // writes no `.xtc`) is still marked; build jobs are not.
+    let is_md_run = success.job_kind == "run-md";
+    let trajectory = success.trajectory.clone();
+    let save_path = structure_io::default_structure_save_path(&success.structure, None);
+    let entry_id = add_and_show_entry(state, success.structure, None, save_path);
+    if let Some(task_run_id) = cx.task_run_id {
+        record_task_result_entry(state, task_run_id, entry_id);
+    }
+    if is_md_run {
+        set_md_run_origin(state, entry_id, trajectory);
+    }
+    if let Some(job_id) = cx.job_id {
+        let role = if is_md_run { "md" } else { "structure" };
+        record_materialization(
+            state,
+            &job_id.to_string(),
+            role,
+            Some(entry_id),
+            &[entry_id],
+        );
+    }
+    state.set_message(success.summary);
+}
+
 pub(crate) fn poll_optimization_job(state: &mut AppState, ctx: &egui::Context) {
-    let Some(mut running) = state.jobs.take_optimizer() else {
+    let Some(running) = state.jobs.take_optimizer() else {
         return;
     };
-    let job_id = state.jobs.local_execution(LocalJobSlot::Optimizer);
-    let mut before = state.optimization_origin.take();
-    let fingerprint_before = state.entries_fingerprint();
+    if let Some(running) = drive(state, ctx, running) {
+        state.jobs.set_optimizer(running);
+    }
+}
 
-    if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-        running
-            .cancel
+impl JobRuntime for RunningOptimization {
+    fn slot(&self) -> LocalJobSlot {
+        LocalJobSlot::Optimizer
+    }
+
+    fn request_cancel(&mut self, state: &mut AppState) -> CancelSignal {
+        self.cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        state.set_message(match running.latest_report {
+        state.set_message(match self.latest_report {
             Some(report) => format!(
                 "forcefield optimization stopping: energy {:.3} -> {:.3} in {} steps",
                 report.initial_energy, report.final_energy, report.steps
             ),
             None => "forcefield optimization stopping".to_string(),
         });
+        CancelSignal::Accepted
     }
 
-    let mut finished = false;
-    let mut saw_progress = false;
-    let mut commit_history = false;
-    while let Ok(message) = running.receiver.try_recv() {
-        match message {
-            OptimizationWorkerMessage::Progress { structure, report } => {
-                *state.structure_mut() = structure;
-                state.mark_structure_changed();
-                running.latest_report = Some(report);
-                if running.energy_trace.is_empty() {
-                    running
-                        .energy_trace
-                        .push([0.0, f64::from(report.initial_energy)]);
+    fn poll(&mut self, state: &mut AppState, _cx: &JobContext) -> JobPoll {
+        // Optimization streams into the *live* active structure, so its pre-run
+        // snapshot is committed to undo history when it produced a result and
+        // restored (reverting the geometry) when it was stopped before any step.
+        let before = state.optimization_origin.take();
+        let mut saw_progress = false;
+        let outcome = loop {
+            match self.receiver.try_recv() {
+                Ok(OptimizationWorkerMessage::Progress { structure, report }) => {
+                    *state.structure_mut() = structure;
+                    state.mark_structure_changed();
+                    self.latest_report = Some(report);
+                    if self.energy_trace.is_empty() {
+                        self.energy_trace
+                            .push([0.0, f64::from(report.initial_energy)]);
+                    }
+                    self.energy_trace
+                        .push([report.steps as f64, f64::from(report.final_energy)]);
+                    saw_progress = true;
+                    state.set_source_path(None);
+                    state.set_message(format!(
+                        "forcefield optimizing: step {}, energy {:.3}; press Esc to stop",
+                        report.steps, report.final_energy
+                    ));
                 }
-                running
-                    .energy_trace
-                    .push([report.steps as f64, f64::from(report.final_energy)]);
-                saw_progress = true;
-                state.set_source_path(None);
-                state.set_message(format!(
-                    "forcefield optimizing: step {}, energy {:.3}; press Esc to stop",
-                    report.steps, report.final_energy
-                ));
+                Ok(OptimizationWorkerMessage::Finished { structure, report }) => {
+                    *state.structure_mut() = structure;
+                    state.mark_structure_changed();
+                    self.latest_report = Some(report);
+                    saw_progress = true;
+                    state.set_source_path(None);
+                    state.set_message(optimization_finished_message(report));
+                    break JobPoll::Terminal(TaskStatus::Completed);
+                }
+                Ok(OptimizationWorkerMessage::Failed(error)) => {
+                    state.set_message(format!("forcefield optimization failed: {error}"));
+                    break JobPoll::Terminal(TaskStatus::Failed);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => break JobPoll::Running,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => break JobPoll::ChannelLost,
             }
-            OptimizationWorkerMessage::Finished { structure, report } => {
-                *state.structure_mut() = structure;
-                state.mark_structure_changed();
-                running.latest_report = Some(report);
-                saw_progress = true;
-                commit_history = true;
-                state.set_source_path(None);
-                state.set_message(optimization_finished_message(report));
-                complete_local_job(state, job_id, TaskStatus::Completed);
-                state.jobs.take_local_execution(LocalJobSlot::Optimizer);
-                finished = true;
+        };
+        match outcome {
+            JobPoll::Running => {
+                state.optimization_origin = before;
+                JobPoll::Running
             }
-            OptimizationWorkerMessage::Failed(error) => {
-                state.set_message(format!("forcefield optimization failed: {error}"));
-                complete_local_job(state, job_id, TaskStatus::Failed);
-                state.jobs.take_local_execution(LocalJobSlot::Optimizer);
-                finished = true;
+            terminal => {
+                if let Some(before) = before {
+                    if saw_progress {
+                        state.history.push_undo(before);
+                    } else {
+                        state.restore_edit_snapshot(before);
+                    }
+                }
+                terminal
             }
         }
-    }
-
-    if !finished {
-        state.optimization_origin = before;
-        state.jobs.set_optimizer(running);
-        request_next_optimization_poll(ctx);
-    } else {
-        if commit_history || saw_progress {
-            if let Some(before) = before.take() {
-                state.history.push_undo(before);
-            }
-        } else if let Some(before) = before.take() {
-            state.restore_edit_snapshot(before);
-        }
-        // Persist the finished (or reverted) geometry once, not per step.
-        if state.entries_fingerprint() != fingerprint_before {
-            let now = ctx.input(|input| input.time);
-            state.request_autosave(now, AUTOSAVE_DEBOUNCE_SECS);
-        }
-        ctx.request_repaint();
     }
 }
 
 pub(crate) fn poll_qm_job(state: &mut AppState, ctx: &egui::Context) {
-    let Some(mut running) = state.jobs.take_qm() else {
+    let Some(running) = state.jobs.take_qm() else {
         return;
     };
-    let job_id = state.jobs.local_execution(LocalJobSlot::Qm);
-    let task_run_id = job_id.and_then(|id| state.tasks.runs.task_run_id_for_job(&id.to_string()));
-    let fingerprint_before = state.entries_fingerprint();
-
-    if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
-        running.cancel_requested = true;
-        running.cancel.cancel();
-        if let Some(task_run_id) = task_run_id {
-            mark_task_status(state, task_run_id, TaskStatus::Cancelling);
-        }
-        state.set_message("QM calculation stopping".to_string());
-    }
-
-    let mut finished = false;
-    let mut changed = false;
-    while let Ok(message) = running.receiver.try_recv() {
-        match message {
-            QmWorkerMessage::Progress { stage } => {
-                state.set_message(format!("QM: {stage}; press Esc to stop"));
-                running.latest_stage = Some(stage);
-            }
-            QmWorkerMessage::Finished(outcome) => {
-                if running.cancel_requested {
-                    state.set_message("QM calculation cancelled".to_string());
-                    complete_local_job(state, job_id, TaskStatus::Cancelled);
-                    state.jobs.take_local_execution(LocalJobSlot::Qm);
-                    finished = true;
-                    continue;
-                }
-                let outcome = *outcome;
-                for line in outcome.summary.lines() {
-                    state.output_log.push(line.to_string());
-                }
-                // Persist the raw report to the task's run directory before any
-                // new entry is added, so the run's source entry is the input
-                // structure, not the optimized result.
-                save_qm_run_artifacts(state, &outcome);
-                // A QM run is a heavy calculation; its optimized geometry is
-                // surfaced as a new entry (the original structure is preserved),
-                // matching the convention for entry-producing tasks. A single-point
-                // energy or frequency run produces no entry but still records a
-                // report in the ledger, so its outcome is durably marked applied.
-                let already =
-                    job_id.is_some_and(|id| outcome_already_materialized(state, &id.to_string()));
-                if !already {
-                    if let Some(optimized) = outcome.optimized_structure {
-                        let save_path = structure_io::default_structure_save_path(&optimized, None);
-                        let entry_id = add_and_show_entry(state, optimized, None, save_path);
-                        if let Some(task_run_id) = task_run_id {
-                            record_task_result_entry(state, task_run_id, entry_id);
-                        }
-                        set_qm_run_origin(state, entry_id);
-                        changed = true;
-                        if let Some(job_id) = &job_id {
-                            record_materialization(
-                                state,
-                                &job_id.to_string(),
-                                "optimized",
-                                Some(entry_id),
-                                &[entry_id],
-                            );
-                        }
-                    } else if let Some(job_id) = &job_id {
-                        record_materialization(state, &job_id.to_string(), "report", None, &[]);
-                    }
-                }
-                // The run just became the newest QM result of whichever entry it
-                // anchors to — the new geometry, or the input structure when there
-                // is none. Either way the memoized per-entry chart availability is
-                // now stale.
-                state.ui.chart_availability.clear();
-                state.set_message(format!(
-                    "QM complete: energy {:.6} Eh{}",
-                    outcome.energy_hartree,
-                    if outcome.converged {
-                        " (converged)"
-                    } else {
-                        " (not converged)"
-                    }
-                ));
-                complete_local_job(state, job_id, TaskStatus::Completed);
-                state.jobs.take_local_execution(LocalJobSlot::Qm);
-                finished = true;
-            }
-            QmWorkerMessage::Failed(error) => {
-                if running.cancel_requested {
-                    state.set_message("QM calculation cancelled".to_string());
-                    complete_local_job(state, job_id, TaskStatus::Cancelled);
-                } else {
-                    state.set_message(format!("QM calculation failed: {error}"));
-                    complete_local_job(state, job_id, TaskStatus::Failed);
-                }
-                state.jobs.take_local_execution(LocalJobSlot::Qm);
-                finished = true;
-            }
-        }
-    }
-
-    if !finished {
+    if let Some(running) = drive(state, ctx, running) {
         state.jobs.set_qm(running);
-        request_next_optimization_poll(ctx);
-    } else {
-        // An optimization adds a new entry; persist it once (debounced).
-        if changed && state.entries_fingerprint() != fingerprint_before {
-            let now = ctx.input(|input| input.time);
-            state.request_autosave(now, AUTOSAVE_DEBOUNCE_SECS);
-        }
-        ctx.request_repaint();
     }
+}
+
+impl JobRuntime for RunningQmJob {
+    fn slot(&self) -> LocalJobSlot {
+        LocalJobSlot::Qm
+    }
+
+    fn request_cancel(&mut self, state: &mut AppState) -> CancelSignal {
+        // Production runs QM in a subprocess, so this kills the hartree child; the
+        // flag re-labels a `Finished`/`Failed` that races the kill as cancelled.
+        self.cancel_requested = true;
+        self.cancel.cancel();
+        state.set_message("QM calculation stopping".to_string());
+        CancelSignal::Accepted
+    }
+
+    fn poll(&mut self, state: &mut AppState, cx: &JobContext) -> JobPoll {
+        loop {
+            match self.receiver.try_recv() {
+                Ok(QmWorkerMessage::Progress { stage }) => {
+                    state.set_message(format!("QM: {stage}; press Esc to stop"));
+                    self.latest_stage = Some(stage);
+                }
+                Ok(QmWorkerMessage::Finished(outcome)) => {
+                    if self.cancel_requested {
+                        state.set_message("QM calculation cancelled".to_string());
+                        return JobPoll::Terminal(TaskStatus::Cancelled);
+                    }
+                    apply_qm_outcome(state, cx, *outcome);
+                    return JobPoll::Terminal(TaskStatus::Completed);
+                }
+                Ok(QmWorkerMessage::Failed(error)) => {
+                    if self.cancel_requested {
+                        state.set_message("QM calculation cancelled".to_string());
+                        return JobPoll::Terminal(TaskStatus::Cancelled);
+                    }
+                    state.set_message(format!("QM calculation failed: {error}"));
+                    return JobPoll::Terminal(TaskStatus::Failed);
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => return JobPoll::Running,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return JobPoll::ChannelLost,
+            }
+        }
+    }
+}
+
+/// Apply a finished local QM outcome: save the report, surface an optimized
+/// geometry as a new entry (or record a report for an entry-less run), and record
+/// the outcome in the ledger so a re-poll never re-imports it.
+fn apply_qm_outcome(state: &mut AppState, cx: &JobContext, outcome: crate::engines::qm::QmOutcome) {
+    for line in outcome.summary.lines() {
+        state.output_log.push(line.to_string());
+    }
+    // Persist the raw report to the task's run directory before any new entry is
+    // added, so the run's source entry is the input structure, not the result.
+    save_qm_run_artifacts(state, &outcome);
+    // A QM run's optimized geometry is surfaced as a new entry (the original is
+    // preserved). A single-point energy or frequency run produces no entry but
+    // still records a report in the ledger, so its outcome is durably applied.
+    let already = cx
+        .job_id
+        .is_some_and(|id| outcome_already_materialized(state, &id.to_string()));
+    if !already {
+        match outcome.optimized_structure {
+            Some(optimized) => {
+                let save_path = structure_io::default_structure_save_path(&optimized, None);
+                let entry_id = add_and_show_entry(state, optimized, None, save_path);
+                if let Some(task_run_id) = cx.task_run_id {
+                    record_task_result_entry(state, task_run_id, entry_id);
+                }
+                set_qm_run_origin(state, entry_id);
+                if let Some(job_id) = cx.job_id {
+                    record_materialization(
+                        state,
+                        &job_id.to_string(),
+                        "optimized",
+                        Some(entry_id),
+                        &[entry_id],
+                    );
+                }
+            }
+            None => {
+                if let Some(job_id) = cx.job_id {
+                    record_materialization(state, &job_id.to_string(), "report", None, &[]);
+                }
+            }
+        }
+    }
+    // The run is now the newest QM result of whichever entry it anchors to — the
+    // new geometry, or the input structure when there is none — so the memoized
+    // per-entry chart availability is stale.
+    state.ui.chart_availability.clear();
+    state.set_message(format!(
+        "QM complete: energy {:.6} Eh{}",
+        outcome.energy_hartree,
+        if outcome.converged {
+            " (converged)"
+        } else {
+            " (not converged)"
+        }
+    ));
 }

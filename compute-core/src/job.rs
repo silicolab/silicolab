@@ -124,6 +124,17 @@ impl ObservationState {
     }
 }
 
+/// The runtime's answer to a cancel request, distinct from the static
+/// [`CancelCapability`]. `Accepted` moves the execution to `Cancelling` (still
+/// non-terminal); `Unsupported`/`Rejected` leave the execution state untouched.
+/// A job that finishes normally after a cancel request still reports `Succeeded`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CancelSignal {
+    Accepted,
+    Unsupported,
+    Rejected,
+}
+
 /// Static, conservative promise about whether a job can be cancelled, exposed
 /// with the job so the UI can show cancel availability before the click. It must
 /// hold for the whole execution lifecycle; a single opaque blocking engine that
@@ -151,6 +162,13 @@ impl CancelCapability {
             "unsupported" => Self::Unsupported,
             _ => return None,
         })
+    }
+
+    /// Whether a cancel request can do anything at all. Static: an `Unsupported`
+    /// job (an opaque blocking call that cannot be interrupted mid-run) can never
+    /// honour one, so the UI must not offer it a Cancel button.
+    pub fn can_cancel(self) -> bool {
+        !matches!(self, Self::Unsupported)
     }
 }
 

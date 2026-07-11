@@ -3,7 +3,7 @@ use std::str::FromStr;
 use anyhow::Result;
 use rusqlite::{Connection, params};
 
-use crate::backend::run_attempt::{JobExecution, Placement, RunAttempt, RunGraph};
+use crate::backend::run_attempt::{JobExecution, Placement, ResultImport, RunAttempt, RunGraph};
 use crate::job::{ExecutionState, JobId};
 
 pub(crate) fn load_run_graph(db: &Connection) -> Result<RunGraph> {
@@ -26,7 +26,7 @@ pub(crate) fn load_run_graph(db: &Connection) -> Result<RunGraph> {
 
     let mut execution_stmt = db.prepare(
         "select job_id, run_attempt_id, ordinal, placement, placement_host, job_kind,
-                execution_state, created_at_ms, finished_at_ms
+                execution_state, import_state, created_at_ms, finished_at_ms
          from job_executions
          order by run_attempt_id, ordinal",
     )?;
@@ -40,8 +40,9 @@ pub(crate) fn load_run_graph(db: &Connection) -> Result<RunGraph> {
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, Option<String>>(5)?,
                 row.get::<_, String>(6)?,
-                row.get::<_, i64>(7)? as u64,
-                row.get::<_, Option<i64>>(8)?.map(|value| value as u64),
+                row.get::<_, String>(7)?,
+                row.get::<_, i64>(8)? as u64,
+                row.get::<_, Option<i64>>(9)?.map(|value| value as u64),
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -55,6 +56,7 @@ pub(crate) fn load_run_graph(db: &Connection) -> Result<RunGraph> {
         placement_host,
         job_kind,
         execution_state,
+        import_state,
         created_at_ms,
         finished_at_ms,
     ) in rows
@@ -74,6 +76,8 @@ pub(crate) fn load_run_graph(db: &Connection) -> Result<RunGraph> {
             placement: Placement::from_parts(&placement, placement_host),
             job_kind,
             execution_state,
+            import_state: ResultImport::from_token(&import_state)
+                .unwrap_or(ResultImport::NotRequired),
             created_at_ms,
             finished_at_ms,
         });
@@ -106,8 +110,8 @@ pub(crate) fn write_run_graph(conn: &Connection, runs: &RunGraph) -> Result<()> 
         conn.execute(
             "insert into job_executions
                 (job_id, run_attempt_id, ordinal, placement, placement_host, job_kind,
-                 execution_state, created_at_ms, finished_at_ms)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                 execution_state, import_state, created_at_ms, finished_at_ms)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 execution.job_id.to_string(),
                 execution.run_attempt_id as i64,
@@ -116,6 +120,7 @@ pub(crate) fn write_run_graph(conn: &Connection, runs: &RunGraph) -> Result<()> 
                 execution.placement.host(),
                 execution.job_kind.as_deref(),
                 execution.execution_state.token(),
+                execution.import_state.token(),
                 execution.created_at_ms as i64,
                 execution.finished_at_ms.map(|value| value as i64),
             ],
@@ -145,6 +150,9 @@ mod tests {
             200,
         );
         graph.set_execution_state(&local.to_string(), ExecutionState::Succeeded, 300);
+        graph.set_import_state(&local.to_string(), ResultImport::Applied);
+        // A remote result whose downloaded outcome went missing.
+        graph.set_import_state(&remote.to_string(), ResultImport::PendingRecovery);
 
         write_run_graph(&conn, &graph).unwrap();
         let loaded = load_run_graph(&conn).unwrap();
@@ -163,5 +171,16 @@ mod tests {
             "the terminal state survives the round-trip"
         );
         assert_eq!(local_execution.placement, Placement::Local);
+        assert_eq!(local_execution.import_state, ResultImport::Applied);
+        let remote_execution = loaded
+            .executions()
+            .iter()
+            .find(|execution| execution.job_id == remote)
+            .unwrap();
+        assert_eq!(
+            remote_execution.import_state,
+            ResultImport::PendingRecovery,
+            "the durable pending-recovery signal survives a restart"
+        );
     }
 }

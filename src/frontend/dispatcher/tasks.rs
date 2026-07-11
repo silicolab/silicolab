@@ -281,6 +281,13 @@ pub(crate) fn record_materialization(
             primary_entry_id,
             entries,
         });
+    // The ledger is the idempotency authority; mark the execution's import state
+    // Applied so the run graph carries the durable "imported" signal too (a remote
+    // execution starts Pending). A no-op when the job is not in this project's graph.
+    state
+        .tasks
+        .runs
+        .set_import_state(job_id, crate::backend::run_attempt::ResultImport::Applied);
 }
 
 pub(crate) fn open_task_panel(state: &mut AppState, task_run_id: u64) {

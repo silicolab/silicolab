@@ -1,7 +1,6 @@
 //! The project-scoped materialization ledger: the durable, idempotent record of
 //! which engine job produced which result entries. Keyed by the global execution
-//! identity — currently the owning `TaskRun::run_uuid` value, a distinct
-//! `compute_core::job::JobId` once the runtime adopts it. This is the backend's
+//! identity, `compute_core::job::JobId` (as a string). This is the backend's
 //! authority for "has this outcome already been applied", so a remote refresh or an
 //! open-project compensation never re-creates results it already imported.
 //!

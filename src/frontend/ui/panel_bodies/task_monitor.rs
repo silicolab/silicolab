@@ -294,7 +294,7 @@ fn render_controlled_jobs(state: &AppState, ui: &mut egui::Ui, actions: &mut Vec
                         {
                             actions.push(AppAction::RemoveRemoteScratch(run_uuid.clone()));
                         }
-                        if job.cancel.can_cancel() && ui.button("Cancel").clicked() {
+                        if job.can_cancel() && ui.button("Cancel").clicked() {
                             actions.push(AppAction::CancelControlledJob(job.id.clone()));
                         }
                         ui.label(job_status_badge(

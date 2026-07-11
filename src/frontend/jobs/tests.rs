@@ -299,7 +299,7 @@ fn remote_job_snapshot_maps_last_known_registry_state() {
     assert_eq!(snapshot.backend, JobBackend::RemoteRegistry);
     assert_eq!(snapshot.kind, JobKind::RemoteEngine);
     assert_eq!(snapshot.status, JobStatus::Running);
-    assert_eq!(snapshot.cancel, CancelCapability::RemoteLauncher);
+    assert_eq!(snapshot.cancel, crate::job::CancelCapability::Preemptive);
     assert_eq!(snapshot.engine_id.as_deref(), Some("hartree"));
     assert_eq!(snapshot.job_kind.as_deref(), Some("qm-energy"));
     assert_eq!(snapshot.host_label.as_deref(), Some("Cluster"));
