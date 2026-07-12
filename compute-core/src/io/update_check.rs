@@ -7,7 +7,7 @@
 
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 
 /// The releases page offered to the user when an update is found (also the
 /// fallback when the API response carries no per-release URL).
@@ -28,6 +28,41 @@ fn http_agent(timeout: Duration) -> ureq::Agent {
             .timeout_global(Some(timeout))
             .build(),
     )
+}
+
+/// Turn a ureq failure into an actionable cause. A `StatusCode` means GitHub
+/// answered but refused (rate limit / not found / other); anything else means no
+/// HTTP response arrived at all, i.e. offline, DNS, proxy, or TLS. Only the
+/// `StatusCode` variant is matched by name, so ureq's `#[non_exhaustive]` set can
+/// grow without breaking this.
+fn classify_github_error(err: ureq::Error) -> anyhow::Error {
+    let status = match &err {
+        ureq::Error::StatusCode(code) => Some(*code),
+        _ => None,
+    };
+    classify_github_failure(status, &err.to_string())
+}
+
+/// The message logic split from [`classify_github_error`] so it is unit-testable
+/// without constructing a `#[non_exhaustive]` `ureq::Error`. `status` is the HTTP
+/// status if GitHub answered; `None` means the request never completed.
+fn classify_github_failure(status: Option<u16>, display: &str) -> anyhow::Error {
+    match status {
+        Some(status @ (403 | 429)) => anyhow!(
+            "GitHub returned HTTP {status}. This usually means the anonymous API rate \
+             limit was reached — common when several machines behind one outbound IP (a \
+             NAT'd lab or office) query GitHub together. Wait a few minutes and retry."
+        ),
+        Some(404) => anyhow!(
+            "GitHub returned HTTP 404: the release or asset does not exist. The version \
+             may be unpublished or still a draft, or its worker asset was not built."
+        ),
+        Some(status) => anyhow!("GitHub returned HTTP {status}."),
+        None => anyhow!(
+            "could not reach GitHub ({display}). The machine may be offline or behind a \
+             proxy or firewall that blocks the connection."
+        ),
+    }
 }
 
 /// GitHub REST base for this repo's releases. `releases/latest` (the update
@@ -62,7 +97,9 @@ pub fn check_for_update() -> Result<Option<AvailableUpdate>> {
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", API_USER_AGENT)
         .call()
-        .context("failed to query GitHub for the latest release")?
+        .map_err(|e| {
+            classify_github_error(e).context("failed to query GitHub for the latest release")
+        })?
         .body_mut()
         .with_config()
         .limit(MAX_RESPONSE_BYTES)
@@ -83,11 +120,8 @@ pub fn release_asset_url(tag: &str, asset_name: &str) -> Result<String> {
         .header("Accept", "application/vnd.github+json")
         .header("User-Agent", API_USER_AGENT)
         .call()
-        .with_context(|| {
-            format!(
-                "could not fetch GitHub release {tag}. Confirm the release is published \
-                 (not a draft) and that the repository is reachable."
-            )
+        .map_err(|e| {
+            classify_github_error(e).context(format!("could not fetch GitHub release {tag}"))
         })?
         .body_mut()
         .with_config()
@@ -125,7 +159,7 @@ pub fn download_asset_bytes(url: &str, max_bytes: u64) -> Result<Vec<u8>> {
         .get(url)
         .header("User-Agent", API_USER_AGENT)
         .call()
-        .with_context(|| format!("failed to download {url}"))?
+        .map_err(|e| classify_github_error(e).context(format!("failed to download {url}")))?
         .body_mut()
         .with_config()
         .limit(max_bytes)
@@ -139,7 +173,7 @@ pub fn download_asset_text(url: &str) -> Result<String> {
         .get(url)
         .header("User-Agent", API_USER_AGENT)
         .call()
-        .with_context(|| format!("failed to download {url}"))?
+        .map_err(|e| classify_github_error(e).context(format!("failed to download {url}")))?
         .body_mut()
         .with_config()
         .limit(MAX_RESPONSE_BYTES)
@@ -192,7 +226,29 @@ fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
 
 #[cfg(test)]
 mod tests {
-    use super::{RELEASES_URL, is_newer, parse_version, update_from_response};
+    use super::{
+        RELEASES_URL, classify_github_failure, is_newer, parse_version, update_from_response,
+    };
+
+    #[test]
+    fn github_failure_distinguishes_rate_limit_not_found_and_offline() {
+        let rate_429 = classify_github_failure(Some(429), "").to_string();
+        assert!(rate_429.contains("429") && rate_429.contains("rate limit"));
+        let rate_403 = classify_github_failure(Some(403), "").to_string();
+        assert!(rate_403.contains("403") && rate_403.contains("rate limit"));
+        assert!(
+            classify_github_failure(Some(404), "")
+                .to_string()
+                .contains("404")
+        );
+        assert!(
+            classify_github_failure(Some(500), "")
+                .to_string()
+                .contains("500")
+        );
+        let offline = classify_github_failure(None, "host not found").to_string();
+        assert!(offline.contains("offline") && offline.contains("host not found"));
+    }
 
     #[test]
     fn parses_plain_and_prefixed_versions() {

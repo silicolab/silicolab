@@ -10,6 +10,13 @@ use anyhow::{Context, Result, bail};
 use sha2::{Digest, Sha256};
 
 #[cfg(all(feature = "network", not(feature = "dev-worker")))]
+use std::{
+    fs::File,
+    io::Read,
+    path::{Path, PathBuf},
+};
+
+#[cfg(all(feature = "network", not(feature = "dev-worker")))]
 use crate::io::update_check;
 
 #[cfg(feature = "dev-worker")]
@@ -18,6 +25,10 @@ const DEV_WORKER_ENV: &str = "SILICOLAB_DEV_WORKER";
 const DEV_WORKER_TARGET: &str = "target/x86_64-unknown-linux-musl/release/silicolab-compute";
 #[cfg(all(feature = "network", not(feature = "dev-worker")))]
 const RELEASE_ASSET_NAME: &str = "silicolab-compute-x86_64-unknown-linux-musl";
+/// Prefix shared by every worker filename: the release qualifier and the local
+/// cache entry (`<prefix><version>-<sha256>`).
+#[cfg(all(feature = "network", not(feature = "dev-worker")))]
+const CACHE_PREFIX: &str = "silicolab-compute-";
 
 pub(super) const MAX_WORKER_BYTES: u64 = 256 * 1024 * 1024;
 
@@ -85,7 +96,20 @@ impl WorkerArtifact {
     pub(super) fn into_bytes(self) -> Result<Vec<u8>> {
         match self {
             #[cfg(all(feature = "network", not(feature = "dev-worker")))]
-            Self::Release { version } => download_release(&version),
+            Self::Release { version } => {
+                if let Some(bytes) = read_cached_worker(&version) {
+                    return Ok(bytes);
+                }
+                let (bytes, digest) = download_release(&version).with_context(|| {
+                    format!(
+                        "could not obtain the compute worker for version {version}. If this \
+                         machine is offline or rate-limited, run a remote job once while \
+                         online to cache the worker, then retry."
+                    )
+                })?;
+                store_cached_worker(&version, &digest, &bytes);
+                Ok(bytes)
+            }
             #[cfg(feature = "dev-worker")]
             Self::LocalDev { bytes, .. } => Ok(bytes),
         }
@@ -122,8 +146,10 @@ impl WorkerArtifact {
     }
 }
 
+/// Fetch and verify the release worker, returning its bytes and their verified
+/// lowercase SHA-256 so the caller can name the cache entry without re-hashing.
 #[cfg(all(feature = "network", not(feature = "dev-worker")))]
-fn download_release(version: &str) -> Result<Vec<u8>> {
+fn download_release(version: &str) -> Result<(Vec<u8>, String)> {
     let tag = format!("v{version}");
     let bin_url = update_check::release_asset_url(&tag, RELEASE_ASSET_NAME)?;
     let sum_url = update_check::release_asset_url(&tag, &format!("{RELEASE_ASSET_NAME}.sha256"))?;
@@ -136,7 +162,120 @@ fn download_release(version: &str) -> Result<Vec<u8>> {
              The download is corrupt or tampered with; deployment aborted."
         );
     }
+    Ok((bytes, actual))
+}
+
+/// Per-user cache of verified worker binaries, one file per version. It survives
+/// GitHub outages, rate limits, and proxies once a version has been fetched once.
+#[cfg(all(feature = "network", not(feature = "dev-worker")))]
+fn worker_cache_dir() -> PathBuf {
+    crate::hosts::config_dir().join("workers")
+}
+
+#[cfg(all(feature = "network", not(feature = "dev-worker")))]
+fn cache_entry_name(version: &str, digest: &str) -> String {
+    format!("{CACHE_PREFIX}{version}-{digest}")
+}
+
+#[cfg(all(feature = "network", not(feature = "dev-worker")))]
+fn read_cached_worker(version: &str) -> Option<Vec<u8>> {
+    read_cached_worker_in(&worker_cache_dir(), version)
+}
+
+/// Return the cached bytes for `version` if a self-consistent entry exists. The
+/// filename records the digest the bytes were verified against at download time;
+/// a read recomputes it, so a corrupted or planted file is rejected — and dropped
+/// so the next deploy repopulates cleanly.
+#[cfg(all(feature = "network", not(feature = "dev-worker")))]
+fn read_cached_worker_in(dir: &Path, version: &str) -> Option<Vec<u8>> {
+    let prefix = format!("{CACHE_PREFIX}{version}-");
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+        let Some(digest) = name.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        if !is_sha256_hex(digest) {
+            continue;
+        }
+        match load_and_verify_cache_entry(&entry.path(), digest) {
+            Ok(bytes) => return Some(bytes),
+            Err(_) => {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
+    None
+}
+
+#[cfg(all(feature = "network", not(feature = "dev-worker")))]
+fn load_and_verify_cache_entry(path: &Path, expected_digest: &str) -> Result<Vec<u8>> {
+    let metadata = std::fs::metadata(path)
+        .with_context(|| format!("failed to stat cached worker {}", path.display()))?;
+    validate_worker_size(metadata.len())?;
+    let mut bytes = Vec::with_capacity(metadata.len() as usize);
+    File::open(path)
+        .with_context(|| format!("failed to open cached worker {}", path.display()))?
+        .take(MAX_WORKER_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("failed to read cached worker {}", path.display()))?;
+    validate_worker_size(bytes.len() as u64)?;
+    validate_linux_x86_64_elf(&bytes)?;
+    let actual = sha256_hex(&bytes);
+    if !actual.eq_ignore_ascii_case(expected_digest) {
+        bail!(
+            "cached worker {} does not match its recorded digest",
+            path.display()
+        );
+    }
     Ok(bytes)
+}
+
+/// Cache the verified worker. Best-effort: a write failure only costs a future
+/// re-download, so it never fails the deploy.
+#[cfg(all(feature = "network", not(feature = "dev-worker")))]
+fn store_cached_worker(version: &str, digest: &str, bytes: &[u8]) {
+    if let Err(error) = store_cached_worker_in(&worker_cache_dir(), version, digest, bytes) {
+        eprintln!("failed to cache the worker binary: {error}");
+    }
+}
+
+#[cfg(all(feature = "network", not(feature = "dev-worker")))]
+fn store_cached_worker_in(dir: &Path, version: &str, digest: &str, bytes: &[u8]) -> Result<()> {
+    std::fs::create_dir_all(dir)
+        .with_context(|| format!("failed to create worker cache {}", dir.display()))?;
+    let final_path = dir.join(cache_entry_name(version, digest));
+    let nonce = uuid::Uuid::new_v4().simple();
+    let tmp = dir.join(format!("{}.tmp-{nonce}", cache_entry_name(version, digest)));
+    std::fs::write(&tmp, bytes)
+        .with_context(|| format!("failed to stage cached worker {}", tmp.display()))?;
+    std::fs::rename(&tmp, &final_path)
+        .with_context(|| format!("failed to publish cached worker {}", final_path.display()))?;
+    prune_other_versions(dir, version);
+    Ok(())
+}
+
+/// Drop cache entries for versions other than the running build. A client only
+/// ever needs its own compile-time version, and in-flight jobs reference the
+/// remote binary, not this cache, so keeping one version is safe.
+#[cfg(all(feature = "network", not(feature = "dev-worker")))]
+fn prune_other_versions(dir: &Path, keep_version: &str) {
+    let keep = format!("{CACHE_PREFIX}{keep_version}-");
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let file_name = entry.file_name();
+        let name = file_name.to_string_lossy();
+        if name.starts_with(CACHE_PREFIX) && !name.starts_with(keep.as_str()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+#[cfg(all(feature = "network", not(feature = "dev-worker")))]
+fn is_sha256_hex(token: &str) -> bool {
+    token.len() == 64 && token.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 #[cfg(feature = "dev-worker")]
@@ -161,7 +300,7 @@ fn local_dev_path(override_path: Option<OsString>, manifest_dir: &Path) -> Resul
     Ok(workspace.join(DEV_WORKER_TARGET))
 }
 
-#[cfg(feature = "dev-worker")]
+#[cfg(any(feature = "network", feature = "dev-worker"))]
 fn validate_worker_size(size: u64) -> Result<()> {
     if size == 0 {
         bail!("development worker is empty");
@@ -172,7 +311,7 @@ fn validate_worker_size(size: u64) -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "dev-worker")]
+#[cfg(any(feature = "network", feature = "dev-worker"))]
 fn validate_linux_x86_64_elf(bytes: &[u8]) -> Result<()> {
     if bytes.len() < 64 {
         bail!("file is too short to contain an ELF64 header");
@@ -214,7 +353,7 @@ fn parse_sha256(text: &str) -> Result<String> {
         .next()
         .context("checksum file is empty")?
         .to_ascii_lowercase();
-    if token.len() != 64 || !token.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !is_sha256_hex(&token) {
         bail!("checksum file does not contain a SHA-256 digest");
     }
     Ok(token)
@@ -251,7 +390,7 @@ mod tests {
         assert!(parse_sha256("not-a-hash").is_err());
     }
 
-    #[cfg(feature = "dev-worker")]
+    #[cfg(any(feature = "network", feature = "dev-worker"))]
     fn elf_header() -> Vec<u8> {
         let mut bytes = vec![0; 64];
         bytes[..4].copy_from_slice(b"\x7fELF");
@@ -260,6 +399,68 @@ mod tests {
         bytes[16..18].copy_from_slice(&2_u16.to_le_bytes());
         bytes[18..20].copy_from_slice(&62_u16.to_le_bytes());
         bytes
+    }
+
+    #[cfg(all(feature = "network", not(feature = "dev-worker")))]
+    fn scratch_cache_dir() -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "silicolab-worker-cache-{}",
+            uuid::Uuid::new_v4().simple()
+        ))
+    }
+
+    #[cfg(all(feature = "network", not(feature = "dev-worker")))]
+    #[test]
+    fn cache_round_trips_and_self_heals_on_tamper() {
+        let dir = scratch_cache_dir();
+        let bytes = elf_header();
+        let digest = sha256_hex(&bytes);
+        let version = "0.9.9";
+
+        assert!(read_cached_worker_in(&dir, version).is_none());
+        store_cached_worker_in(&dir, version, &digest, &bytes).unwrap();
+        assert_eq!(read_cached_worker_in(&dir, version), Some(bytes.clone()));
+
+        // Overwrite the entry with different bytes: its recomputed digest no
+        // longer matches the filename, so it is rejected and removed.
+        let entry = dir.join(cache_entry_name(version, &digest));
+        let mut tampered = bytes.clone();
+        tampered.push(0xff);
+        std::fs::write(&entry, &tampered).unwrap();
+        assert!(read_cached_worker_in(&dir, version).is_none());
+        assert!(!entry.exists());
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(all(feature = "network", not(feature = "dev-worker")))]
+    #[test]
+    fn cache_store_prunes_other_versions() {
+        let dir = scratch_cache_dir();
+        let bytes = elf_header();
+        let digest = sha256_hex(&bytes);
+
+        store_cached_worker_in(&dir, "0.1.0", &digest, &bytes).unwrap();
+        store_cached_worker_in(&dir, "0.2.0", &digest, &bytes).unwrap();
+
+        assert!(read_cached_worker_in(&dir, "0.1.0").is_none());
+        assert_eq!(read_cached_worker_in(&dir, "0.2.0"), Some(bytes));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[cfg(all(feature = "network", not(feature = "dev-worker")))]
+    #[test]
+    fn cache_does_not_confuse_a_prerelease_with_its_stable_version() {
+        let dir = scratch_cache_dir();
+        let bytes = elf_header();
+        let digest = sha256_hex(&bytes);
+
+        store_cached_worker_in(&dir, "0.2.0-beta.1", &digest, &bytes).unwrap();
+        assert!(read_cached_worker_in(&dir, "0.2.0").is_none());
+        assert_eq!(read_cached_worker_in(&dir, "0.2.0-beta.1"), Some(bytes));
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[cfg(feature = "dev-worker")]
