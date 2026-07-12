@@ -8,7 +8,8 @@ sidebar:
 Quantum chemistry, molecular docking, and MD/GROMACS jobs can run on a remote
 x86-64 Linux host while the GUI remains on your computer. SilicoLab uses the
 operating system's `ssh` and `scp` clients and deploys a checksum-verified,
-version-matched worker on first use.
+version-matched worker on first use, caching it under `~/.silicolab/workers` so
+later deployments — including to new hosts — work without network access.
 
 ## Set up SSH
 
@@ -100,3 +101,9 @@ Slurm target. Allocation state and pending reason belong in the task monitor.
   **Job environment commands**, then use **Detect GROMACS**.
 - **ORCA is not configured:** enter the ORCA executable path for that remote
   host under **Compute targets**. ORCA is not auto-detected.
+- **Worker download fails (offline, proxy, or GitHub rate limit):** the
+  version-matched worker is fetched from GitHub the first time you deploy a given
+  SilicoLab version, then cached under `~/.silicolab/workers` for reuse. To use
+  remote compute offline, run one remote job while online after each update to warm
+  the cache. A cached worker is reused without any network request; only the first
+  fetch for a new version needs GitHub.
