@@ -138,6 +138,10 @@ fn esc_still_requests_qm_cancel_with_stage_boundary_message() {
         latest_stage: Some("SCF".into()),
         cancel_requested: false,
     });
+    state.jobs.bind_local_execution(
+        crate::frontend::jobs::LocalJobSlot::Qm,
+        crate::job::JobId::new(),
+    );
     let ctx = egui::Context::default();
     ctx.input_mut(|input| {
         input.events.push(egui::Event::Key {
@@ -152,7 +156,10 @@ fn esc_still_requests_qm_cancel_with_stage_boundary_message() {
     poll_qm_job(&mut state, &ctx);
 
     assert!(cancel.load(std::sync::atomic::Ordering::Relaxed));
-    assert_eq!(state.message, "QM calculation stopping");
+    assert_eq!(
+        state.status_notice().map(|notice| notice.text.as_str()),
+        Some("QM calculation stopping")
+    );
     assert!(state.jobs.qm.is_some());
 }
 
@@ -482,6 +489,7 @@ fn esc_on_docking_flags_best_effort_but_does_not_claim_cancelling() {
     state.jobs.set_docking(RunningDockingJob {
         cancel: std::sync::Arc::clone(&cancel),
         receiver: rx,
+        latest_stage: None,
     });
 
     let ctx = egui::Context::default();

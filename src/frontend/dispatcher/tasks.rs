@@ -1,8 +1,9 @@
 use super::*;
+use crate::frontend::state::SystemSubsystem;
 
 pub(crate) fn create_task_from_template(state: &mut AppState, template_id: &'static str) {
     let Some(controller) = task_controller_by_id(template_id).copied() else {
-        state.set_message(format!("Unknown task: {template_id}"));
+        state.status_error(format!("Unknown task: {template_id}"));
         return;
     };
 
@@ -19,7 +20,7 @@ pub(crate) fn create_task_from_template(state: &mut AppState, template_id: &'sta
             .dock
             .add_task(task_run_id, state.config.default_task_panel_placement);
     }
-    state.set_message(format!(
+    state.status_success(format!(
         "Opened task #{}: {}",
         task_run_id, controller.title
     ));
@@ -28,7 +29,7 @@ pub(crate) fn create_task_from_template(state: &mut AppState, template_id: &'sta
 
 pub(crate) fn run_task(state: &mut AppState, task_run_id: u64) {
     let Some(task) = state.tasks.task_run(task_run_id).cloned() else {
-        state.set_message(format!("Task #{task_run_id} not found"));
+        state.status_error(format!("Task #{task_run_id} not found"));
         return;
     };
     // Direct (non-panel) tasks act on the active structure immediately, so they
@@ -37,13 +38,13 @@ pub(crate) fn run_task(state: &mut AppState, task_run_id: u64) {
     // the action, so they open even on an empty workspace.
     if task.panel == TaskPanelKind::None && !state.has_active_entry() {
         state.tasks.mark_status(task_run_id, TaskStatus::Failed);
-        state.set_message("Open or create an entry before running tasks".to_string());
+        state.status_neutral("Open or create an entry before running tasks".to_string());
         return;
     }
 
     let Some(executor) = task_executor(task.kind) else {
         state.tasks.mark_status(task_run_id, TaskStatus::Failed);
-        state.set_message(format!("No executor registered for task {}", task.title));
+        state.status_error(format!("No executor registered for task {}", task.title));
         return;
     };
     (executor.run)(state, task_run_id);
@@ -87,14 +88,20 @@ pub(crate) fn complete_active_task(state: &mut AppState, kind: TaskKind, status:
 
 pub(crate) fn sync_task_manifest(state: &mut AppState, task_run_id: u64) {
     if let Err(error) = crate::frontend::task_executor::sync_task_manifest(state, task_run_id) {
-        state.set_message(format!("failed to write run manifest: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Storage,
+            format!("failed to write run manifest: {error}"),
+        );
     }
 }
 
 pub(crate) fn mark_task_status(state: &mut AppState, task_run_id: u64, status: TaskStatus) {
     if let Err(error) = crate::frontend::task_executor::mark_task_status(state, task_run_id, status)
     {
-        state.set_message(format!("failed to update task status: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Storage,
+            format!("failed to update task status: {error}"),
+        );
     }
 }
 
@@ -155,7 +162,10 @@ pub(crate) fn record_task_result_entry(state: &mut AppState, task_run_id: u64, e
     if let Err(error) =
         crate::frontend::task_executor::record_task_result_entry(state, task_run_id, entry_id)
     {
-        state.set_message(format!("failed to record task result entry: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Storage,
+            format!("failed to record task result entry: {error}"),
+        );
     }
 }
 

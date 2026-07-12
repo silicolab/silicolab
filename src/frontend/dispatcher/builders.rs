@@ -1,4 +1,5 @@
 use super::*;
+use crate::frontend::state::SystemSubsystem;
 
 mod qm;
 
@@ -40,12 +41,12 @@ pub(crate) fn preview_framework_task(state: &mut AppState) {
             state.set_save_path(built.save_path);
             state.ui.camera = crate::frontend::ViewCamera::default();
             state.ui.selection.clear();
-            state.set_message(format!(
+            state.status_neutral(format!(
                 "Reticular structure preview generated; {}",
                 built.analysis
             ));
         }
-        Err(error) => state.set_message(format!("Reticular structure build failed: {error}")),
+        Err(error) => state.status_error(format!("Reticular structure build failed: {error}")),
     }
 }
 
@@ -59,7 +60,7 @@ pub(crate) fn accept_framework_task(state: &mut AppState) {
                 state.restore_edit_snapshot(before);
             }
             add_and_show_entry(state, built.structure, None, built.save_path);
-            state.set_message(format!("Reticular structure built; {}", built.analysis));
+            state.status_success(format!("Reticular structure built; {}", built.analysis));
             complete_active_task(
                 state,
                 TaskKind::BuildReticularStructure,
@@ -67,7 +68,7 @@ pub(crate) fn accept_framework_task(state: &mut AppState) {
             );
             close_active_task_panel(state);
         }
-        Err(error) => state.set_message(format!("Reticular structure build failed: {error}")),
+        Err(error) => state.status_error(format!("Reticular structure build failed: {error}")),
     }
 }
 
@@ -80,7 +81,7 @@ pub(crate) fn cancel_framework_task(state: &mut AppState) {
         state.ui.reticular_builder = None;
     }
     state.ui.reticular_builder = None;
-    state.set_message("Reticular structure build canceled".to_string());
+    state.status_neutral("Reticular structure build canceled".to_string());
     complete_active_task(state, TaskKind::BuildReticularStructure, TaskStatus::Failed);
     close_active_task_panel(state);
 }
@@ -112,9 +113,9 @@ pub(crate) fn preview_nanosheet_task(state: &mut AppState) {
             state.set_save_path(built.save_path);
             state.ui.camera = crate::frontend::ViewCamera::default();
             state.ui.selection.clear();
-            state.set_message(format!("Nanosheet preview generated; {}", built.analysis));
+            state.status_neutral(format!("Nanosheet preview generated; {}", built.analysis));
         }
-        Err(error) => state.set_message(format!("Nanosheet build failed: {error}")),
+        Err(error) => state.status_error(format!("Nanosheet build failed: {error}")),
     }
 }
 
@@ -128,11 +129,11 @@ pub(crate) fn accept_nanosheet_task(state: &mut AppState) {
                 state.restore_edit_snapshot(before);
             }
             add_and_show_entry(state, built.structure, None, built.save_path);
-            state.set_message(format!("Nanosheet built; {}", built.analysis));
+            state.status_success(format!("Nanosheet built; {}", built.analysis));
             complete_active_task(state, TaskKind::BuildNanosheet, TaskStatus::Completed);
             close_active_task_panel(state);
         }
-        Err(error) => state.set_message(format!("Nanosheet build failed: {error}")),
+        Err(error) => state.status_error(format!("Nanosheet build failed: {error}")),
     }
 }
 
@@ -145,7 +146,7 @@ pub(crate) fn cancel_nanosheet_task(state: &mut AppState) {
         state.ui.nanosheet_builder = None;
     }
     state.ui.nanosheet_builder = None;
-    state.set_message("Nanosheet build canceled".to_string());
+    state.status_neutral("Nanosheet build canceled".to_string());
     complete_active_task(state, TaskKind::BuildNanosheet, TaskStatus::Failed);
     close_active_task_panel(state);
 }
@@ -157,7 +158,7 @@ pub(crate) fn save_block_editor_task(state: &mut AppState) {
     match BuildingBlockService::save(editor, state.structure()) {
         Ok((path, source)) => {
             let current_structure = state.structure().clone();
-            state.set_message(format!("Building block saved {}", path.display()));
+            state.status_success(format!("Building block saved {}", path.display()));
             state
                 .ui
                 .reticular_builder
@@ -171,13 +172,16 @@ pub(crate) fn save_block_editor_task(state: &mut AppState) {
             complete_active_task(state, TaskKind::CreateBuildingBlock, TaskStatus::Completed);
             close_active_task_panel(state);
         }
-        Err(error) => state.set_message(format!("Building block save failed: {error}")),
+        Err(error) => state.report_system_error(
+            SystemSubsystem::Storage,
+            format!("Building block save failed: {error}"),
+        ),
     }
 }
 
 pub(crate) fn cancel_block_editor_task(state: &mut AppState) {
     state.ui.block_editor = None;
-    state.set_message("Building block creation canceled".to_string());
+    state.status_neutral("Building block creation canceled".to_string());
     complete_active_task(state, TaskKind::CreateBuildingBlock, TaskStatus::Failed);
     close_active_task_panel(state);
 }
@@ -188,14 +192,15 @@ pub(crate) fn start_pending_optimization(state: &mut AppState) {
         return;
     };
     if state.jobs.optimization_running() {
-        state.set_message(
+        state.status_neutral(
             "forcefield optimization is already running; press Esc to stop".to_string(),
         );
         return;
     }
     if prompt.allow_cell_optimization && state.structure().cell.is_none() {
-        state
-            .set_message("crystal geometry optimization requires a periodic structure".to_string());
+        state.status_neutral(
+            "crystal geometry optimization requires a periodic structure".to_string(),
+        );
         return;
     }
     let options = prompt.options(&state.ui.selection);
@@ -214,10 +219,10 @@ pub(crate) fn start_pending_optimization(state: &mut AppState) {
                 );
                 state.tasks.mark_status(task_run_id, TaskStatus::Running);
             }
-            state.set_message("forcefield optimization running; press Esc to stop".to_string());
+            state.status_neutral("forcefield optimization running; press Esc to stop".to_string());
         }
         Err(error) => {
-            state.set_message(format!("forcefield optimization failed to start: {error}"));
+            state.status_error(format!("forcefield optimization failed to start: {error}"));
             complete_active_task(state, TaskKind::OptimizeGeometry, TaskStatus::Failed);
             complete_active_task(state, TaskKind::OptimizeCrystalGeometry, TaskStatus::Failed);
         }
@@ -235,7 +240,7 @@ pub(crate) fn cancel_pending_optimization_request(state: &mut AppState) {
         );
     }
     state.ui.pending_optimization = None;
-    state.set_message("forcefield optimization canceled".to_string());
+    state.status_neutral("forcefield optimization canceled".to_string());
     complete_active_task(state, TaskKind::OptimizeGeometry, TaskStatus::Failed);
     complete_active_task(state, TaskKind::OptimizeCrystalGeometry, TaskStatus::Failed);
     close_active_task_panel(state);
@@ -250,7 +255,7 @@ pub(crate) fn confirm_pending_supercell(state: &mut AppState) {
         state.structure(),
         "supercell expansion requires a periodic structure",
     ) {
-        state.set_message(error.to_string());
+        state.status_neutral(error.to_string());
         return;
     }
     let prompt = state
@@ -265,7 +270,7 @@ pub(crate) fn confirm_pending_supercell(state: &mut AppState) {
 pub(crate) fn cancel_pending_supercell_request(state: &mut AppState) {
     bind_active_panel_task(state, TaskPanelKind::SupercellPrompt);
     state.ui.pending_supercell = None;
-    state.set_message("Supercell expansion canceled".to_string());
+    state.status_neutral("Supercell expansion canceled".to_string());
     complete_active_task(state, TaskKind::ExpandSupercell, TaskStatus::Failed);
     close_active_task_panel(state);
 }
@@ -284,7 +289,7 @@ pub(crate) fn confirm_pending_protein_prep(state: &mut AppState) {
 pub(crate) fn cancel_pending_protein_prep_request(state: &mut AppState) {
     bind_active_panel_task(state, TaskPanelKind::ProteinPrepPrompt);
     state.ui.pending_protein_prep = None;
-    state.set_message("Protein preparation canceled".to_string());
+    state.status_neutral("Protein preparation canceled".to_string());
     complete_active_task(state, TaskKind::PrepareProtein, TaskStatus::Failed);
     close_active_task_panel(state);
 }
@@ -298,7 +303,7 @@ pub(crate) fn prepare_protein(
     prompt: crate::frontend::state::ProteinPrepPrompt,
 ) -> bool {
     if state.structure().atoms.is_empty() {
-        state.set_message("no active structure to prepare".to_string());
+        state.status_neutral("no active structure to prepare".to_string());
         return false;
     }
     if let Some(task_run_id) = state.active_task_run {
@@ -320,7 +325,7 @@ pub(crate) fn prepare_protein(
     if let Some(task_run_id) = state.active_task_run {
         record_task_result_entry(state, task_run_id, entry_id);
     }
-    state.set_message(format!(
+    state.status_success(format!(
         "Protein prepared: added {added_hydrogens} hydrogen(s) (new entry)"
     ));
     complete_active_task(state, TaskKind::PrepareProtein, TaskStatus::Completed);
@@ -341,7 +346,7 @@ pub(crate) fn confirm_pending_md_system(state: &mut AppState) {
 pub(crate) fn cancel_pending_md_system_request(state: &mut AppState) {
     bind_active_panel_task(state, TaskPanelKind::MdSystemPrompt);
     state.ui.pending_md_system = None;
-    state.set_message("MD system build canceled".to_string());
+    state.status_neutral("MD system build canceled".to_string());
     complete_active_task(state, TaskKind::BuildMdSystem, TaskStatus::Failed);
     close_active_task_panel(state);
 }
@@ -380,7 +385,10 @@ pub(crate) fn select_custom_force_field(state: &mut AppState, name: Option<Strin
                 prompt.custom_force_field = Some(name);
                 prompt.custom_force_field_text = Some(text);
             }
-            Err(error) => state.set_message(format!("failed to load force field: {error}")),
+            Err(error) => state.report_system_error(
+                SystemSubsystem::Storage,
+                format!("failed to load force field: {error}"),
+            ),
         },
     }
 }
@@ -393,11 +401,11 @@ pub(crate) fn save_custom_force_field(state: &mut AppState) {
     let name = prompt.custom_ff_draft_name.trim().to_string();
     let text = prompt.custom_ff_draft.clone();
     if name.is_empty() {
-        state.set_message("enter a name for the force field before saving".to_string());
+        state.status_neutral("enter a name for the force field before saving".to_string());
         return;
     }
     if text.trim().is_empty() {
-        state.set_message("the force field is empty".to_string());
+        state.status_neutral("the force field is empty".to_string());
         return;
     }
     match crate::backend::force_fields::save_force_field(&name, &text) {
@@ -408,9 +416,12 @@ pub(crate) fn save_custom_force_field(state: &mut AppState) {
                 prompt.custom_ff_draft.clear();
                 prompt.custom_ff_draft_name.clear();
             }
-            state.set_message(format!("saved force field `{name}`"));
+            state.status_success(format!("saved force field `{name}`"));
         }
-        Err(error) => state.set_message(format!("failed to save force field: {error}")),
+        Err(error) => state.report_system_error(
+            SystemSubsystem::Storage,
+            format!("failed to save force field: {error}"),
+        ),
     }
 }
 
@@ -425,9 +436,12 @@ pub(crate) fn delete_custom_force_field(state: &mut AppState, name: &str) {
                 prompt.custom_force_field = None;
                 prompt.custom_force_field_text = None;
             }
-            state.set_message(format!("deleted force field `{name}`"));
+            state.status_success(format!("deleted force field `{name}`"));
         }
-        Err(error) => state.set_message(format!("failed to delete force field: {error}")),
+        Err(error) => state.report_system_error(
+            SystemSubsystem::Storage,
+            format!("failed to delete force field: {error}"),
+        ),
     }
 }
 
@@ -444,7 +458,10 @@ pub(crate) fn import_custom_force_field_file(state: &mut AppState) {
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
         Err(error) => {
-            state.set_message(format!("failed to read {}: {error}", path.display()));
+            state.report_system_error(
+                SystemSubsystem::File,
+                format!("failed to read {}: {error}", path.display()),
+            );
             return;
         }
     };

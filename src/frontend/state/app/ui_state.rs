@@ -5,8 +5,8 @@ use eframe::egui;
 use crate::frontend::actions::ResidueSelectionMode;
 use crate::frontend::state::{
     DisorderedSystemPrompt, DockingPrompt, EngineDraft, EngineProbeState, EntryListState,
-    LayoutState, MdRunPrompt, MdSystemPrompt, OptimizationPrompt, PendingPtm, ProteinPrepPrompt,
-    QmPrompt, RemoteHostDraft, RemoteHostStatus, SupercellPrompt,
+    LayoutState, MdRunPrompt, MdSystemPrompt, OptimizationPrompt, OutputTarget, PendingPtm,
+    ProteinPrepPrompt, QmPrompt, RemoteHostDraft, RemoteHostStatus, SessionSeq, SupercellPrompt,
 };
 use crate::frontend::{
     AtomSelection, BuildingBlockEditor, CommandConsoleState, NanosheetBuilderPanel,
@@ -88,6 +88,33 @@ pub struct SequenceDragState {
     pub mode: ResidueSelectionMode,
 }
 
+/// The Output tab's session state: the active source/job target, search, wrap,
+/// auto-follow, and the per-target clear-view and unread cursors. The log entries
+/// themselves are owned by the
+/// [`SessionLogStore`](crate::frontend::state::SessionLogStore).
+#[derive(Debug, Clone)]
+pub struct OutputViewState {
+    pub target: OutputTarget,
+    pub search: String,
+    pub wrap_lines: bool,
+    pub auto_follow: bool,
+    pub cleared_before_by_target: std::collections::HashMap<OutputTarget, SessionSeq>,
+    pub last_seen_by_target: std::collections::HashMap<OutputTarget, SessionSeq>,
+}
+
+impl Default for OutputViewState {
+    fn default() -> Self {
+        Self {
+            target: OutputTarget::All,
+            search: String::new(),
+            wrap_lines: true,
+            auto_follow: true,
+            cleared_before_by_target: std::collections::HashMap::new(),
+            last_seen_by_target: std::collections::HashMap::new(),
+        }
+    }
+}
+
 pub struct UiState {
     pub layout: LayoutState,
     pub entry_list: EntryListState,
@@ -119,6 +146,8 @@ pub struct UiState {
     pub entry_viewports: BTreeMap<u64, ViewportVisualState>,
     pub scripted_viewport_size: [u32; 2],
     pub console: CommandConsoleState,
+    pub output: OutputViewState,
+    pub activity_job_target: Option<crate::job::JobId>,
     pub editor: Option<StructureEditor>,
     pub sketcher: Option<crate::frontend::sketcher::SketcherState>,
     pub reticular_builder: Option<ReticularBuilderPanel>,
@@ -263,6 +292,8 @@ impl Default for UiState {
             entry_viewports: BTreeMap::new(),
             scripted_viewport_size: [1180, 760],
             console: CommandConsoleState::default(),
+            output: OutputViewState::default(),
+            activity_job_target: None,
             editor: None,
             sketcher: None,
             reticular_builder: None,

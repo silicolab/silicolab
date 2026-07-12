@@ -2,8 +2,8 @@ use std::sync::atomic::Ordering;
 
 use crate::backend::storage::jobs as registry;
 use crate::backend::tasks::TaskStatus;
-use crate::frontend::state::AppState;
-use crate::job::CancelCapability;
+use crate::frontend::state::{AppState, SystemSubsystem};
+use crate::job::{CancelCapability, JobId};
 
 use super::agent::AgentHeavyJob;
 use super::manager::JobManager;
@@ -146,6 +146,10 @@ pub struct LiveJobSnapshot {
     pub job_kind: Option<String>,
     pub stage: Option<String>,
     pub task_run_id: Option<u64>,
+    /// The stable execution identity this card projects, when known — the key
+    /// Activity uses to read its exact-job log tail and to deep-link Output. `None`
+    /// for assistant-launched jobs, which carry no bound execution id.
+    pub job_id: Option<JobId>,
     pub run_uuid: Option<String>,
     pub host_label: Option<String>,
     /// Observability of a remote job — `None` for local and agent jobs, which
@@ -203,6 +207,7 @@ impl JobManager {
                 JobKind::Optimizer,
                 "forcefield optimization",
                 active_task_run,
+                self.local_execution(LocalJobSlot::Optimizer),
                 running
                     .latest_report
                     .map(|report| format!("step {}", report.steps)),
@@ -214,6 +219,7 @@ impl JobManager {
                 JobKind::Disorder,
                 "build disordered system",
                 active_task_run,
+                self.local_execution(LocalJobSlot::Disorder),
                 running.latest_report.as_ref().map(|report| {
                     format!(
                         "{} / {} placed",
@@ -229,6 +235,7 @@ impl JobManager {
                 JobKind::Qm,
                 "QM calculation",
                 active_task_run,
+                self.local_execution(LocalJobSlot::Qm),
                 running.latest_stage.clone(),
             );
             if running.cancel_requested {
@@ -236,13 +243,14 @@ impl JobManager {
             }
             jobs.push(snapshot);
         }
-        if self.docking.is_some() {
+        if let Some(running) = self.docking.as_ref() {
             jobs.push(local_snapshot(
                 LocalJobSlot::Docking,
                 JobKind::Docking,
                 "molecular docking",
                 active_task_run,
-                None,
+                self.local_execution(LocalJobSlot::Docking),
+                running.latest_stage.clone(),
             ));
         }
         if let Some(running) = self.engine.as_ref() {
@@ -251,6 +259,7 @@ impl JobManager {
                 JobKind::Engine,
                 format!("{} {}", running.engine, running.job_kind),
                 active_task_run,
+                self.local_execution(LocalJobSlot::Engine),
                 running.latest_stage.clone(),
             );
             snapshot.engine_id = Some(running.engine.to_string());
@@ -554,6 +563,9 @@ pub fn remote_job_snapshot(row: &registry::RemoteJob) -> LiveJobSnapshot {
             (None, None) => None,
         },
         task_run_id: None,
+        // The registry's run identity is the stable `JobId`, so a remote job's
+        // engine text is Job-scoped exactly like a local one.
+        job_id: row.job_id.parse().ok(),
         run_uuid: Some(row.job_id.clone()),
         host_label: Some(row.host_label.clone()),
         observation: Some(row.observation_state()),
@@ -648,7 +660,10 @@ fn mark_task_cancelling(state: &mut AppState, task_run_id: u64) {
     if let Err(error) =
         crate::frontend::task_executor::mark_task_status(state, task_run_id, TaskStatus::Cancelling)
     {
-        state.set_message(format!("failed to update task status: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Project,
+            format!("failed to update task status: {error}"),
+        );
     }
 }
 
@@ -682,6 +697,7 @@ fn local_snapshot(
     kind: JobKind,
     label: impl Into<String>,
     task_run_id: Option<u64>,
+    job_id: Option<JobId>,
     stage: Option<String>,
 ) -> LiveJobSnapshot {
     LiveJobSnapshot {
@@ -695,6 +711,7 @@ fn local_snapshot(
         job_kind: None,
         stage,
         task_run_id,
+        job_id,
         run_uuid: None,
         host_label: None,
         observation: None,
@@ -745,6 +762,7 @@ fn agent_snapshot(tracked: &super::agent::TrackedAgentJob) -> LiveJobSnapshot {
         job_kind,
         stage,
         task_run_id: Some(tracked.task_run_id),
+        job_id: Some(tracked.job_id),
         run_uuid: None,
         host_label: None,
         observation: None,

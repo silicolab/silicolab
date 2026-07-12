@@ -9,6 +9,7 @@ use crate::workflows::docking::{DockingProgress, run_docking_calculation};
 pub struct RunningDockingJob {
     pub cancel: Arc<AtomicBool>,
     pub receiver: Receiver<DockingWorkerMessage>,
+    pub latest_stage: Option<String>,
 }
 
 pub enum DockingWorkerMessage {
@@ -46,5 +47,9 @@ pub fn spawn_docking_job(request: DockingRequest) -> RunningDockingJob {
         }
     });
 
-    RunningDockingJob { cancel, receiver }
+    RunningDockingJob {
+        cancel,
+        receiver,
+        latest_stage: None,
+    }
 }

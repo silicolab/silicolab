@@ -5,7 +5,7 @@ use std::{
 
 use anyhow::{Result, bail};
 
-use crate::frontend::state::AppState;
+use crate::frontend::state::{AppState, CommandActor, LogLevel, LogScope, NewLogEntry};
 
 mod args;
 mod editing;
@@ -24,10 +24,37 @@ pub(crate) use render::*;
 #[cfg(test)]
 mod tests;
 
-#[derive(Debug, Clone, Default)]
+/// The Console tab's full session state: the command input, the recall history,
+/// and the transient view state (wrap, auto-follow, and the clear-view / unread
+/// cursors over the command transcript). The transcript itself is owned by the
+/// [`SessionLogStore`](crate::frontend::state::SessionLogStore); this holds only
+/// what the view needs.
+#[derive(Debug, Clone)]
 pub struct CommandConsoleState {
     pub input: String,
     pub history: Vec<String>,
+    pub wrap_lines: bool,
+    /// Whether the transcript follows new output. Suspended when the user scrolls
+    /// up, resumed by the New output affordance.
+    pub auto_follow: bool,
+    /// Command entries whose latest occurrence is before this sequence are hidden
+    /// by the Console's clear-view cursor. It hides, never deletes.
+    pub cleared_before: crate::frontend::state::SessionSeq,
+    /// Highest command sequence the user has seen, for the New output affordance.
+    pub last_seen: crate::frontend::state::SessionSeq,
+}
+
+impl Default for CommandConsoleState {
+    fn default() -> Self {
+        Self {
+            input: String::new(),
+            history: Vec::new(),
+            wrap_lines: true,
+            auto_follow: true,
+            cleared_before: 0,
+            last_seen: 0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -50,6 +77,33 @@ impl ScriptContext {
 pub fn execute_console_line(state: &mut AppState, line: &str) -> Result<String> {
     let mut context = ScriptContext::default();
     execute_console_line_with_context(state, line, &mut context)
+}
+
+/// Run one `.sls` command and record its prompt and result/error into the Console
+/// transcript under one [`CommandId`](crate::frontend::state::CommandId), so a
+/// user-issued and an assistant-issued command are grouped identically and never
+/// misassociated. Returns the raw command result for the caller to surface (a
+/// status line, or the assistant's tool result). Command history is the caller's
+/// concern — only user input is recalled.
+pub fn record_console_command(
+    state: &mut AppState,
+    command: &str,
+    actor: CommandActor,
+) -> Result<String> {
+    let command_id = state.allocate_command_id();
+    let scope = LogScope::Command { command_id, actor };
+    state.append_log(NewLogEntry::new(scope.clone(), LogLevel::Info, command));
+    let result = execute_console_line(state, command);
+    match &result {
+        Ok(message) if !message.trim().is_empty() => {
+            state.append_log(NewLogEntry::new(scope, LogLevel::Info, message.clone()));
+        }
+        Ok(_) => {}
+        Err(error) => {
+            state.append_log(NewLogEntry::new(scope, LogLevel::Error, format!("{error}")));
+        }
+    }
+    result
 }
 
 pub fn run_script_file_with_args(

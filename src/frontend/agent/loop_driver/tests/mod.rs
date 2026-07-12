@@ -26,6 +26,7 @@ fn fake_qm_job(
         conversation,
         label: "qm optimize".to_string(),
         task_run_id: 0,
+        job_id: crate::job::JobId::new(),
         job: AgentHeavyJob::Qm(RunningQmJob {
             cancel: crate::wire::JobCancelHandle::from_flag(Arc::new(AtomicBool::new(false))),
             receiver: sender,
@@ -95,12 +96,19 @@ fn read_only_tool_runs_inline_and_records_result() {
     // (the model asked for run_command "inspect" â€” a console command â€” which
     // is unknown to the console and returns an error result; the point is the
     // tool dispatched and produced a tool_result.)
+    use crate::frontend::state::{CommandActor, LogFilter, LogQuery, LogScope};
+    let query = LogQuery::new(LogFilter::Command);
     assert!(
-        state
-            .output_log
-            .iter()
-            .any(|line| line.starts_with("agent>")),
-        "tool command should echo into the shared output log"
+        state.session_log().query(&query).any(|entry| {
+            matches!(
+                entry.scope,
+                LogScope::Command {
+                    actor: CommandActor::Agent,
+                    ..
+                }
+            ) && entry.text == "inspect"
+        }),
+        "the assistant-issued command is recorded in the Console transcript"
     );
     // Usage accumulated.
     assert_eq!(state.ui.agent.session_usage.input, 10);
@@ -169,11 +177,15 @@ fn plan_mode_proposes_without_executing() {
     // Nothing waits and nothing destructive ran; the call became a proposal.
     assert!(state.ui.agent.pending_approval().is_none());
     assert!(state.ui.agent.pending_calls.is_empty());
+    let query = crate::frontend::state::LogQuery::new(crate::frontend::state::LogFilter::Command);
     assert!(
-        !state
-            .output_log
-            .iter()
-            .any(|line| line.starts_with("agent>")),
+        !state.session_log().query(&query).any(|entry| matches!(
+            entry.scope,
+            crate::frontend::state::LogScope::Command {
+                actor: crate::frontend::state::CommandActor::Agent,
+                ..
+            }
+        )),
         "plan mode must not execute the command"
     );
 }
@@ -366,11 +378,15 @@ fn error_result_is_surfaced() {
         Err(LlmError::BadRequest("bad shape".to_string())),
         &ctx,
     );
+    let query = crate::frontend::state::LogQuery::new(crate::frontend::state::LogFilter::Source(
+        crate::frontend::state::OutputSource::Agent,
+    ));
     assert!(
         state
-            .output_log
-            .iter()
-            .any(|line| line.contains("bad shape"))
+            .session_log()
+            .query(&query)
+            .any(|entry| entry.text.contains("bad shape")),
+        "the turn error is surfaced as Agent-scoped detail"
     );
 }
 

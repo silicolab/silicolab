@@ -1,6 +1,7 @@
 use super::super::*;
 use crate::engines::qm::{MemoryVerdict, QmScfBackend, memory_verdict};
 use crate::frontend::actions::{Notification, NotificationButton, NotificationSeverity};
+use crate::frontend::state::SystemSubsystem;
 
 /// Resolve the product structure for a two-endpoint transition-state search from
 /// the prompt's chosen entry, loading it on demand. `None` for any other route or
@@ -29,11 +30,11 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
         return;
     };
     if state.jobs.qm_running() {
-        state.set_message("a QM calculation is already running; press Esc to stop".to_string());
+        state.status_neutral("a QM calculation is already running; press Esc to stop".to_string());
         return;
     }
     if state.structure().atoms.is_empty() {
-        state.set_message("open a structure before running a QM calculation".to_string());
+        state.status_neutral("open a structure before running a QM calculation".to_string());
         return;
     }
     // A periodic run needs a real unit cell; reject early with a clear message
@@ -47,8 +48,9 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
             .filter(|cell| !cell.is_placeholder())
             .is_none()
     {
-        state
-            .set_message("periodic QM needs a real unit cell; this structure has none".to_string());
+        state.status_neutral(
+            "periodic QM needs a real unit cell; this structure has none".to_string(),
+        );
         return;
     }
     // Memory guard: estimate the in-core ERI allocation for a molecular job and
@@ -65,7 +67,7 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
         && prompt.ts.route == crate::frontend::state::TsRouteKind::TwoEndpoint
     {
         if ts_product.is_none() {
-            state.set_message(
+            state.status_neutral(
                 "choose a product structure for the two-endpoint transition-state search"
                     .to_string(),
             );
@@ -74,7 +76,7 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
         // The reactant is the active entry; identical endpoints give a degenerate
         // (zero-displacement) guess, so reject the active entry as its own product.
         if prompt.ts.product_entry == state.entries.active_entry_id() {
-            state.set_message(
+            state.status_neutral(
                 "the product must be a different structure than the reactant (the active entry)"
                     .to_string(),
             );
@@ -101,7 +103,7 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
             crate::engines::registry::EngineId::ORCA,
         );
         let Ok(resolved) = resolved else {
-            state.set_message(
+            state.status_neutral(
                 "set the ORCA program path in Settings -> Compute targets before running"
                     .to_string(),
             );
@@ -126,7 +128,7 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
             let running = match running {
                 Ok(running) => running,
                 Err(error) => {
-                    state.set_message(format!("could not bind the QM engine launch: {error}"));
+                    state.status_error(format!("could not bind the QM engine launch: {error}"));
                     return;
                 }
             };
@@ -135,7 +137,7 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
                 begin_local_job(state, crate::frontend::jobs::LocalJobSlot::Qm, task_run_id);
                 state.tasks.mark_status(task_run_id, TaskStatus::Running);
             }
-            state.set_message("QM calculation running; press Esc to stop".to_string());
+            state.status_neutral("QM calculation running; press Esc to stop".to_string());
         }
     }
 }
@@ -155,9 +157,10 @@ fn reserve_qm_run_dir(state: &mut AppState) {
         return;
     };
     if let Err(error) = ensure_active_task_run_dir(state, kind, None) {
-        state
-            .output_log
-            .push(format!("failed to create QM run directory: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Storage,
+            format!("failed to create QM run directory: {error}"),
+        );
     }
 }
 
@@ -230,17 +233,24 @@ fn start_remote_qm(
 pub(crate) fn cancel_pending_qm_request(state: &mut AppState) {
     bind_active_panel_task(state, TaskPanelKind::QmPrompt);
     if state.jobs.qm_running() {
+        // Read the Copy JobId before the cancel borrows `state` mutably, so the
+        // stop notice can be scoped to the exact job.
+        let job_id = state
+            .jobs
+            .local_execution(crate::frontend::jobs::LocalJobSlot::Qm);
         let _ = crate::frontend::jobs::cancel_controlled_job(
             state,
             &crate::frontend::jobs::JobControlId::Local(crate::frontend::jobs::LocalJobSlot::Qm),
         );
         state.ui.pending_qm = None;
-        state.set_message("QM calculation stopping".to_string());
+        if let Some(job_id) = job_id {
+            state.job_notice(job_id, "QM calculation stopping");
+        }
         close_active_task_panel(state);
         return;
     }
     state.ui.pending_qm = None;
-    state.set_message("QM calculation canceled".to_string());
+    state.status_neutral("QM calculation canceled".to_string());
     complete_active_qm_task(state, TaskStatus::Failed);
     close_active_task_panel(state);
 }
@@ -307,7 +317,7 @@ pub(crate) fn estimate_qm_memory(state: &mut AppState) {
         return;
     }
     if state.structure().atoms.is_empty() {
-        state.set_message("open a structure before estimating QM memory".to_string());
+        state.status_neutral("open a structure before estimating QM memory".to_string());
         return;
     }
     // The product does not change the in-core estimate (the guess shares the
@@ -330,7 +340,7 @@ pub(crate) fn estimate_qm_memory(state: &mut AppState) {
             if let Some(prompt) = state.ui.pending_qm.as_mut() {
                 prompt.memory_report = None;
             }
-            state.set_message(format!("could not estimate QM memory: {error}"));
+            state.status_error(format!("could not estimate QM memory: {error}"));
         }
     }
 }

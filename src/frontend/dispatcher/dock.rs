@@ -1,5 +1,7 @@
 use super::*;
-use crate::frontend::state::{DockArea, DockTab, StaticView};
+use crate::frontend::state::{
+    DetailTarget, DockArea, DockTab, LogFilter, LogQuery, OutputTarget, StaticView,
+};
 
 /// Mark the workbench layout dirty using the current egui clock; the debounced
 /// flush (see [`flush_pending_layout_save`]) coalesces a burst of changes into a
@@ -44,6 +46,36 @@ pub(crate) fn toggle_dock_area(state: &mut AppState, area: DockArea, ctx: &egui:
         }
     }
     mark_dirty(state, ctx);
+}
+
+/// Reveal the Output tab and apply `target`'s source/exact-job filter in one
+/// step: restore the tab if absent, activate its dock area, select the filter,
+/// and mark the target read. The dispatcher owns dock reveal *and* filter
+/// selection so a single user action never leaves them out of sync.
+pub(crate) fn reveal_output(state: &mut AppState, target: OutputTarget) {
+    state.ui.layout.dock.reveal_static(StaticView::Output);
+    let query = LogQuery::new(LogFilter::from_output_target(&target));
+    if let Some(latest) = state.session_log().latest_matching_seq(&query) {
+        state
+            .ui
+            .output
+            .last_seen_by_target
+            .insert(target.clone(), latest);
+    }
+    state.ui.output.auto_follow = true;
+    state.ui.output.target = target;
+}
+
+/// Follow a status-notice link to its typed detail target.
+pub(crate) fn open_detail_target(state: &mut AppState, target: DetailTarget) {
+    match target {
+        DetailTarget::Output(output_target) => reveal_output(state, output_target),
+        DetailTarget::ActivityJob(job_id) => {
+            state.ui.activity_job_target = Some(job_id);
+            state.ui.layout.dock.reveal_static(StaticView::TaskMonitor);
+        }
+        DetailTarget::Settings => state.ui.layout.settings_open = true,
+    }
 }
 
 /// Resize a dock area — the right sidebar's width or the bottom panel's height —
@@ -102,7 +134,10 @@ pub(crate) fn persist_layout(state: &mut AppState) {
     state.clear_layout_save_deadline();
     state.config.dock_layout = state.ui.layout.dock.to_config();
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save layout: {error}"));
+        state.report_system_error(
+            crate::frontend::state::SystemSubsystem::Settings,
+            format!("Could not save layout: {error}"),
+        );
     }
 }
 

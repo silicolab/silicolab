@@ -7,7 +7,7 @@ use crate::{
 
 pub(crate) fn open_export_dialog(state: &mut AppState, entry_id: Option<u64>) {
     if state.entries.records.is_empty() {
-        state.set_message("Nothing to export".to_string());
+        state.status_neutral("Nothing to export".to_string());
         return;
     }
 
@@ -35,7 +35,7 @@ pub(crate) fn run_export(state: &mut AppState) {
         &entry_ids_for_scope(state, prompt.scope, &prompt.selected_entry_ids),
     );
     if ids.is_empty() {
-        state.set_message("Nothing to export".to_string());
+        state.status_neutral("Nothing to export".to_string());
         return;
     }
 
@@ -180,7 +180,7 @@ fn export_to_file(state: &mut AppState, ids: &[u64], format: StructureFormat) {
         .save_file()
         .map(|path| structure_io::path_with_format_extension(&path, format))
     else {
-        state.set_message("Export canceled".to_string());
+        state.status_neutral("Export canceled".to_string());
         return;
     };
 
@@ -191,19 +191,19 @@ fn export_to_file(state: &mut AppState, ids: &[u64], format: StructureFormat) {
             if let [entry_id] = ids {
                 remember_export_target(state, *entry_id, path.clone());
             }
-            state.set_message(format!(
+            state.status_success(format!(
                 "Exported {} to {}",
                 structure_count(ids.len()),
                 path.display()
             ));
         }
-        Err(error) => state.set_message(format!("Export failed: {error}")),
+        Err(error) => state.status_error(format!("Export failed: {error}")),
     }
 }
 
 fn export_to_directory(state: &mut AppState, ids: &[u64], format: StructureFormat) {
     let Some(directory) = rfd::FileDialog::new().pick_folder() else {
-        state.set_message("Export canceled".to_string());
+        state.status_neutral("Export canceled".to_string());
         return;
     };
 
@@ -212,12 +212,12 @@ fn export_to_directory(state: &mut AppState, ids: &[u64], format: StructureForma
         .filter(|path| path.exists())
         .count();
     if existing > 0 && !confirm_overwrite(existing) {
-        state.set_message("Export canceled".to_string());
+        state.status_neutral("Export canceled".to_string());
         return;
     }
 
     let (paths, results) = write_ids_to_directory(state, ids, &directory, format);
-    state.set_message(directory_export_summary(&directory, &paths, &results));
+    state.status_success(directory_export_summary(&directory, &paths, &results));
 }
 
 pub(crate) fn directory_export_summary(

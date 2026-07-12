@@ -1,4 +1,5 @@
 use super::*;
+use crate::frontend::state::{LogLevel, SystemSubsystem};
 
 mod compute;
 mod poll;
@@ -31,7 +32,7 @@ pub(crate) fn load_trajectory(
         match requested.or_else(|| entry.origin.trajectory().map(|path| path.to_path_buf())) {
             Some(relative) => relative,
             None => {
-                state.set_message("This entry has no trajectory to play");
+                state.status_neutral("This entry has no trajectory to play");
                 return;
             }
         };
@@ -62,12 +63,12 @@ pub(crate) fn load_trajectory(
     }
 
     let Some(project) = state.workspace.project() else {
-        state.set_message("Trajectory playback requires an open project");
+        state.status_neutral("Trajectory playback requires an open project");
         return;
     };
     let absolute = project.root.join(&relative);
     if !absolute.exists() {
-        state.set_message(format!(
+        state.status_error(format!(
             "Trajectory file is missing: {}",
             absolute.display()
         ));
@@ -84,7 +85,7 @@ pub(crate) fn load_trajectory(
         base_structure,
         include_cell,
     ));
-    state.set_message("Loading trajectory…");
+    state.status_neutral("Loading trajectory…");
     ctx.request_repaint_after(engine_poll_frame());
 }
 
@@ -154,9 +155,11 @@ pub(crate) fn save_qm_artifacts(
     outcome: &crate::engines::qm::QmOutcome,
 ) {
     if let Err(error) = std::fs::create_dir_all(run_dir) {
-        state
-            .output_log
-            .push(format!("failed to create QM run directory: {error}"));
+        state.log_system(
+            SystemSubsystem::Storage,
+            LogLevel::Warn,
+            format!("failed to create QM run directory: {error}"),
+        );
         return;
     }
 
@@ -166,12 +169,16 @@ pub(crate) fn save_qm_artifacts(
         text.push('\n');
     }
     match std::fs::write(&path, text) {
-        Ok(()) => state
-            .output_log
-            .push(format!("QM output saved to {}", path.display())),
-        Err(error) => state
-            .output_log
-            .push(format!("failed to save QM output: {error}")),
+        Ok(()) => state.log_system(
+            SystemSubsystem::File,
+            LogLevel::Info,
+            format!("QM output saved to {}", path.display()),
+        ),
+        Err(error) => state.log_system(
+            SystemSubsystem::Storage,
+            LogLevel::Warn,
+            format!("failed to save QM output: {error}"),
+        ),
     }
 
     let series = crate::backend::runs::QmSeries::from_outcome(outcome);
@@ -179,12 +186,16 @@ pub(crate) fn save_qm_artifacts(
         return;
     }
     match crate::backend::runs::save_qm_series_file(run_dir, &series) {
-        Ok(path) => state
-            .output_log
-            .push(format!("QM series saved to {}", path.display())),
-        Err(error) => state
-            .output_log
-            .push(format!("failed to save QM series: {error}")),
+        Ok(path) => state.log_system(
+            SystemSubsystem::File,
+            LogLevel::Info,
+            format!("QM series saved to {}", path.display()),
+        ),
+        Err(error) => state.log_system(
+            SystemSubsystem::Storage,
+            LogLevel::Warn,
+            format!("failed to save QM series: {error}"),
+        ),
     }
 }
 
@@ -220,7 +231,7 @@ pub(crate) fn show_qm_output(state: &mut AppState, entry_id: u64) {
     };
     let entry_name = entry.name.clone();
     let Some(path) = entry_qm_run_dir(state, entry_id).map(|dir| dir.join(QM_OUTPUT_FILE)) else {
-        state.set_message("This entry has no saved QM output".to_string());
+        state.status_neutral("This entry has no saved QM output".to_string());
         return;
     };
     match std::fs::read_to_string(&path) {
@@ -230,7 +241,7 @@ pub(crate) fn show_qm_output(state: &mut AppState, entry_id: u64) {
                 text,
             });
         }
-        Err(error) => state.set_message(format!(
+        Err(error) => state.status_error(format!(
             "Could not read QM output {}: {error}",
             path.display()
         )),
@@ -246,7 +257,7 @@ pub(crate) fn show_dock_poses(state: &mut AppState, entry_id: u64) {
     };
     let entry_name = entry.name.clone();
     let Some(relative) = entry.origin.dock_poses().map(Path::to_path_buf) else {
-        state.set_message("This entry has no saved docking poses".to_string());
+        state.status_neutral("This entry has no saved docking poses".to_string());
         return;
     };
     // Stored relative to the project root (absolute when the run directory
@@ -262,7 +273,7 @@ pub(crate) fn show_dock_poses(state: &mut AppState, entry_id: u64) {
                 text,
             });
         }
-        Err(error) => state.set_message(format!(
+        Err(error) => state.status_error(format!(
             "Could not read docking poses {}: {error}",
             absolute.display()
         )),

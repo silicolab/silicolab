@@ -15,7 +15,7 @@ use super::add_and_show_entry;
 /// Open an empty sketcher.
 pub(crate) fn sketch_molecule(state: &mut AppState) {
     state.ui.sketcher = Some(SketcherState::new());
-    state.set_message("Sketching a new molecule".to_string());
+    state.status_neutral("Sketching a new molecule".to_string());
 }
 
 /// Build the current sketch into a relaxed 3D structure and add it as a new,
@@ -43,7 +43,7 @@ pub(crate) fn commit_sketch(state: &mut AppState) {
     let atom_count = structure.atoms.len();
     let save_path = structure_io::default_structure_save_path(&structure, None);
     let entry_id = add_and_show_entry(state, structure, None, save_path);
-    state.set_message(format!(
+    state.status_success(format!(
         "Built sketched molecule as entry #{entry_id} ({atom_count} atoms)"
     ));
 }
@@ -51,5 +51,5 @@ pub(crate) fn commit_sketch(state: &mut AppState) {
 /// Discard the sketch and close the sketcher.
 pub(crate) fn cancel_sketch(state: &mut AppState) {
     state.ui.sketcher = None;
-    state.set_message("Sketch canceled".to_string());
+    state.status_neutral("Sketch canceled".to_string());
 }

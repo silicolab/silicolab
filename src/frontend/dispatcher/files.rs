@@ -31,7 +31,7 @@ pub(crate) fn fetch_pdb(state: &mut AppState) {
             state.ui.pending_pdb_fetch = None;
             open_paths(state, [fetched.path]);
         }
-        Err(error) => state.set_message(format!("Fetch failed: {error}")),
+        Err(error) => state.status_error(format!("Fetch failed: {error}")),
     }
 }
 
@@ -54,7 +54,7 @@ pub fn open_paths(state: &mut AppState, paths: impl IntoIterator<Item = PathBuf>
 
     let Some((entry_id, last_path)) = opened.last() else {
         if let Some(error) = failed.first() {
-            state.set_message(format!("Failed to open {error}"));
+            state.status_error(format!("Failed to open {error}"));
         }
         return;
     };
@@ -63,7 +63,7 @@ pub fn open_paths(state: &mut AppState, paths: impl IntoIterator<Item = PathBuf>
     state.ui.entry_list.selected_entry_ids.insert(*entry_id);
     load_active_entry(state);
     state.ui.selection.clear();
-    state.set_message(format_open_results(opened.len(), failed.len(), last_path));
+    state.status_success(format_open_results(opened.len(), failed.len(), last_path));
 }
 
 pub(crate) fn format_open_results(
@@ -113,7 +113,7 @@ pub(crate) fn apply_structure_edits(state: &mut AppState) {
         state.history.push_undo(before);
         state.edit_origin = None;
         state.ui.editor = None;
-        state.set_message("Applied structure edits".to_string());
+        state.status_success("Applied structure edits".to_string());
     }
 }
 
@@ -127,5 +127,5 @@ pub(crate) fn cancel_structure_edits(state: &mut AppState) {
     } else {
         return;
     }
-    state.set_message("Edit canceled".to_string());
+    state.status_neutral("Edit canceled".to_string());
 }

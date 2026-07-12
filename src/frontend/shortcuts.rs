@@ -287,7 +287,7 @@ fn apply_ui_command(state: &mut AppState, command: ShortcutCommand, ctx: &egui::
         }
         ShortcutCommand::ResetViewportCamera => {
             state.ui.camera = Default::default();
-            state.set_message("Reset viewport camera".to_string());
+            state.status_neutral("Reset viewport camera".to_string());
             ctx.request_repaint();
         }
         ShortcutCommand::ZoomViewport(delta) => {

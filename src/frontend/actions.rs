@@ -495,6 +495,21 @@ pub enum AppAction {
     ResetWorkbenchLayout,
     /// Dismiss the active [`Notification`] without taking any of its actions.
     DismissNotification,
+    /// Reveal the Output tab and apply a source/exact-job filter in one step —
+    /// the single owner of dock reveal + filter selection for a job-detail or
+    /// "show Output" navigation. Renderers never touch the dock model and the
+    /// Output filter independently.
+    RevealOutput(crate::frontend::state::OutputTarget),
+    /// Follow a status-notice link to its typed detail target (Output, an
+    /// Activity job, or Settings).
+    OpenDetailTarget(crate::frontend::state::DetailTarget),
+    /// Dismiss the current status notice (its canonical log/job record persists).
+    AcknowledgeStatus,
+    PostStatusNeutral(String),
+    ReportSystemError {
+        subsystem: crate::frontend::state::SystemSubsystem,
+        text: String,
+    },
     /// Accept the heavy-structure suggestion for an entry: switch all of its
     /// atoms to wireframe, then render it.
     UseWireframeForHeavyEntry(u64),
@@ -562,11 +577,10 @@ impl LeaveConfirmation {
 }
 
 /// A non-modal notification surfaced over the workspace: a short message that,
-/// unlike [`crate::frontend::state::AppState::set_message`]'s plain status-bar
-/// text, can offer the user a choice through action buttons. One notification is
-/// shown at a time; posting a new one replaces any current one. Clicking a button
-/// dismisses the notification and then dispatches the button's action, so a
-/// button may itself post a follow-up notification.
+/// unlike a plain status notice, can offer the user a choice through action
+/// buttons. One notification is shown at a time; posting a new one replaces any
+/// current one. Clicking a button dismisses the notification and then dispatches
+/// the button's action, so a button may itself post a follow-up notification.
 #[derive(Debug, Clone)]
 pub struct Notification {
     pub severity: NotificationSeverity,

@@ -8,6 +8,7 @@ use crate::engines::docking::{
 use crate::frontend::jobs::{
     DockingWorkerMessage, LocalJobSlot, RunningDockingJob, spawn_docking_job,
 };
+use crate::frontend::state::{LogLevel, SystemSubsystem};
 use crate::job::CancelSignal;
 
 /// File name of the saved multi-pose PDBQT inside a docking task's run directory.
@@ -20,37 +21,40 @@ pub(crate) fn start_pending_docking(state: &mut AppState) {
         return;
     };
     if state.jobs.docking_running() {
-        state.set_message("a docking run is already in progress; press Esc to stop".to_string());
+        state.status_neutral("a docking run is already in progress; press Esc to stop");
         return;
     }
     let Some(receptor_id) = prompt.receptor_entry else {
-        state.set_message("choose a receptor entry before docking".to_string());
+        state.status_neutral("choose a receptor entry before docking");
         return;
     };
     let Some(ligand_id) = prompt.ligand_entry else {
-        state.set_message("choose a ligand entry before docking".to_string());
+        state.status_neutral("choose a ligand entry before docking");
         return;
     };
     if receptor_id == ligand_id {
-        state.set_message("the receptor and ligand must be different entries".to_string());
+        state.status_neutral("the receptor and ligand must be different entries");
         return;
     }
     if prompt.box_size.iter().any(|&size| size <= 0.0) {
-        state.set_message("the search box must have a positive size on every axis".to_string());
+        state.status_neutral("the search box must have a positive size on every axis");
         return;
     }
     let Some(receptor) = entry_structure(state, receptor_id) else {
-        state.set_message("the receptor entry has no structure".to_string());
+        state.status_neutral("the receptor entry has no structure");
         return;
     };
     let Some(ligand) = entry_structure(state, ligand_id) else {
-        state.set_message("the ligand entry has no structure".to_string());
+        state.status_neutral("the ligand entry has no structure");
         return;
     };
     // Create the run directory up front so the poses artifact has a home and the
     // run records its source entry.
     if let Err(error) = ensure_active_task_run_dir(state, TaskKind::RunDocking, None) {
-        state.set_message(format!("could not create docking run directory: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Storage,
+            format!("could not create docking run directory: {error}"),
+        );
         return;
     }
 
@@ -96,7 +100,7 @@ pub(crate) fn start_pending_docking(state: &mut AppState) {
                 );
                 state.tasks.mark_status(task_run_id, TaskStatus::Running);
             }
-            state.set_message("docking running; press Esc to stop".to_string());
+            state.status_neutral("docking running; press Esc to stop");
         }
     }
 }
@@ -121,7 +125,7 @@ pub(crate) fn cancel_pending_docking_request(state: &mut AppState) {
         );
     }
     state.ui.pending_docking = None;
-    state.set_message("docking canceled".to_string());
+    state.status_neutral("docking canceled");
     complete_active_task(state, TaskKind::RunDocking, TaskStatus::Failed);
     close_active_task_panel(state);
 }
@@ -146,22 +150,27 @@ impl JobRuntime for RunningDockingJob {
         // truthfully as `Unsupported` — the job is not moved to `Cancelling`.
         self.cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        state.set_message("docking stopping (the current search runs to completion)".to_string());
+        if let Some(job_id) = state.jobs.local_execution(self.slot()) {
+            state.job_notice(
+                job_id,
+                "docking stopping (the current search runs to completion)",
+            );
+        }
         CancelSignal::Unsupported
     }
 
     fn poll(&mut self, state: &mut AppState, cx: &JobContext) -> JobPoll {
         loop {
             match self.receiver.try_recv() {
-                Ok(DockingWorkerMessage::Progress { stage }) => {
-                    state.set_message(format!("Docking: {stage}; press Esc to stop"));
-                }
+                Ok(DockingWorkerMessage::Progress { stage }) => self.latest_stage = Some(stage),
                 Ok(DockingWorkerMessage::Finished(outcome)) => {
                     apply_docking_outcome(state, cx, *outcome);
                     return JobPoll::Terminal(TaskStatus::Completed);
                 }
                 Ok(DockingWorkerMessage::Failed(error)) => {
-                    state.set_message(format!("docking failed: {error}"));
+                    if let Some(job_id) = cx.job_id {
+                        state.job_failed(job_id, format!("docking failed: {error}"));
+                    }
                     return JobPoll::Terminal(TaskStatus::Failed);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => return JobPoll::Running,
@@ -174,8 +183,10 @@ impl JobRuntime for RunningDockingJob {
 /// Apply a finished local docking search: save the poses, add one entry per pose,
 /// and record them in the ledger so a re-poll never re-creates them.
 fn apply_docking_outcome(state: &mut AppState, cx: &JobContext, outcome: DockingOutcome) {
-    for line in outcome.summary.lines() {
-        state.output_log.push(line.to_string());
+    if let Some(job_id) = cx.job_id {
+        for line in outcome.summary.lines() {
+            state.append_job_log(job_id, LogLevel::Info, line);
+        }
     }
     let poses_path = save_dock_poses(state, &outcome);
     let already = cx
@@ -192,11 +203,15 @@ fn apply_docking_outcome(state: &mut AppState, cx: &JobContext, outcome: Docking
         .first()
         .map(|pose| pose.affinity)
         .unwrap_or(0.0);
-    state.set_message(format!(
+    let summary = format!(
         "Docking complete: {} pose(s), best {:+.2} kcal/mol",
         outcome.poses.len(),
         best
-    ));
+    );
+    match cx.job_id {
+        Some(job_id) => state.job_succeeded(job_id, summary),
+        None => state.status_success(summary),
+    }
 }
 
 /// Apply a retrieved remote docking outcome: log the summary, save the poses
@@ -209,8 +224,17 @@ pub(crate) fn apply_remote_docking_outcome(
     row: &crate::backend::storage::jobs::RemoteJob,
     outcome: DockingOutcome,
 ) {
-    for line in outcome.summary.lines() {
-        state.output_log.push(line.to_string());
+    let job_id: Option<crate::job::JobId> = row.job_id.parse().ok();
+    if job_id.is_none() {
+        state.report_unscoped_remote_error(format!(
+            "Remote docking result has invalid job id `{}`",
+            row.job_id
+        ));
+    }
+    if let Some(job_id) = job_id {
+        for line in outcome.summary.lines() {
+            state.append_job_log(job_id, LogLevel::Info, line);
+        }
     }
     let run_dir = PathBuf::from(&row.local_run_dir);
     let _ = std::fs::create_dir_all(&run_dir);
@@ -239,11 +263,14 @@ pub(crate) fn apply_remote_docking_outcome(
         .first()
         .map(|pose| pose.affinity)
         .unwrap_or(0.0);
-    state.set_message(format!(
+    let summary = format!(
         "Remote docking complete: {} pose(s), best {:+.2} kcal/mol",
         outcome.poses.len(),
         best
-    ));
+    );
+    if let Some(job_id) = job_id {
+        state.job_succeeded(job_id, summary);
+    }
 }
 
 /// Format every pose as one multi-`MODEL` PDBQT document — the saved run artifact,
@@ -268,24 +295,30 @@ fn save_dock_poses(state: &mut AppState, outcome: &DockingOutcome) -> Option<Pat
     let run_dir = match ensure_active_task_run_dir(state, TaskKind::RunDocking, None) {
         Ok(run_dir) => run_dir,
         Err(error) => {
-            state
-                .output_log
-                .push(format!("failed to create docking run directory: {error}"));
+            state.log_system(
+                SystemSubsystem::Storage,
+                LogLevel::Warn,
+                format!("failed to create docking run directory: {error}"),
+            );
             return None;
         }
     };
     let path = run_dir.join(DOCK_POSES_FILE);
     match std::fs::write(&path, dock_poses_pdbqt(outcome)) {
         Ok(()) => {
-            state
-                .output_log
-                .push(format!("docking poses saved to {}", path.display()));
+            state.log_system(
+                SystemSubsystem::File,
+                LogLevel::Info,
+                format!("docking poses saved to {}", path.display()),
+            );
             Some(path)
         }
         Err(error) => {
-            state
-                .output_log
-                .push(format!("failed to save docking poses: {error}"));
+            state.log_system(
+                SystemSubsystem::Storage,
+                LogLevel::Warn,
+                format!("failed to save docking poses: {error}"),
+            );
             None
         }
     }
