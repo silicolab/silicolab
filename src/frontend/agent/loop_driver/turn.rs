@@ -8,7 +8,7 @@ use crate::frontend::agent::registry;
 use crate::frontend::agent::session::{AgentPhase, PendingTurn, TranscriptEntry};
 use crate::frontend::agent::tools;
 use crate::frontend::jobs::{AgentTurnEvent, spawn_agent_turn};
-use crate::frontend::state::AppState;
+use crate::frontend::state::{AppState, LogLevel};
 use crate::io::llm::types::{AssistantTurn, ChatMessage, LlmConfig, LlmError, StopReason};
 
 /// Handle a user message. Idle → start a turn immediately; busy or paused on
@@ -176,7 +176,7 @@ pub fn handle_turn_result(
         Err(error) => {
             let message = error.user_message();
             notice(state, &format!("Assistant error: {message}"));
-            state.output_log.push(format!("assistant error: {message}"));
+            state.log_agent(None, LogLevel::Error, format!("assistant error: {message}"));
             let cancelled = matches!(error, LlmError::Cancelled);
             state.ui.agent.phase = if cancelled {
                 AgentPhase::Idle
@@ -206,9 +206,11 @@ pub fn handle_turn_result(
             .agent
             .transcript
             .push(TranscriptEntry::Assistant(turn.text.clone()));
-        state
-            .output_log
-            .push(format!("assistant> {}", turn.text.trim()));
+        state.log_agent(
+            None,
+            LogLevel::Info,
+            format!("assistant> {}", turn.text.trim()),
+        );
     }
 
     // Record the assistant turn for replay via the provider's encoder (with a

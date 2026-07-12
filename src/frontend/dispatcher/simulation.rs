@@ -1,7 +1,7 @@
 use super::*;
 
 use crate::backend::config::ComputeTarget;
-use crate::frontend::state::{EngineDraft, EngineProbeState};
+use crate::frontend::state::{EngineDraft, EngineProbeState, SystemSubsystem};
 
 mod md_build;
 mod remote;
@@ -21,11 +21,11 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
         return;
     };
     if state.jobs.engine_running() {
-        state.set_message("another external engine job is already running".to_string());
+        state.status_neutral("another external engine job is already running");
         return;
     }
     if state.structure().cell.is_none() {
-        state.set_message("MD runs need a structure with a simulation box".to_string());
+        state.status_neutral("MD runs need a structure with a simulation box");
         return;
     }
     // Validate the neutral stage sequence against the effective context; errors
@@ -41,18 +41,18 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
                 })
                 .map(|issue| issue.message.clone())
                 .unwrap_or_default();
-            state.set_message(format!("Cannot run: {first}"));
+            state.status_neutral(format!("Cannot run: {first}"));
             return;
         }
     }
     if prompt.stages.is_empty() {
-        state.set_message("Add at least one MD stage".to_string());
+        state.status_neutral("Add at least one MD stage");
         return;
     }
     let topology = match resolve_md_topology_source(state, &prompt) {
         Ok(topology) => topology,
         Err(error) => {
-            state.set_message(error.to_string());
+            state.status_neutral(error.to_string());
             return;
         }
     };
@@ -83,7 +83,7 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
         let topology = match crate::workflows::gromacs::WireTopology::from_source(&topology) {
             Ok(topology) => topology,
             Err(error) => {
-                state.set_message(format!("could not read the run topology: {error}"));
+                state.status_error(format!("could not read the run topology: {error}"));
                 return;
             }
         };
@@ -109,7 +109,7 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
     let mut compute = match resolve_md_compute(state, prompt.engine) {
         Ok(compute) => compute,
         Err(error) => {
-            state.set_message(error.to_string());
+            state.status_neutral(error.to_string());
             return;
         }
     };
@@ -123,7 +123,10 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
         match ensure_active_task_run_dir(state, TaskKind::RunMd, Some(prompt.run_name.as_str())) {
             Ok(path) => path,
             Err(error) => {
-                state.set_message(format!("failed to create run directory: {error}"));
+                state.report_system_error(
+                    SystemSubsystem::Storage,
+                    format!("failed to create run directory: {error}"),
+                );
                 complete_active_task(state, TaskKind::RunMd, TaskStatus::Failed);
                 return;
             }
@@ -154,7 +157,7 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
         );
         mark_task_status(state, task_run_id, TaskStatus::Running);
     }
-    state.set_message(format!(
+    state.status_neutral(format!(
         "{} MD running; press Esc to stop",
         prompt.engine.label()
     ));
@@ -171,7 +174,7 @@ pub(crate) fn cancel_pending_md_run_request(state: &mut AppState) {
         );
     }
     state.ui.pending_md_run = None;
-    state.set_message("MD run canceled".to_string());
+    state.status_neutral("MD run canceled");
     complete_active_task(state, TaskKind::RunMd, TaskStatus::Failed);
     close_active_task_panel(state);
 }
@@ -349,7 +352,7 @@ pub(crate) fn verify_engine(state: &mut AppState, target: ComputeTarget, engine:
     use crate::frontend::jobs::VerifyTarget;
 
     if state.jobs.engine_verify.is_some() {
-        state.set_message("An engine check is already running".to_string());
+        state.status_neutral("An engine check is already running");
         return;
     }
     let launches = match &target {
@@ -359,13 +362,13 @@ pub(crate) fn verify_engine(state: &mut AppState, target: ComputeTarget, engine:
         }
         ComputeTarget::Remote(id) => {
             if let Err(error) = crate::engines::remote::ensure_ssh_available() {
-                state.set_message(error.to_string());
+                state.status_neutral(error.to_string());
                 return;
             }
             match super::commit_remote_host_draft(state, id) {
                 Ok(host) => VerifyTarget::Remote(Box::new(host)),
                 Err(error) => {
-                    state.set_message(error.to_string());
+                    state.status_neutral(error.to_string());
                     return;
                 }
             }
@@ -411,7 +414,7 @@ pub(crate) fn apply_verify_outcome(
     let key = (target.clone(), engine.as_str());
     state.ui.settings.engine_probe.remove(&key);
     if current_engine_draft_launch(state, &target, engine) != checked_launch {
-        state.set_message("Engine check ignored because the launch was edited".to_string());
+        state.status_neutral("Engine check ignored because the launch was edited");
         return;
     }
     let message = match outcome {
@@ -441,7 +444,7 @@ pub(crate) fn apply_verify_outcome(
             return;
         }
     };
-    state.set_message(message);
+    state.status_success(message);
 }
 
 fn current_engine_draft_launch(
@@ -541,7 +544,7 @@ pub(crate) fn clear_engine_launch(state: &mut AppState, target: ComputeTarget, e
         .engine_probe
         .remove(&(target.clone(), engine.as_str()));
     set_engine_launch(state, &target, engine, None);
-    state.set_message("Engine launch cleared; using auto-detection".to_string());
+    state.status_success("Engine launch cleared; using auto-detection");
 }
 
 pub(crate) fn browse_engine_program(state: &mut AppState, id: EngineId) {
@@ -558,8 +561,11 @@ pub(crate) fn browse_engine_program(state: &mut AppState, id: EngineId) {
 
 pub(crate) fn persist_engine_config(state: &mut AppState, message: &str) {
     match save_config(&state.config) {
-        Ok(()) => state.set_message(message.to_string()),
-        Err(error) => state.set_message(format!("failed to save engine settings: {error}")),
+        Ok(()) => state.status_success(message),
+        Err(error) => state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("failed to save engine settings: {error}"),
+        ),
     }
 }
 
@@ -576,7 +582,7 @@ pub(crate) fn add_hydrogens(state: &mut AppState) {
         .selection
         .retain_valid(state.structure().atoms.len());
     state.history.push_undo(before);
-    state.set_message(format!("Added {added} hydrogens"));
+    state.status_success(format!("Added {added} hydrogens"));
 }
 
 pub(crate) fn recompute_bonds(state: &mut AppState) {
@@ -592,7 +598,7 @@ pub(crate) fn recompute_bonds(state: &mut AppState) {
         .selection
         .retain_valid(state.structure().atoms.len());
     state.history.push_undo(before);
-    state.set_message(format!(
+    state.status_success(format!(
         "Recomputed bonds: {} bonds detected",
         state.structure().bonds.len()
     ));
@@ -603,7 +609,7 @@ pub(crate) fn translate_atoms_into_first_unit_cell(state: &mut AppState) {
         state.structure(),
         "translating atoms into the first unit cell requires a periodic structure",
     ) {
-        state.set_message(error.to_string());
+        state.status_neutral(error.to_string());
         return;
     }
 
@@ -621,7 +627,7 @@ pub(crate) fn translate_atoms_into_first_unit_cell(state: &mut AppState) {
         .selection
         .retain_valid(state.structure().atoms.len());
     state.history.push_undo(before);
-    state.set_message("Translated atoms into the first unit cell".to_string());
+    state.status_success("Translated atoms into the first unit cell");
 }
 
 pub(crate) fn expand_supercell(state: &mut AppState, repeats: [u32; 3]) {
@@ -634,7 +640,7 @@ pub(crate) fn expand_supercell(state: &mut AppState, repeats: [u32; 3]) {
     state.mark_structure_changed();
     state.ui.selection.clear();
     state.history.push_undo(before);
-    state.set_message(format!(
+    state.status_success(format!(
         "Expanded to {}x{}x{} supercell ({} atoms, {} bonds)",
         repeats[0],
         repeats[1],

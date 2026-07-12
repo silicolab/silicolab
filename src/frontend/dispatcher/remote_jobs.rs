@@ -7,6 +7,7 @@
 use super::*;
 
 use crate::backend::storage::jobs as registry;
+use crate::frontend::state::{LogLevel, SystemSubsystem};
 
 /// One-shot reconnect read on the first frame: load the registry snapshot so a
 /// reopened session shows its in-flight remote jobs before any manual refresh.
@@ -44,7 +45,7 @@ pub(crate) fn start_remote_engine(
     resources: crate::backend::config::JobResources,
 ) {
     let Some(task_run_id) = state.active_task_run else {
-        state.set_message("no active task to run remotely".to_string());
+        state.status_neutral("no active task to run remotely");
         return;
     };
     let Some(task) = state.tasks.task_run(task_run_id).cloned() else {
@@ -52,14 +53,17 @@ pub(crate) fn start_remote_engine(
     };
     let engine_name = remote_engine_name(&engine);
     if let Err(error) = crate::engines::remote::ensure_ssh_available() {
-        state.set_message(format!("remote {engine_name} unavailable: {error}"));
+        state.status_error(format!("remote {engine_name} unavailable: {error}"));
         fail_active_task(state, task_run_id);
         return;
     }
     let local_run_dir = match ensure_active_task_run_dir(state, task.kind, None) {
         Ok(dir) => dir,
         Err(error) => {
-            state.set_message(format!("could not create run directory: {error}"));
+            state.report_system_error(
+                SystemSubsystem::Storage,
+                format!("could not create run directory: {error}"),
+            );
             fail_active_task(state, task_run_id);
             return;
         }
@@ -93,7 +97,7 @@ pub(crate) fn start_remote_engine(
     );
     state.jobs.remote_submit = Some(handle);
     mark_task_status(state, task_run_id, TaskStatus::Running);
-    state.set_message(format!(
+    state.status_neutral(format!(
         "Deploying & submitting {engine_name} to {} (use Refresh Remote to track it)…",
         host.label
     ));
@@ -153,9 +157,10 @@ pub(crate) fn poll_remote_submit(state: &mut AppState, ctx: &egui::Context) {
                         .cache_detected(detected.engine, detected.launch, detected.version);
                 }
                 if let Err(error) = save_config(&state.config) {
-                    state.output_log.push(format!(
-                        "could not persist worker deployment identity: {error}"
-                    ));
+                    state.report_system_error(
+                        SystemSubsystem::Settings,
+                        format!("could not persist worker deployment identity: {error}"),
+                    );
                 }
             }
             let row = registry::RemoteJob {
@@ -181,12 +186,13 @@ pub(crate) fn poll_remote_submit(state: &mut AppState, ctx: &egui::Context) {
                 unknown_since_ms: None,
             };
             if let Err(error) = registry::open().and_then(|conn| registry::upsert(&conn, &row)) {
-                state
-                    .output_log
-                    .push(format!("jobs.db write failed: {error}"));
+                state.report_system_error(
+                    SystemSubsystem::Storage,
+                    format!("jobs.db write failed: {error}"),
+                );
             }
             reload_remote_jobs(state);
-            state.set_message(format!(
+            state.status_success(format!(
                 "Submitted to {host_label}; use Refresh Remote to check status"
             ));
         }
@@ -194,7 +200,7 @@ pub(crate) fn poll_remote_submit(state: &mut AppState, ctx: &egui::Context) {
             if let Some(task_run_id) = submit.task_run_id {
                 mark_task_status(state, task_run_id, TaskStatus::Failed);
             }
-            state.set_message(format!("Remote submission failed: {error}"));
+            state.report_unscoped_remote_error(format!("Remote submission failed: {error}"));
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             state.jobs.remote_submit = Some(submit);
@@ -204,7 +210,7 @@ pub(crate) fn poll_remote_submit(state: &mut AppState, ctx: &egui::Context) {
             if let Some(task_run_id) = submit.task_run_id {
                 mark_task_status(state, task_run_id, TaskStatus::Failed);
             }
-            state.set_message("Remote submission worker stopped unexpectedly".to_string());
+            state.report_unscoped_remote_error("Remote submission worker stopped unexpectedly");
         }
     }
 }
@@ -232,13 +238,13 @@ pub(crate) fn refresh_remote_jobs(state: &mut AppState) {
         .collect();
     reload_remote_jobs(state);
     if items.is_empty() {
-        state.set_message("No active remote jobs to refresh".to_string());
+        state.status_neutral("No active remote jobs to refresh");
         return;
     }
     state.jobs.remote_jobs_refresh = Some(crate::frontend::remote_jobs::spawn_remote_jobs_refresh(
         items,
     ));
-    state.set_message("Refreshing remote jobs…".to_string());
+    state.status_neutral("Refreshing remote jobs…");
 }
 
 /// Drain a finished remote-jobs refresh: update each row's status in `jobs.db`,
@@ -254,14 +260,14 @@ pub(crate) fn poll_remote_jobs_refresh(state: &mut AppState, ctx: &egui::Context
                 apply_remote_observation(state, conn.as_ref(), &update.run_uuid, update.outcome);
             }
             reload_remote_jobs(state);
-            state.set_message("Remote jobs refreshed".to_string());
+            state.status_neutral("Remote jobs refreshed");
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             state.jobs.remote_jobs_refresh = Some(refresh);
             ctx.request_repaint_after(Duration::from_millis(400));
         }
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-            state.set_message("Remote refresh worker stopped unexpectedly".to_string());
+            state.status_error("Remote refresh worker stopped unexpectedly");
         }
     }
 }
@@ -326,15 +332,20 @@ fn apply_remote_observation(
                 .tasks
                 .runs
                 .set_import_state(run_uuid, crate::backend::run_attempt::ResultImport::Failed);
-            state.output_log.push(format!(
+            let text = format!(
                 "remote job {} finished but its outcome was unreadable: {error}",
                 short_uuid(run_uuid)
-            ));
+            );
+            match run_uuid.parse::<crate::job::JobId>() {
+                Ok(job_id) => state.job_failed(job_id, text),
+                Err(_) => state.log_remote(None, LogLevel::Error, text),
+            }
         }
-        RemoteJobOutcome::ProbeError(error) => state.output_log.push(format!(
-            "remote job {} probe error: {error}",
-            short_uuid(run_uuid)
-        )),
+        RemoteJobOutcome::ProbeError(error) => state.log_remote(
+            prior.as_ref().map(|row| row.host_id.clone()),
+            LogLevel::Warn,
+            format!("remote job {} probe error: {error}", short_uuid(run_uuid)),
+        ),
         RemoteJobOutcome::Observed(observation) => match observation.phase {
             crate::engines::remote::launcher::RemoteJobPhase::Failed
             | crate::engines::remote::launcher::RemoteJobPhase::Lost => {
@@ -356,26 +367,29 @@ pub(crate) fn poll_remote_cancel(state: &mut AppState, ctx: &egui::Context) {
     match cancel.receiver.try_recv() {
         Ok(Ok(outcome)) => {
             let conn = registry::open().ok();
-            match apply_remote_observation(state, conn.as_ref(), &cancel.run_uuid, outcome) {
-                Some(registry::RemoteJobStatus::Cancelled) => {
-                    state.set_message("Remote cancellation confirmed".to_string());
-                }
-                Some(status) => {
-                    state.set_message(format!("Remote job finished as {}", status.token()));
-                }
-                None => state.set_message("Remote job state could not be recorded".to_string()),
+            let text =
+                match apply_remote_observation(state, conn.as_ref(), &cancel.run_uuid, outcome) {
+                    Some(registry::RemoteJobStatus::Cancelled) => {
+                        "Remote cancellation confirmed".to_string()
+                    }
+                    Some(status) => format!("Remote job finished as {}", status.token()),
+                    None => "Remote job state could not be recorded".to_string(),
+                };
+            match cancel.run_uuid.parse::<crate::job::JobId>() {
+                Ok(job_id) => state.job_notice(job_id, text),
+                Err(_) => state.log_remote(None, LogLevel::Info, text),
             }
             reload_remote_jobs(state);
         }
         Ok(Err(error)) => {
-            state.set_message(format!("Remote cancellation failed: {error}"));
+            state.report_unscoped_remote_error(format!("Remote cancellation failed: {error}"));
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             state.jobs.remote_cancel = Some(cancel);
             ctx.request_repaint_after(Duration::from_millis(400));
         }
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-            state.set_message("Remote cancellation worker stopped unexpectedly".to_string());
+            state.report_unscoped_remote_error("Remote cancellation worker stopped unexpectedly");
         }
     }
 }
@@ -488,8 +502,17 @@ fn apply_remote_qm_outcome(
     row: &registry::RemoteJob,
     outcome: crate::engines::qm::QmOutcome,
 ) {
-    for line in outcome.summary.lines() {
-        state.output_log.push(line.to_string());
+    let job_id: Option<crate::job::JobId> = row.job_id.parse().ok();
+    if job_id.is_none() {
+        state.report_unscoped_remote_error(format!(
+            "Remote QM result has invalid job id `{}`",
+            row.job_id
+        ));
+    }
+    if let Some(job_id) = job_id {
+        for line in outcome.summary.lines() {
+            state.append_job_log(job_id, LogLevel::Info, line);
+        }
     }
     let run_dir = PathBuf::from(&row.local_run_dir);
     save_qm_artifacts(state, &run_dir, &outcome);
@@ -528,7 +551,7 @@ fn apply_remote_qm_outcome(
         mark_task_status(state, task_id, TaskStatus::Completed);
         state.ui.task_chart_thumbnails.remove(&task_id);
     }
-    state.set_message(format!(
+    let summary = format!(
         "Remote QM complete: energy {:.6} Eh{}",
         outcome.energy_hartree,
         if outcome.converged {
@@ -536,7 +559,10 @@ fn apply_remote_qm_outcome(
         } else {
             " (not converged)"
         }
-    ));
+    );
+    if let Some(job_id) = job_id {
+        state.job_succeeded(job_id, summary);
+    }
 }
 
 fn mark_remote_task(state: &mut AppState, job_id: &str, status: TaskStatus) {
@@ -592,11 +618,15 @@ pub(crate) fn import_completed_remote_jobs(state: &mut AppState, rows: Vec<regis
                     &row.job_id,
                     crate::backend::run_attempt::ResultImport::PendingRecovery,
                 );
-                state.output_log.push(format!(
-                    "remote job {} finished but its result is pending recovery \
-                     (outcome file missing); it will retry on the next Refresh Remote",
-                    short_uuid(&row.job_id)
-                ));
+                state.log_remote(
+                    Some(row.host_id.clone()),
+                    LogLevel::Warn,
+                    format!(
+                        "remote job {} finished but its result is pending recovery \
+                         (outcome file missing); it will retry on the next Refresh Remote",
+                        short_uuid(&row.job_id)
+                    ),
+                );
             }
         }
     }
@@ -604,12 +634,12 @@ pub(crate) fn import_completed_remote_jobs(state: &mut AppState, rows: Vec<regis
         // Persist the imported entries + ledger atomically now rather than waiting
         // for the debounced autosave, so the recovery is durable from open.
         let _ = persist_project(state, false);
-        state.set_message(format!(
+        state.status_success(format!(
             "Recovered {recovered} remote result(s) for this project"
         ));
     }
     if pending > 0 {
-        state.set_message(format!(
+        state.status_neutral(format!(
             "{pending} remote result(s) pending recovery — use Refresh Remote to retry"
         ));
     }
@@ -629,7 +659,7 @@ fn read_local_outcome(local_run_dir: &str) -> Option<crate::wire::EngineOutcome>
 /// run's own UUID-suffixed dir) and drop its registry row.
 pub(crate) fn remove_remote_job_scratch(state: &mut AppState, run_uuid: &str) {
     if state.jobs.remote_cleanup.is_some() {
-        state.set_message("A remote cleanup is already running".to_string());
+        state.status_neutral("A remote cleanup is already running");
         return;
     }
     let row = (|| -> anyhow::Result<Option<registry::RemoteJob>> {
@@ -641,18 +671,17 @@ pub(crate) fn remove_remote_job_scratch(state: &mut AppState, run_uuid: &str) {
         return;
     };
     if !row.status.is_terminal() {
-        state
-            .set_message("Cancel the remote job before removing its scratch directory".to_string());
+        state.status_neutral("Cancel the remote job before removing its scratch directory");
         return;
     }
     let Some(host) = state.config.remote_hosts.get(&row.host_id).cloned() else {
-        state.set_message("The host for this job is no longer configured".to_string());
+        state.status_neutral("The host for this job is no longer configured");
         return;
     };
     state.jobs.remote_cleanup = Some(crate::frontend::remote_jobs::spawn_remote_cleanup(
         row, host,
     ));
-    state.set_message("Removing remote scratch…".to_string());
+    state.status_neutral("Removing remote scratch…");
 }
 
 pub(crate) fn poll_remote_cleanup(state: &mut AppState, ctx: &egui::Context) {
@@ -665,15 +694,15 @@ pub(crate) fn poll_remote_cleanup(state: &mut AppState, ctx: &egui::Context) {
                 let _ = registry::remove(&conn, &cleanup.run_uuid);
             }
             reload_remote_jobs(state);
-            state.set_message("Removed the remote scratch directory".to_string());
+            state.status_success("Removed the remote scratch directory");
         }
-        Ok(Err(error)) => state.set_message(format!("Could not remove remote scratch: {error}")),
+        Ok(Err(error)) => state.status_error(format!("Could not remove remote scratch: {error}")),
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             state.jobs.remote_cleanup = Some(cleanup);
             ctx.request_repaint_after(Duration::from_millis(400));
         }
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-            state.set_message("Remote cleanup worker stopped unexpectedly".to_string());
+            state.status_error("Remote cleanup worker stopped unexpectedly");
         }
     }
 }

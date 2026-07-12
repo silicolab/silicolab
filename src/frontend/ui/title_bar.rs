@@ -400,7 +400,10 @@ pub(crate) fn render_title_bar(
                     if response.clicked()
                         && let Err(error) = crate::io::self_update::restart_into_new_binary()
                     {
-                        state.set_message(format!("Restart failed: {error}"));
+                        actions.push(AppAction::ReportSystemError {
+                            subsystem: crate::frontend::state::SystemSubsystem::Update,
+                            text: format!("Restart failed: {error}"),
+                        });
                     }
                 }
                 SelfUpdateStatus::Downloading => {
@@ -426,7 +429,9 @@ pub(crate) fn render_title_bar(
                                 state.ui.self_update = SelfUpdateStatus::Downloading;
                                 state.jobs.self_update =
                                     Some(crate::frontend::jobs::spawn_self_update());
-                                state.set_message(format!("Downloading SilicoLab {version}…"));
+                                actions.push(AppAction::PostStatusNeutral(format!(
+                                    "Downloading SilicoLab {version}…"
+                                )));
                             }
                         } else {
                             let hover = match &status {

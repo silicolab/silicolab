@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use crate::backend::config::save_config;
 use crate::frontend::agent::session::TranscriptEntry;
-use crate::frontend::state::AppState;
+use crate::frontend::state::{AppState, SystemSubsystem};
 use crate::io::llm::types::{AssistantTurn, ChatMessage, ContentBlock, ReasoningBlob, Role};
 
 mod heavy;
@@ -116,7 +116,10 @@ fn notice(state: &mut AppState, message: &str) {
 
 fn persist(state: &mut AppState) {
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save assistant settings: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save assistant settings: {error}"),
+        );
     }
 }
 

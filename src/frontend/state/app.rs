@@ -1,3 +1,4 @@
+mod feedback;
 mod monitor;
 mod ui_state;
 
@@ -49,15 +50,20 @@ pub struct AppState {
     pub materializations: MaterializationLedger,
     pub jobs: JobManager,
     pub ui: UiState,
-    pub message: String,
-    pub output_log: Vec<String>,
+    /// The typed, byte-bounded owner of every free-text feedback event — the
+    /// command transcript (Console) and the system/agent/remote/job detail
+    /// (Output). Read-only to UI code through [`AppState::session_log`].
+    session_log: SessionLogStore,
+    /// The single status-bar notice with its expiry/priority/pause bookkeeping.
+    status: StatusState,
+    /// Monotonic source of [`CommandId`] for the console transcript.
+    next_command_id: CommandId,
     pub active_task_run: Option<u64>,
     pub edit_origin: Option<EditSnapshot>,
     pub builder_origin: Option<EditSnapshot>,
     pub optimization_origin: Option<EditSnapshot>,
     workspace_structure: Structure,
     workspace_save_path: PathBuf,
-    last_logged_message: String,
     last_saved_entries_fingerprint: u64,
     last_saved_assistant_fingerprint: u64,
     project_save_error: Option<String>,
@@ -93,7 +99,6 @@ impl AppState {
                 let trimmed_title = structure.title.trim();
                 !trimmed_title.is_empty() && trimmed_title != "Untitled"
             };
-        let message = "Ready to open or edit a structure".to_string();
         let entries = if let Some(snapshot) = project_snapshot.as_ref() {
             snapshot.entries.clone()
         } else if has_initial_entry {
@@ -119,15 +124,15 @@ impl AppState {
             materializations,
             jobs: JobManager::default(),
             ui: UiState::default(),
-            message: message.clone(),
-            output_log: vec![message.clone()],
+            session_log: SessionLogStore::default(),
+            status: StatusState::default(),
+            next_command_id: 0,
             active_task_run: None,
             edit_origin: None,
             builder_origin: None,
             optimization_origin: None,
             workspace_structure: structure,
             workspace_save_path: save_path,
-            last_logged_message: message,
             last_saved_entries_fingerprint: 0,
             last_saved_assistant_fingerprint: 0,
             project_save_error: None,
@@ -485,7 +490,10 @@ impl AppState {
                     entry.loaded = true;
                 }
             }
-            Err(error) => self.set_message(format!("Failed to load entry #{entry_id}: {error}")),
+            Err(error) => self.report_system_error(
+                SystemSubsystem::Storage,
+                format!("Failed to load entry #{entry_id}: {error}"),
+            ),
         }
     }
 
@@ -571,23 +579,6 @@ impl AppState {
 
     pub fn can_redo(&self) -> bool {
         self.history_navigation_enabled() && self.history.can_redo()
-    }
-
-    pub fn set_message(&mut self, message: impl Into<String>) {
-        self.message = message.into();
-        self.record_message_change();
-    }
-
-    pub fn record_message_change(&mut self) {
-        if self.message == self.last_logged_message {
-            return;
-        }
-        self.output_log.push(self.message.clone());
-        self.last_logged_message = self.message.clone();
-        if self.output_log.len() > 400 {
-            let excess = self.output_log.len() - 400;
-            self.output_log.drain(0..excess);
-        }
     }
 
     pub fn cancel_transient_jobs(&mut self) {

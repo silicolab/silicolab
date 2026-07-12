@@ -4,6 +4,7 @@ use super::{JobContext, JobPoll, JobRuntime, drive};
 use crate::frontend::jobs::{
     EngineSuccess, LocalJobSlot, RunningEngineJob, RunningOptimization, RunningQmJob,
 };
+use crate::frontend::state::{LogLevel, SystemSubsystem};
 use crate::job::CancelSignal;
 
 /// Persist a locally-run QM calculation's artifacts into the active task's run
@@ -21,9 +22,10 @@ pub(crate) fn save_qm_run_artifacts(state: &mut AppState, outcome: &crate::engin
     }
     match ensure_active_task_run_dir(state, kind, None) {
         Ok(run_dir) => save_qm_artifacts(state, &run_dir, outcome),
-        Err(error) => state
-            .output_log
-            .push(format!("failed to create QM run directory: {error}")),
+        Err(error) => state.report_system_error(
+            SystemSubsystem::Storage,
+            format!("failed to create QM run directory: {error}"),
+        ),
     }
     state.ui.task_chart_thumbnails.remove(&task_run_id);
 }
@@ -47,7 +49,12 @@ impl JobRuntime for RunningEngineJob {
         // killed and the pipeline stops between stages.
         self.cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        state.set_message(format!("{} {} stopping", self.engine, self.job_kind));
+        if let Some(job_id) = state.jobs.local_execution(self.slot()) {
+            state.job_notice(
+                job_id,
+                format!("{} {} stopping", self.engine, self.job_kind),
+            );
+        }
         CancelSignal::Accepted
     }
 
@@ -56,10 +63,13 @@ impl JobRuntime for RunningEngineJob {
         loop {
             match self.receiver.try_recv() {
                 Ok(EngineWorkerMessage::Stage(stage)) => {
-                    state.set_message(format!("{engine_name}: {stage}"));
                     self.latest_stage = Some(stage);
                 }
-                Ok(EngineWorkerMessage::Log(line)) => self.append_log(line),
+                Ok(EngineWorkerMessage::Log(line)) => {
+                    if let Some(job_id) = cx.job_id {
+                        state.append_job_log(job_id, LogLevel::Info, line);
+                    }
+                }
                 Ok(EngineWorkerMessage::Finished(success)) => {
                     apply_engine_outcome(state, cx, *success);
                     // A completed build discards its pre-build undo snapshot.
@@ -67,7 +77,9 @@ impl JobRuntime for RunningEngineJob {
                     return JobPoll::Terminal(TaskStatus::Completed);
                 }
                 Ok(EngineWorkerMessage::Failed(error)) => {
-                    state.set_message(format!("{engine_name} failed: {error}"));
+                    if let Some(job_id) = cx.job_id {
+                        state.job_failed(job_id, format!("{engine_name} failed: {error}"));
+                    }
                     state.optimization_origin = None;
                     return JobPoll::Terminal(TaskStatus::Failed);
                 }
@@ -102,8 +114,8 @@ fn apply_engine_outcome(state: &mut AppState, cx: &JobContext, success: EngineSu
             Some(entry_id),
             &[entry_id],
         );
+        state.job_succeeded(job_id, success.summary);
     }
-    state.set_message(success.summary);
 }
 
 pub(crate) fn poll_optimization_job(state: &mut AppState, ctx: &egui::Context) {
@@ -123,17 +135,22 @@ impl JobRuntime for RunningOptimization {
     fn request_cancel(&mut self, state: &mut AppState) -> CancelSignal {
         self.cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        state.set_message(match self.latest_report {
-            Some(report) => format!(
-                "forcefield optimization stopping: energy {:.3} -> {:.3} in {} steps",
-                report.initial_energy, report.final_energy, report.steps
-            ),
-            None => "forcefield optimization stopping".to_string(),
-        });
+        if let Some(job_id) = state.jobs.local_execution(self.slot()) {
+            state.job_notice(
+                job_id,
+                match self.latest_report {
+                    Some(report) => format!(
+                        "forcefield optimization stopping: energy {:.3} -> {:.3} in {} steps",
+                        report.initial_energy, report.final_energy, report.steps
+                    ),
+                    None => "forcefield optimization stopping".to_string(),
+                },
+            );
+        }
         CancelSignal::Accepted
     }
 
-    fn poll(&mut self, state: &mut AppState, _cx: &JobContext) -> JobPoll {
+    fn poll(&mut self, state: &mut AppState, cx: &JobContext) -> JobPoll {
         // Optimization streams into the *live* active structure, so its pre-run
         // snapshot is committed to undo history when it produced a result and
         // restored (reverting the geometry) when it was stopped before any step.
@@ -142,6 +159,9 @@ impl JobRuntime for RunningOptimization {
         let outcome = loop {
             match self.receiver.try_recv() {
                 Ok(OptimizationWorkerMessage::Progress { structure, report }) => {
+                    // Per-step energy is structured progress (the energy trace and
+                    // latest report Activity reads), never an appended log row.
+                    let first = self.latest_report.is_none();
                     *state.structure_mut() = structure;
                     state.mark_structure_changed();
                     self.latest_report = Some(report);
@@ -153,10 +173,9 @@ impl JobRuntime for RunningOptimization {
                         .push([report.steps as f64, f64::from(report.final_energy)]);
                     saw_progress = true;
                     state.set_source_path(None);
-                    state.set_message(format!(
-                        "forcefield optimizing: step {}, energy {:.3}; press Esc to stop",
-                        report.steps, report.final_energy
-                    ));
+                    if first {
+                        state.status_neutral("Optimizing forcefield… press Esc to stop");
+                    }
                 }
                 Ok(OptimizationWorkerMessage::Finished { structure, report }) => {
                     *state.structure_mut() = structure;
@@ -164,11 +183,20 @@ impl JobRuntime for RunningOptimization {
                     self.latest_report = Some(report);
                     saw_progress = true;
                     state.set_source_path(None);
-                    state.set_message(optimization_finished_message(report));
+                    match cx.job_id {
+                        Some(job_id) => {
+                            state.job_succeeded(job_id, optimization_finished_message(report))
+                        }
+                        None => state.status_success(optimization_finished_message(report)),
+                    }
                     break JobPoll::Terminal(TaskStatus::Completed);
                 }
                 Ok(OptimizationWorkerMessage::Failed(error)) => {
-                    state.set_message(format!("forcefield optimization failed: {error}"));
+                    let text = format!("forcefield optimization failed: {error}");
+                    match cx.job_id {
+                        Some(job_id) => state.job_failed(job_id, text),
+                        None => state.status_neutral(text),
+                    }
                     break JobPoll::Terminal(TaskStatus::Failed);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => break JobPoll::Running,
@@ -213,7 +241,9 @@ impl JobRuntime for RunningQmJob {
         // flag re-labels a `Finished`/`Failed` that races the kill as cancelled.
         self.cancel_requested = true;
         self.cancel.cancel();
-        state.set_message("QM calculation stopping".to_string());
+        if let Some(job_id) = state.jobs.local_execution(self.slot()) {
+            state.job_notice(job_id, "QM calculation stopping");
+        }
         CancelSignal::Accepted
     }
 
@@ -221,12 +251,13 @@ impl JobRuntime for RunningQmJob {
         loop {
             match self.receiver.try_recv() {
                 Ok(QmWorkerMessage::Progress { stage }) => {
-                    state.set_message(format!("QM: {stage}; press Esc to stop"));
                     self.latest_stage = Some(stage);
                 }
                 Ok(QmWorkerMessage::Finished(outcome)) => {
                     if self.cancel_requested {
-                        state.set_message("QM calculation cancelled".to_string());
+                        if let Some(job_id) = cx.job_id {
+                            state.job_notice(job_id, "QM calculation cancelled");
+                        }
                         return JobPoll::Terminal(TaskStatus::Cancelled);
                     }
                     apply_qm_outcome(state, cx, *outcome);
@@ -234,10 +265,14 @@ impl JobRuntime for RunningQmJob {
                 }
                 Ok(QmWorkerMessage::Failed(error)) => {
                     if self.cancel_requested {
-                        state.set_message("QM calculation cancelled".to_string());
+                        if let Some(job_id) = cx.job_id {
+                            state.job_notice(job_id, "QM calculation cancelled");
+                        }
                         return JobPoll::Terminal(TaskStatus::Cancelled);
                     }
-                    state.set_message(format!("QM calculation failed: {error}"));
+                    if let Some(job_id) = cx.job_id {
+                        state.job_failed(job_id, format!("QM calculation failed: {error}"));
+                    }
                     return JobPoll::Terminal(TaskStatus::Failed);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => return JobPoll::Running,
@@ -251,8 +286,10 @@ impl JobRuntime for RunningQmJob {
 /// geometry as a new entry (or record a report for an entry-less run), and record
 /// the outcome in the ledger so a re-poll never re-imports it.
 fn apply_qm_outcome(state: &mut AppState, cx: &JobContext, outcome: crate::engines::qm::QmOutcome) {
-    for line in outcome.summary.lines() {
-        state.output_log.push(line.to_string());
+    if let Some(job_id) = cx.job_id {
+        for line in outcome.summary.lines() {
+            state.append_job_log(job_id, LogLevel::Info, line);
+        }
     }
     // Persist the raw report to the task's run directory before any new entry is
     // added, so the run's source entry is the input structure, not the result.
@@ -293,7 +330,7 @@ fn apply_qm_outcome(state: &mut AppState, cx: &JobContext, outcome: crate::engin
     // new geometry, or the input structure when there is none — so the memoized
     // per-entry chart availability is stale.
     state.ui.chart_availability.clear();
-    state.set_message(format!(
+    let summary = format!(
         "QM complete: energy {:.6} Eh{}",
         outcome.energy_hartree,
         if outcome.converged {
@@ -301,5 +338,9 @@ fn apply_qm_outcome(state: &mut AppState, cx: &JobContext, outcome: crate::engin
         } else {
             " (not converged)"
         }
-    ));
+    );
+    match cx.job_id {
+        Some(job_id) => state.job_succeeded(job_id, summary),
+        None => state.status_success(summary),
+    }
 }

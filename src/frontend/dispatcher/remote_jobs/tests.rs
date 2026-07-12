@@ -101,11 +101,14 @@ fn open_project_compensation_imports_present_outcome_and_flags_missing() {
         !state.materializations.contains("job-missing"),
         "a missing outcome stays pending, not marked done"
     );
+    let query = crate::frontend::state::LogQuery::new(crate::frontend::state::LogFilter::Source(
+        crate::frontend::state::OutputSource::Remote,
+    ));
     assert!(
         state
-            .output_log
-            .iter()
-            .any(|line| line.contains("pending recovery")),
+            .session_log()
+            .query(&query)
+            .any(|entry| entry.text.contains("pending recovery")),
         "the pending recovery is surfaced, not silently dropped"
     );
 }

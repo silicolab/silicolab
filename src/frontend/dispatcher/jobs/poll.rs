@@ -1,5 +1,7 @@
 use super::super::*;
 
+use crate::frontend::state::{LogLevel, SystemSubsystem};
+
 /// Drain the background GitHub release check. A found update is surfaced in
 /// the status bar (message + persistent link); "up to date" and failures
 /// (offline, rate-limited, no releases yet) are logged quietly to the Output
@@ -10,7 +12,7 @@ pub(crate) fn poll_update_check(state: &mut AppState, ctx: &egui::Context) {
     };
     match check.receiver.try_recv() {
         Ok(Ok(Some(update))) => {
-            state.set_message(format!(
+            state.status_neutral(format!(
                 "SilicoLab {} is available (you have {})",
                 update.version,
                 env!("CARGO_PKG_VERSION")
@@ -22,14 +24,19 @@ pub(crate) fn poll_update_check(state: &mut AppState, ctx: &egui::Context) {
             maybe_auto_install_update(state);
         }
         Ok(Ok(None)) => {
-            state
-                .output_log
-                .push("Update check: SilicoLab is up to date".to_string());
+            // A routine "nothing changed" success — the quietest level, never a status.
+            state.log_system(
+                SystemSubsystem::Update,
+                LogLevel::Trace,
+                "Update check: SilicoLab is up to date".to_string(),
+            );
         }
         Ok(Err(error)) => {
-            state
-                .output_log
-                .push(format!("Update check failed: {error}"));
+            state.log_system(
+                SystemSubsystem::Update,
+                LogLevel::Warn,
+                format!("Update check failed: {error}"),
+            );
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             // Request still in flight; keep the handle and look again shortly.
@@ -37,9 +44,11 @@ pub(crate) fn poll_update_check(state: &mut AppState, ctx: &egui::Context) {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-            state
-                .output_log
-                .push("Update check failed: worker stopped".to_string());
+            state.log_system(
+                SystemSubsystem::Update,
+                LogLevel::Warn,
+                "Update check failed: worker stopped".to_string(),
+            );
         }
     }
 }
@@ -54,14 +63,11 @@ pub(crate) fn poll_self_update(state: &mut AppState, ctx: &egui::Context) {
     };
     match job.receiver.try_recv() {
         Ok(Ok(version)) => {
-            state.set_message(format!("SilicoLab {version} installed — restart to apply"));
+            state.status_success(format!("SilicoLab {version} installed — restart to apply"));
             state.ui.self_update = SelfUpdateStatus::Installed { version };
         }
         Ok(Err(error)) => {
-            state.set_message(format!("Update failed: {error}"));
-            state
-                .output_log
-                .push(format!("Self-update failed: {error}"));
+            state.report_system_error(SystemSubsystem::Update, format!("Update failed: {error}"));
             state.ui.self_update = SelfUpdateStatus::Failed {
                 error: error.to_string(),
             };
@@ -72,7 +78,10 @@ pub(crate) fn poll_self_update(state: &mut AppState, ctx: &egui::Context) {
             ctx.request_repaint_after(Duration::from_millis(500));
         }
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-            state.set_message("Update failed: worker stopped".to_string());
+            state.report_system_error(
+                SystemSubsystem::Update,
+                "Update failed: worker stopped".to_string(),
+            );
             state.ui.self_update = SelfUpdateStatus::Failed {
                 error: "worker stopped".to_string(),
             };
@@ -141,17 +150,20 @@ pub(crate) fn poll_remote_hardware(state: &mut AppState, ctx: &egui::Context) {
                 .settings
                 .remote_hardware
                 .insert(fetch.host_id, info);
-            state.set_message("Fetched remote hardware".to_string());
+            state.status_success("Fetched remote hardware".to_string());
         }
         Ok(RemoteHardwareOutcome::Failed(error)) => {
-            state.set_message(format!("Could not read remote hardware: {error}"));
+            state.report_remote_error(
+                fetch.host_id,
+                format!("Could not read remote hardware: {error}"),
+            );
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             state.jobs.remote_hardware = Some(fetch);
             ctx.request_repaint_after(std::time::Duration::from_millis(400));
         }
         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-            state.set_message("Remote hardware probe stopped unexpectedly".to_string());
+            state.report_remote_error(fetch.host_id, "Remote hardware probe stopped unexpectedly");
         }
     }
 }
@@ -277,7 +289,7 @@ pub(crate) fn poll_remote_probe(state: &mut AppState, ctx: &egui::Context) {
             {
                 state.ui.settings.remote_bootstrap = None;
             }
-            state.set_message("Connected: passwordless login works".to_string());
+            state.status_success("Connected: passwordless login works".to_string());
         }
         Ok(RemoteProbeOutcome::Passwordless(false)) => {
             state
@@ -285,7 +297,7 @@ pub(crate) fn poll_remote_probe(state: &mut AppState, ctx: &egui::Context) {
                 .settings
                 .remote_status
                 .insert(probe.host_id, RemoteHostStatus::NeedsSetup);
-            state.set_message(
+            state.status_neutral(
                 "Reachable, but passwordless login isn't set up — use 'Set up passwordless login'."
                     .to_string(),
             );
@@ -296,7 +308,7 @@ pub(crate) fn poll_remote_probe(state: &mut AppState, ctx: &egui::Context) {
             } else {
                 "sacct unavailable; using scontrol fallback"
             };
-            state.set_message(format!("Detected {} ({accounting})", detection.version));
+            state.status_neutral(format!("Detected {} ({accounting})", detection.version));
         }
         Ok(RemoteProbeOutcome::SlurmCapabilities(capabilities)) => {
             state
@@ -304,18 +316,23 @@ pub(crate) fn poll_remote_probe(state: &mut AppState, ctx: &egui::Context) {
                 .settings
                 .slurm_capabilities
                 .insert(probe.host_id.clone(), capabilities);
-            state.set_message("Slurm capabilities refreshed".to_string());
+            state.status_success("Slurm capabilities refreshed".to_string());
         }
         Ok(RemoteProbeOutcome::SlurmTested(console, deployment_id)) => {
             if let Some(host) = state.config.remote_hosts.get_mut(&probe.host_id) {
                 host.worker_deployment = Some(deployment_id);
                 let _ = save_config(&state.config);
             }
-            state.output_log.push(console);
-            state.set_message("Slurm test job completed successfully".to_string());
+            state.log_remote(Some(probe.host_id.clone()), LogLevel::Info, console);
+            state.status_success("Slurm test job completed successfully".to_string());
         }
         Ok(RemoteProbeOutcome::Failed(error)) => {
-            state.set_message(format!("Remote scheduler check failed: {error}"));
+            // Host-scoped so a later successful probe of the same host recovers it,
+            // and the detail is revisitable in Remote output.
+            state.report_remote_error(
+                probe.host_id.clone(),
+                format!("Remote scheduler check failed: {error}"),
+            );
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             state.jobs.remote_probe = Some(probe);
@@ -337,7 +354,7 @@ pub(crate) fn poll_trajectory_jobs(state: &mut AppState, ctx: &egui::Context) {
         match load.receiver.try_recv() {
             Ok(Ok(trajectory)) => {
                 if trajectory.is_empty() {
-                    state.set_message("Trajectory contains no frames");
+                    state.status_neutral("Trajectory contains no frames");
                 } else {
                     let (view_center, view_radius) =
                         view_center_and_radius(&load.base_structure, load.include_cell);
@@ -360,17 +377,17 @@ pub(crate) fn poll_trajectory_jobs(state: &mut AppState, ctx: &egui::Context) {
                     playback.sync_scratch();
                     state.ui.trajectory = Some(playback);
                     if subsampled {
-                        state.set_message(format!(
+                        state.status_success(format!(
                             "Playing trajectory: {frames} of {source_frames} frames (subsampled)"
                         ));
                     } else {
-                        state.set_message(format!("Playing trajectory: {frames} frames"));
+                        state.status_success(format!("Playing trajectory: {frames} frames"));
                     }
                     ctx.request_repaint();
                 }
             }
             Ok(Err(error)) => {
-                state.set_message(format!("Trajectory load failed: {error}"));
+                state.status_error(format!("Trajectory load failed: {error}"));
             }
             Err(std::sync::mpsc::TryRecvError::Empty) => {
                 // Still decoding; keep the handle and poll again next frame.
@@ -378,7 +395,7 @@ pub(crate) fn poll_trajectory_jobs(state: &mut AppState, ctx: &egui::Context) {
                 ctx.request_repaint_after(engine_poll_frame());
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                state.set_message("Trajectory load failed: worker stopped");
+                state.status_error("Trajectory load failed: worker stopped");
             }
         }
     }

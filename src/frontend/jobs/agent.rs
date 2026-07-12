@@ -55,6 +55,11 @@ pub struct TrackedAgentJob {
     pub label: String,
     /// The unified `TaskRun` this worker reports into, so the run shows in the Task Monitor.
     pub task_run_id: u64,
+    /// The bound execution identity — minted at launch exactly as a manually
+    /// submitted job's is, so an assistant-launched run is first-class: its logs
+    /// are Job-scoped and its lifecycle resolves through the same run graph. The
+    /// assistant is only the launcher, recorded by `conversation`/`label`.
+    pub job_id: crate::job::JobId,
     pub job: AgentHeavyJob,
 }
 

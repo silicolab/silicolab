@@ -66,7 +66,7 @@ pub fn run(structure: Structure, source_path: Option<PathBuf>) -> Result<()> {
                 } else {
                     fake
                 };
-                app.state.set_message(format!(
+                app.state.status_neutral(format!(
                     "SilicoLab {version} is available (you have {})",
                     env!("CARGO_PKG_VERSION")
                 ));
@@ -483,7 +483,7 @@ impl SilicoLabApp {
                             ));
                         }
                         if let Some(message) = startup_message.take() {
-                            state.set_message(message);
+                            state.status_neutral(message);
                         }
                         return Self {
                             state,
@@ -508,7 +508,7 @@ impl SilicoLabApp {
             AppState::scratch(config, recent_projects)
         };
         if let Some(message) = startup_message {
-            state.set_message(message);
+            state.status_neutral(message);
         }
         Self {
             state,
@@ -656,7 +656,7 @@ impl eframe::App for SilicoLabApp {
         dispatcher::flush_dirty_run_graph(&mut self.state);
         dispatcher::flush_pending_autosave(&mut self.state, &ctx);
         dispatcher::flush_pending_layout_save(&mut self.state, &ctx);
-        self.state.record_message_change();
+        self.state.tick_status(std::time::Instant::now());
     }
 
     /// Backing color behind the UI.

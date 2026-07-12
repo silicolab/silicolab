@@ -18,6 +18,8 @@ mod layout;
 mod md_prompts;
 mod ptm_prompts;
 mod qm_prompts;
+mod session_log;
+mod status;
 
 pub use app::*;
 pub use atom_style::*;
@@ -32,6 +34,8 @@ pub use layout::*;
 pub use md_prompts::*;
 pub use ptm_prompts::*;
 pub use qm_prompts::*;
+pub use session_log::*;
+pub use status::*;
 
 #[cfg(test)]
 mod tests;

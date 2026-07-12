@@ -1,5 +1,6 @@
 use super::*;
 use crate::frontend::actions::{LeaveConfirmation, LeaveIntent};
+use crate::frontend::state::{LogLevel, SystemSubsystem};
 
 /// Flush a coalesced autosave once its debounce window has elapsed. Called every
 /// frame from the app loop; a no-op when nothing is pending. While a save is
@@ -83,7 +84,10 @@ pub(crate) fn persist_project(state: &mut AppState, persist_history: bool) -> an
         Err(error) => {
             let message = error.to_string();
             state.mark_project_save_failed(message.clone());
-            state.set_message(format!("Project save failed: {message}"));
+            state.report_system_error(
+                SystemSubsystem::Project,
+                format!("Project save failed: {message}"),
+            );
             Err(error)
         }
     }
@@ -136,9 +140,11 @@ pub(crate) fn flush_dirty_task_runs(state: &mut AppState) {
     if let Err(error) = result {
         // Keep the ids dirty so the next flush or full save retries them.
         state.tasks.mark_task_runs_dirty(ids);
-        state
-            .output_log
-            .push(format!("failed to persist task status: {error}"));
+        state.log_system(
+            SystemSubsystem::Storage,
+            LogLevel::Error,
+            format!("failed to persist task status: {error}"),
+        );
     }
 }
 
@@ -170,9 +176,11 @@ pub(crate) fn flush_dirty_run_graph(state: &mut AppState) {
     })();
     match result {
         Ok(()) => state.tasks.runs.mark_saved(),
-        Err(error) => state
-            .output_log
-            .push(format!("failed to persist run graph: {error}")),
+        Err(error) => state.log_system(
+            SystemSubsystem::Storage,
+            LogLevel::Error,
+            format!("failed to persist run graph: {error}"),
+        ),
     }
 }
 
@@ -272,28 +280,34 @@ pub(crate) fn replace_workspace_from_project(
     state.load_viewport_for_active_entry();
     state.mark_project_saved();
     let set_current_dir_error = std::env::set_current_dir(&project.root).err();
-    if let Err(error) =
+    let mut message = if let Err(error) =
         remember_opened_project(&mut state.config, &mut state.recent_projects, &project)
     {
-        state.set_message(format!(
-            "Opened project, but settings update failed: {error}"
-        ));
+        let text = format!("Opened project, but settings update failed: {error}");
+        state.report_system_error(SystemSubsystem::Settings, text.clone());
+        text
     } else if let Some(error) = set_current_dir_error {
-        state.set_message(format!(
+        let text = format!(
             "Opened project {}, but working directory update failed: {error}",
             project.name
-        ));
+        );
+        state.report_system_error(SystemSubsystem::Application, text.clone());
+        text
     } else {
-        state.set_message(format!("Opened project {}", project.name));
-    }
+        let text = format!("Opened project {}", project.name);
+        state.status_success(text.clone());
+        text
+    };
     if recovered_from_crash {
-        state.set_message(format!(
+        let text = format!(
             "Opened project {} (recovered: previous session did not close cleanly)",
             project.name
-        ));
+        );
+        state.status_success(text.clone());
+        message = text;
     }
     if !warnings.is_empty() {
-        state.set_message(format!("{} — {}", state.message, warnings.join(" — ")));
+        state.status_warning(format!("{message} — {}", warnings.join(" — ")));
     }
 }
 
@@ -303,15 +317,15 @@ pub(crate) fn create_project_action(state: &mut AppState) {
         .set_file_name("New Project")
         .save_file()
     else {
-        state.set_message("Create project canceled");
+        state.status_neutral("Create project canceled");
         return;
     };
     let Some(parent) = path.parent() else {
-        state.set_message("Project path must have a parent directory");
+        state.status_neutral("Project path must have a parent directory");
         return;
     };
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        state.set_message("Project name cannot be empty");
+        state.status_neutral("Project name cannot be empty");
         return;
     };
 
@@ -339,7 +353,10 @@ pub(crate) fn create_project_action(state: &mut AppState) {
         Ok((project, snapshot))
     }) {
         Ok((project, snapshot)) => replace_workspace_from_project(state, project, snapshot),
-        Err(error) => state.set_message(format!("Create project failed: {error}")),
+        Err(error) => state.report_system_error(
+            SystemSubsystem::Project,
+            format!("Create project failed: {error}"),
+        ),
     }
 }
 
@@ -359,7 +376,7 @@ fn open_project_action_without_persist(state: &mut AppState) {
 fn open_project_path_without_persist(state: &mut AppState, path: PathBuf) {
     match open_project_dir(&path) {
         Ok((project, snapshot)) => replace_workspace_from_project(state, project, snapshot),
-        Err(error) => state.set_message(error.to_string()),
+        Err(error) => state.report_system_error(SystemSubsystem::Project, error.to_string()),
     }
 }
 
@@ -368,7 +385,10 @@ fn close_project_without_persist(state: &mut AppState, run_maintenance: bool) {
     // Compact the databases and release the lock now that we are leaving cleanly.
     if let Some(project) = state.workspace.project().cloned() {
         if run_maintenance && let Err(error) = housekeeping::run_maintenance(&project) {
-            state.set_message(format!("Project maintenance failed: {error}"));
+            state.report_system_error(
+                SystemSubsystem::Project,
+                format!("Project maintenance failed: {error}"),
+            );
         }
         housekeeping::release_lock(&project);
     }
@@ -383,11 +403,12 @@ fn close_project_without_persist(state: &mut AppState, run_maintenance: bool) {
     state.config.closed_to_scratch = true;
     state.config.last_project_path = None;
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!(
-            "Closed project, but settings update failed: {error}"
-        ));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Closed project, but settings update failed: {error}"),
+        );
     } else {
-        state.set_message("Closed project; opened Scratch");
+        state.status_neutral("Closed project; opened Scratch");
     }
     reset_transient_state(state);
     reset_chart_caches(state);
@@ -407,7 +428,7 @@ fn cancel_agent_runtime(state: &mut AppState) {
 pub(crate) fn save_project(state: &mut AppState) {
     if state.workspace.is_project() {
         if persist_project(state, true).is_ok() {
-            state.set_message(format!("Saved project {}", state.workspace.label()));
+            state.status_success(format!("Saved project {}", state.workspace.label()));
         }
         return;
     }
@@ -543,7 +564,7 @@ pub(crate) fn require_active_entry(state: &mut AppState, action_label: &str) -> 
     if state.has_active_entry() {
         true
     } else {
-        state.set_message(format!("{action_label} requires an open entry"));
+        state.status_neutral(format!("{action_label} requires an open entry"));
         false
     }
 }
@@ -552,7 +573,7 @@ pub(crate) fn new_empty_entry(state: &mut AppState) {
     let structure = Structure::empty();
     let save_path = structure_io::default_structure_save_path(&structure, None);
     let entry_id = add_and_show_entry(state, structure, None, save_path);
-    state.set_message(format!("Created empty entry #{entry_id}"));
+    state.status_success(format!("Created empty entry #{entry_id}"));
 }
 
 /// Insert a freshly produced structure as a new entry and switch to it, running
@@ -594,7 +615,7 @@ pub(crate) fn activate_entry(state: &mut AppState, entry_id: u64) {
     state.entries.activate_entry(entry_id);
     state.ui.entry_list.selected_entry_ids.insert(entry_id);
     load_active_entry(state);
-    state.set_message(format!("Loaded entry {}", state.current_entry_label()));
+    state.status_neutral(format!("Loaded entry {}", state.current_entry_label()));
 }
 
 pub(crate) fn delete_entry(state: &mut AppState, entry_id: u64) {
@@ -603,7 +624,7 @@ pub(crate) fn delete_entry(state: &mut AppState, entry_id: u64) {
         .entry(entry_id)
         .map(|entry| entry.name.clone())
     else {
-        state.set_message("Cannot delete entry".to_string());
+        state.status_error("Cannot delete entry".to_string());
         return;
     };
     let active_before = state.entries.active_entry_id();
@@ -621,9 +642,9 @@ pub(crate) fn delete_entry(state: &mut AppState, entry_id: u64) {
             reset_transient_state(state);
             load_active_entry(state);
         }
-        state.set_message(format!("Deleted entry {name}"));
+        state.status_neutral(format!("Deleted entry {name}"));
     } else {
-        state.set_message("Cannot delete entry".to_string());
+        state.status_error("Cannot delete entry".to_string());
     }
 }
 

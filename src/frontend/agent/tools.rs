@@ -15,7 +15,7 @@ use serde_json::{Value, json};
 use crate::backend::config::ApprovalMode;
 use crate::engines::registry::{EngineRegistry, EngineStatus, external_engine_specs};
 use crate::frontend::console::{RiskLevel, command_risk};
-use crate::frontend::state::AppState;
+use crate::frontend::state::{AppState, LogLevel};
 use crate::io::llm::types::{ToolCall, ToolDef};
 
 /// How much of a tool result is replayed into history. Large md/qm/inspect
@@ -326,8 +326,8 @@ fn list_jobs_tool(state: &AppState) -> String {
 fn cancel_job_tool(state: &mut AppState, id: &str) -> ToolOutcome {
     match crate::frontend::jobs::cancel_job_by_token(state, id) {
         Ok(message) => {
-            state.output_log.push(format!("agent cancel_job> {id}"));
-            state.output_log.push(message.clone());
+            state.log_agent(None, LogLevel::Info, format!("agent cancel_job> {id}"));
+            state.log_agent(None, LogLevel::Info, message.clone());
             ToolOutcome {
                 content: message,
                 is_error: false,
@@ -335,7 +335,7 @@ fn cancel_job_tool(state: &mut AppState, id: &str) -> ToolOutcome {
         }
         Err(error) => {
             let message = format!("cancel_job failed: {error}");
-            state.output_log.push(message.clone());
+            state.log_agent(None, LogLevel::Error, message.clone());
             ToolOutcome {
                 content: message,
                 is_error: true,
@@ -421,7 +421,7 @@ fn save_skill_tool(state: &mut AppState, input: &Value) -> ToolOutcome {
                 skill.name,
                 path.display()
             );
-            state.output_log.push(summary.clone());
+            state.log_agent(None, LogLevel::Info, summary.clone());
             ToolOutcome {
                 content: summary,
                 is_error: false,
@@ -542,31 +542,30 @@ fn yaml_scalar(value: &str) -> String {
     format!("\"{escaped}\"")
 }
 
-/// Run one `.sls` command, echoing it and its result into the shared
-/// `output_log` so agent-executed commands share the console's audit trail.
+/// Run one `.sls` command, recording it and its result into the Console
+/// transcript under the Agent actor so assistant-executed commands share the
+/// command audit trail without being confused for user input.
 fn run_command_tool(state: &mut AppState, command: &str) -> ToolOutcome {
-    state.output_log.push(format!("agent> {command}"));
-    match crate::frontend::console::execute_console_line(state, command) {
+    match crate::frontend::console::record_console_command(
+        state,
+        command,
+        crate::frontend::state::CommandActor::Agent,
+    ) {
         Ok(message) => {
             let summary = if message.trim().is_empty() {
                 format!("ok: {command}")
             } else {
                 message
             };
-            state.output_log.push(summary.clone());
             ToolOutcome {
                 content: clamp_result(&summary),
                 is_error: false,
             }
         }
-        Err(error) => {
-            let message = format!("command failed: {error}");
-            state.output_log.push(message.clone());
-            ToolOutcome {
-                content: clamp_result(&message),
-                is_error: true,
-            }
-        }
+        Err(error) => ToolOutcome {
+            content: clamp_result(&format!("command failed: {error}")),
+            is_error: true,
+        },
     }
 }
 
@@ -703,7 +702,11 @@ pub fn inspect(state: &AppState, _query: Option<&str>) -> String {
         let _ = writeln!(out, "running jobs: {summary}{suffix}");
     }
 
-    let _ = writeln!(out, "status: {}", state.message);
+    let status = state
+        .status_notice()
+        .map(|notice| notice.text.as_str())
+        .unwrap_or("(no active status)");
+    let _ = writeln!(out, "status: {status}");
     out
 }
 

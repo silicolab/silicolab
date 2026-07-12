@@ -165,7 +165,6 @@ fn local_job_snapshots_enumerate_live_slots() {
         cancel: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         receiver: engine_rx,
         latest_stage: Some("nvt".to_string()),
-        log_tail: Vec::new(),
     });
 
     let snapshots = jobs.list_live_snapshots(Some(42));
@@ -202,6 +201,7 @@ fn agent_job_cancel_routes_through_control_plane() {
         conversation: state.ui.agent.active_conversation,
         label: "qm energy".to_string(),
         task_run_id,
+        job_id: crate::job::JobId::new(),
         job: AgentHeavyJob::Qm(RunningQmJob {
             cancel: qm_cancel(std::sync::Arc::clone(&cancel)),
             receiver: rx,
@@ -267,6 +267,7 @@ fn agent_job_snapshots_include_latest_stage() {
         conversation: crate::frontend::agent::AssistantConversationId::new(1),
         label: "qm energy".to_string(),
         task_run_id: 44,
+        job_id: crate::job::JobId::new(),
         job: AgentHeavyJob::Qm(RunningQmJob {
             cancel: qm_cancel(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
                 false,
@@ -332,6 +333,7 @@ fn qm_cancel_alias_refuses_multiple_qm_jobs_without_cancelling_any() {
         conversation: state.ui.agent.active_conversation,
         label: "qm optimize".to_string(),
         task_run_id,
+        job_id: crate::job::JobId::new(),
         job: AgentHeavyJob::Qm(RunningQmJob {
             cancel: qm_cancel(std::sync::Arc::clone(&agent_cancel)),
             receiver: agent_rx,
@@ -367,6 +369,7 @@ fn jobs_status_shows_agent_job_and_remote_status_as_last_known() {
         conversation: state.ui.agent.active_conversation,
         label: "qm optimize".to_string(),
         task_run_id,
+        job_id: crate::job::JobId::new(),
         job: AgentHeavyJob::Qm(RunningQmJob {
             cancel: qm_cancel(std::sync::Arc::new(std::sync::atomic::AtomicBool::new(
                 false,
@@ -410,6 +413,7 @@ fn jobs_cancel_and_control_plane_cancel_have_matching_qm_message_and_effect() {
             conversation: state.ui.agent.active_conversation,
             label: "qm optimize".to_string(),
             task_run_id,
+            job_id: crate::job::JobId::new(),
             job: AgentHeavyJob::Qm(RunningQmJob {
                 cancel: qm_cancel(std::sync::Arc::clone(&cancel)),
                 receiver: rx,
@@ -461,6 +465,7 @@ fn task_monitor_action_and_assistant_cancel_have_same_agent_job_effect() {
             conversation: state.ui.agent.active_conversation,
             label: "qm optimize".to_string(),
             task_run_id,
+            job_id: crate::job::JobId::new(),
             job: AgentHeavyJob::Qm(RunningQmJob {
                 cancel: qm_cancel(std::sync::Arc::clone(&cancel)),
                 receiver: rx,
@@ -505,7 +510,12 @@ fn task_monitor_action_and_assistant_cancel_have_same_agent_job_effect() {
             .status,
         crate::backend::tasks::TaskStatus::Cancelling
     );
-    assert_eq!(monitor_state.message, outcome.content);
+    assert_eq!(
+        monitor_state
+            .status_notice()
+            .map(|notice| notice.text.as_str()),
+        Some(outcome.content.as_str())
+    );
 }
 
 fn remote_row(

@@ -1,5 +1,7 @@
 use super::super::*;
 
+use crate::frontend::state::SystemSubsystem;
+
 /// Build a validated [`RemoteHost`] from a settings draft. `prior` is the host as
 /// stored, carrying the state the draft does not expose: the worker deployment
 /// identity, and each engine's verification.
@@ -177,7 +179,7 @@ pub(crate) fn add_remote_host(state: &mut AppState) {
             persist_engine_config(state, &format!("Added remote host {label}"));
         }
         // The form stays open with the draft intact, beside the field to fix.
-        Err(error) => state.set_message(error.to_string()),
+        Err(error) => state.status_neutral(error.to_string()),
     }
 }
 
@@ -212,15 +214,18 @@ pub(crate) fn commit_remote_host_draft(
         .remote_hosts
         .insert(id.to_string(), host.clone());
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("failed to save engine settings: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("failed to save engine settings: {error}"),
+        );
     }
     Ok(host)
 }
 
 pub(crate) fn save_remote_host(state: &mut AppState, id: String) {
     match commit_remote_host_draft(state, &id) {
-        Ok(host) => state.set_message(format!("Saved remote host {}", host.label)),
-        Err(error) => state.set_message(error.to_string()),
+        Ok(host) => state.status_success(format!("Saved remote host {}", host.label)),
+        Err(error) => state.status_neutral(error.to_string()),
     }
 }
 
@@ -233,7 +238,7 @@ pub(crate) fn remove_remote_host(state: &mut AppState, id: String) {
     })()
     .unwrap_or(true);
     if has_active_jobs {
-        state.set_message("This host has active remote jobs and cannot be removed".to_string());
+        state.status_neutral("This host has active remote jobs and cannot be removed");
         return;
     }
     state.config.remote_hosts.remove(&id);
@@ -263,17 +268,17 @@ fn begin_remote_probe(
     id: &str,
 ) -> Option<crate::backend::config::RemoteHost> {
     if state.jobs.remote_probe.is_some() {
-        state.set_message("A remote-host check is already running".to_string());
+        state.status_neutral("A remote-host check is already running");
         return None;
     }
     if let Err(error) = crate::engines::remote::ensure_ssh_available() {
-        state.set_message(error.to_string());
+        state.status_neutral(error.to_string());
         return None;
     }
     match commit_remote_host_draft(state, id) {
         Ok(host) => Some(host),
         Err(error) => {
-            state.set_message(error.to_string());
+            state.status_neutral(error.to_string());
             None
         }
     }
@@ -287,7 +292,7 @@ pub(crate) fn detect_remote_slurm(state: &mut AppState, id: String) {
         host,
         crate::frontend::jobs::RemoteProbeKind::DetectSlurm,
     ));
-    state.set_message("Detecting Slurm…".to_string());
+    state.status_neutral("Detecting Slurm…");
 }
 
 pub(crate) fn refresh_slurm_capabilities(state: &mut AppState, id: String) {
@@ -298,7 +303,7 @@ pub(crate) fn refresh_slurm_capabilities(state: &mut AppState, id: String) {
         host,
         crate::frontend::jobs::RemoteProbeKind::SlurmCapabilities,
     ));
-    state.set_message("Refreshing Slurm capabilities…".to_string());
+    state.status_neutral("Refreshing Slurm capabilities…");
 }
 
 pub(crate) fn test_remote_slurm(state: &mut AppState, id: String) {
@@ -309,29 +314,29 @@ pub(crate) fn test_remote_slurm(state: &mut AppState, id: String) {
         host,
         crate::frontend::jobs::RemoteProbeKind::TestSlurm,
     ));
-    state.set_message("Submitting a Slurm test job…".to_string());
+    state.status_neutral("Submitting a Slurm test job…");
 }
 
 /// Fetch the static hardware inventory of a remote host over SSH (CPU/memory/GPU)
 /// on a worker thread, for the Hardware ▸ Remote settings panel.
 pub(crate) fn fetch_remote_hardware(state: &mut AppState, id: String) {
     if state.jobs.remote_hardware.is_some() {
-        state.set_message("Already fetching remote hardware…".to_string());
+        state.status_neutral("Already fetching remote hardware…");
         return;
     }
     if let Err(error) = crate::engines::remote::ensure_ssh_available() {
-        state.set_message(error.to_string());
+        state.status_neutral(error.to_string());
         return;
     }
     let host = match commit_remote_host_draft(state, &id) {
         Ok(host) => host,
         Err(error) => {
-            state.set_message(error.to_string());
+            state.status_neutral(error.to_string());
             return;
         }
     };
     state.jobs.remote_hardware = Some(crate::frontend::jobs::spawn_remote_hardware_fetch(host));
-    state.set_message("Fetching remote hardware…".to_string());
+    state.status_neutral("Fetching remote hardware…");
 }
 
 /// Point the sidebar system monitor at `src` (Local or a remote host), reconciling
@@ -406,7 +411,7 @@ pub(crate) fn set_monitor_source(state: &mut AppState, src: crate::frontend::sta
 pub(crate) fn check_remote_host(state: &mut AppState, id: String) {
     // The BatchMode test uses the dedicated key, so make sure it exists first.
     if let Err(error) = crate::engines::remote::bootstrap::ensure_key() {
-        state.set_message(format!("Could not prepare the SSH key: {error}"));
+        state.status_error(format!("Could not prepare the SSH key: {error}"));
         return;
     }
     let Some(host) = begin_remote_probe(state, &id) else {
@@ -421,30 +426,28 @@ pub(crate) fn check_remote_host(state: &mut AppState, id: String) {
         host,
         crate::frontend::jobs::RemoteProbeKind::Passwordless,
     ));
-    state.set_message("Testing connection to the remote host…".to_string());
+    state.status_neutral("Testing connection to the remote host…");
 }
 
 pub(crate) fn setup_remote_host_key(state: &mut AppState, id: String) {
     if let Err(error) = crate::engines::remote::ensure_ssh_available() {
-        state.set_message(error.to_string());
+        state.status_neutral(error.to_string());
         return;
     }
     if let Err(error) = crate::engines::remote::bootstrap::ensure_key() {
-        state.set_message(format!("Could not prepare the SSH key: {error}"));
+        state.status_error(format!("Could not prepare the SSH key: {error}"));
         return;
     }
     let pubkey = match crate::engines::remote::bootstrap::public_key() {
         Ok(key) => key,
         Err(error) => {
-            state.set_message(format!("Could not read the public key: {error}"));
+            state.status_error(format!("Could not read the public key: {error}"));
             return;
         }
     };
     let command = crate::engines::remote::bootstrap::install_command(&pubkey);
     state.ui.settings.remote_bootstrap = Some((id, command));
-    state.set_message(
-        "Run the shown command once on the remote host, then click Verify.".to_string(),
-    );
+    state.status_neutral("Run the shown command once on the remote host, then click Verify.");
 }
 
 #[cfg(test)]

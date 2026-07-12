@@ -58,6 +58,8 @@ mod disorder;
 mod dock;
 mod docking;
 mod export;
+#[cfg(test)]
+mod feedback_tests;
 mod files;
 mod gromacs;
 mod heavy_render;
@@ -444,6 +446,13 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::ToggleDockArea(area) => toggle_dock_area(state, area, ctx),
         AppAction::ResetWorkbenchLayout => reset_workbench_layout(state),
         AppAction::DismissNotification => state.ui.notification = None,
+        AppAction::RevealOutput(target) => reveal_output(state, target),
+        AppAction::OpenDetailTarget(target) => open_detail_target(state, target),
+        AppAction::AcknowledgeStatus => state.acknowledge_status(),
+        AppAction::PostStatusNeutral(text) => state.status_neutral(text),
+        AppAction::ReportSystemError { subsystem, text } => {
+            state.report_system_error(subsystem, text)
+        }
         AppAction::UseWireframeForHeavyEntry(entry_id) => {
             use_wireframe_for_heavy_entry(state, entry_id)
         }
@@ -482,24 +491,21 @@ fn cancel_controlled_job_action(state: &mut AppState, id: &crate::frontend::jobs
         .into_iter()
         .find(|job| job.id == *id);
     match crate::frontend::jobs::cancel_controlled_job(state, id) {
-        Ok(outcome) => state.set_message(crate::frontend::jobs::format_cancel_outcome_for_job(
+        Ok(outcome) => state.status_neutral(crate::frontend::jobs::format_cancel_outcome_for_job(
             &outcome,
             job.as_ref(),
         )),
-        Err(error) => state.set_message(format!("Could not cancel job: {error}")),
+        Err(error) => state.status_error(format!("Could not cancel job: {error}")),
     }
 }
 
 pub(crate) fn run_console_command(state: &mut AppState, command: &str) {
-    let prompt = format!("sls> {command}");
-    state.output_log.push(prompt);
     state.ui.console.history.push(command.to_string());
-    match crate::frontend::console::execute_console_line(state, command) {
-        Ok(message) => {
-            if !message.is_empty() {
-                state.set_message(message);
-            }
-        }
-        Err(error) => state.set_message(format!("command failed: {error}")),
-    }
+    // The prompt and its result/error are recorded to the Console transcript; the
+    // transcript the user is looking at is the feedback, so no status is posted.
+    let _ = crate::frontend::console::record_console_command(
+        state,
+        command,
+        crate::frontend::state::CommandActor::User,
+    );
 }

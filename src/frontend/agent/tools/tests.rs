@@ -477,6 +477,7 @@ fn list_jobs_and_cancel_job_control_assistant_qm_job() {
             conversation: state.ui.agent.active_conversation,
             label: "qm optimize".to_string(),
             task_run_id,
+            job_id: crate::job::JobId::new(),
             job: crate::frontend::jobs::AgentHeavyJob::Qm(crate::frontend::jobs::RunningQmJob {
                 cancel: crate::wire::JobCancelHandle::from_flag(std::sync::Arc::clone(&cancel)),
                 receiver: rx,

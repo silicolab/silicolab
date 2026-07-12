@@ -6,7 +6,7 @@ pub(crate) fn select_residue(state: &mut AppState, residue_index: usize, toggle:
     let atom_count = state.structure().atoms.len();
     let Some(atom_indices) = residue_atom_indices(state, residue_index, atom_count) else {
         state.ui.selection.retain_valid(atom_count);
-        state.set_message("Residue selection is unavailable for the active entry".to_string());
+        state.status_neutral("Residue selection is unavailable for the active entry".to_string());
         return;
     };
 
@@ -33,8 +33,9 @@ pub(crate) fn select_residue_range(
     let Some(atom_indices) = residue_range_atom_indices(state, chain_id, start, end, atom_count)
     else {
         state.ui.selection.retain_valid(atom_count);
-        state
-            .set_message("Residue range selection is unavailable for the active entry".to_string());
+        state.status_neutral(
+            "Residue range selection is unavailable for the active entry".to_string(),
+        );
         return;
     };
 
@@ -58,7 +59,7 @@ pub(crate) fn select_residues(
     let atom_count = state.structure().atoms.len();
     let Some(atom_indices) = residue_set_atom_indices(state, residue_indices, atom_count) else {
         state.ui.selection.retain_valid(atom_count);
-        state.set_message("Residue selection is unavailable for the active entry".to_string());
+        state.status_neutral("Residue selection is unavailable for the active entry".to_string());
         return;
     };
 
@@ -79,7 +80,7 @@ fn select_residue_atoms(
     let atom_count = state.structure().atoms.len();
     if atom_indices.is_empty() {
         state.ui.selection.retain_valid(atom_count);
-        state.set_message(empty_message.to_string());
+        state.status_neutral(empty_message.to_string());
         return;
     }
 
@@ -104,9 +105,9 @@ fn select_residue_atoms(
     state.ui.selection.retain_valid(atom_count);
 
     if state.ui.selection.is_empty() {
-        state.set_message("Cleared atom selection".to_string());
+        state.status_neutral("Cleared atom selection".to_string());
     } else {
-        state.set_message(format!("Selected {} atom(s)", state.ui.selection.len()));
+        state.status_neutral(format!("Selected {} atom(s)", state.ui.selection.len()));
     }
 }
 

@@ -6,7 +6,7 @@ use crate::backend::config::ApprovalMode;
 use crate::frontend::agent::registry;
 use crate::frontend::agent::session::{AssistantConversationId, ModelFetchStatus};
 use crate::frontend::jobs::spawn_model_fetch;
-use crate::frontend::state::AppState;
+use crate::frontend::state::{AppState, SystemSubsystem};
 use crate::io::llm::types::Effort;
 
 pub fn new_assistant_conversation(state: &mut AppState) {
@@ -110,8 +110,11 @@ pub fn set_assistant_base_url(state: &mut AppState, base_url: &str) {
 pub fn set_assistant_api_key(state: &mut AppState, key: &str) {
     let provider = registry::active_provider(&state.config.assistant);
     match crate::backend::secrets::set_stored_key(provider.id, key.trim()) {
-        Ok(()) => state.set_message(format!("Saved the API key for {}.", provider.label)),
-        Err(error) => state.set_message(format!("Could not save the API key: {error}")),
+        Ok(()) => state.status_success(format!("Saved the API key for {}.", provider.label)),
+        Err(error) => state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save the API key: {error}"),
+        ),
     }
     refresh_key_status(state);
 }
@@ -124,8 +127,11 @@ pub fn clear_stored_key(state: &mut AppState, provider_id: &str) {
         .map(|spec| spec.label)
         .unwrap_or(provider_id);
     match crate::backend::secrets::clear_stored_key(provider_id) {
-        Ok(()) => state.set_message(format!("Removed the stored API key for {label}.")),
-        Err(error) => state.set_message(format!("Could not remove the API key: {error}")),
+        Ok(()) => state.status_success(format!("Removed the stored API key for {label}.")),
+        Err(error) => state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not remove the API key: {error}"),
+        ),
     }
     refresh_key_status(state);
 }
@@ -180,7 +186,7 @@ pub fn poll_model_fetch(state: &mut AppState, ctx: &egui::Context) {
             let count = ids.len();
             state.ui.agent.fetched_models.insert(job.provider_id, ids);
             state.ui.agent.model_fetch = ModelFetchStatus::Idle;
-            state.set_message(format!("Listed {count} models from the provider."));
+            state.status_success(format!("Listed {count} models from the provider."));
             ctx.request_repaint();
         }
         Ok(Err(error)) => {

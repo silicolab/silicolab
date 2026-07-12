@@ -5,6 +5,7 @@
 
 use super::*;
 
+use crate::frontend::state::LogLevel;
 use crate::workflows::gromacs::{GromacsJob, GromacsOutcome, WireTopology};
 
 /// Submit a prepared GROMACS job to a remote host as a detached relay: tag the
@@ -46,8 +47,17 @@ pub(crate) fn apply_remote_gromacs_outcome(
     row: &crate::backend::storage::jobs::RemoteJob,
     outcome: GromacsOutcome,
 ) {
-    for line in outcome.summary.lines() {
-        state.output_log.push(line.to_string());
+    let job_id: Option<crate::job::JobId> = row.job_id.parse().ok();
+    if job_id.is_none() {
+        state.report_unscoped_remote_error(format!(
+            "Remote GROMACS result has invalid job id `{}`",
+            row.job_id
+        ));
+    }
+    if let Some(job_id) = job_id {
+        for line in outcome.summary.lines() {
+            state.append_job_log(job_id, LogLevel::Info, line);
+        }
     }
 
     let belongs_here = outcome_belongs_to_current_workspace(state, row);
@@ -101,7 +111,10 @@ pub(crate) fn apply_remote_gromacs_outcome(
         .lines()
         .next()
         .unwrap_or("GROMACS run complete");
-    state.set_message(format!("Remote {headline}"));
+    let summary = format!("Remote {headline}");
+    if let Some(job_id) = job_id {
+        state.job_succeeded(job_id, summary);
+    }
 }
 
 /// Write a relayed topology (`topol.top` plus its `.itp` includes) into the run

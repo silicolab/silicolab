@@ -49,24 +49,15 @@ pub struct GromacsPipelineRequest {
     pub freeze: Option<crate::engines::gromacs::FreezeSelection>,
 }
 
-/// A background engine job that the UI is currently polling.
+/// A background engine job that the UI is currently polling. Its streamed log
+/// lines are applied to the canonical session log by the dispatcher, scoped to
+/// this job's `JobId`; the handle keeps no second buffer.
 pub struct RunningEngineJob {
     pub engine: &'static str,
     pub job_kind: &'static str,
     pub cancel: Arc<AtomicBool>,
     pub receiver: Receiver<EngineWorkerMessage>,
     pub latest_stage: Option<String>,
-    pub log_tail: Vec<String>,
-}
-
-impl RunningEngineJob {
-    pub fn append_log(&mut self, line: String) {
-        self.log_tail.push(line);
-        if self.log_tail.len() > 200 {
-            let drop = self.log_tail.len() - 200;
-            self.log_tail.drain(0..drop);
-        }
-    }
 }
 
 /// Spawn a multi-step GROMACS pipeline as a background engine job and return
@@ -120,7 +111,6 @@ pub fn spawn_gromacs_pipeline_job(request: GromacsPipelineRequest) -> RunningEng
         cancel,
         receiver,
         latest_stage: None,
-        log_tail: Vec::new(),
     }
 }
 
@@ -197,7 +187,6 @@ pub fn spawn_gromacs_build_job(request: BuildRequest) -> RunningEngineJob {
         cancel,
         receiver,
         latest_stage: None,
-        log_tail: Vec::new(),
     }
 }
 
@@ -276,7 +265,6 @@ pub fn spawn_material_build_job(request: MaterialBuildRequest) -> RunningEngineJ
         cancel,
         receiver,
         latest_stage: None,
-        log_tail: Vec::new(),
     }
 }
 

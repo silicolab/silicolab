@@ -1,5 +1,7 @@
 use super::super::*;
 
+use crate::frontend::state::SystemSubsystem;
+
 /// Build the MD system with the engine the panel selected. Returns `true` once
 /// the work is launched/finished and the panel may close; `false` leaves the
 /// panel open with a reported reason so the user can adjust inputs and retry.
@@ -50,7 +52,7 @@ pub(crate) fn start_material_md_build(
     use crate::engines::gromacs::MaterialBuildRequest;
 
     if state.jobs.engine_running() {
-        state.set_message("another external engine job is already running".to_string());
+        state.status_neutral("another external engine job is already running");
         return false;
     }
     let run_dir = match ensure_active_task_run_dir(
@@ -60,7 +62,10 @@ pub(crate) fn start_material_md_build(
     ) {
         Ok(path) => path,
         Err(error) => {
-            state.set_message(format!("failed to create run directory: {error}"));
+            state.report_system_error(
+                SystemSubsystem::Storage,
+                format!("failed to create run directory: {error}"),
+            );
             complete_active_task(state, TaskKind::BuildMdSystem, TaskStatus::Failed);
             return false;
         }
@@ -97,7 +102,7 @@ pub(crate) fn start_material_md_build(
     let compute = match resolve_md_compute(state, crate::frontend::state::MdEngineChoice::Gromacs) {
         Ok(compute) => compute,
         Err(error) => {
-            state.set_message(error.to_string());
+            state.status_neutral(error.to_string());
             return false;
         }
     };
@@ -130,7 +135,7 @@ pub(crate) fn start_material_md_build(
             task_run_id,
         );
     }
-    state.set_message("Building framework MD system; press Esc to stop".to_string());
+    state.status_neutral("Building framework MD system; press Esc to stop");
     true
 }
 
@@ -143,7 +148,7 @@ pub(crate) fn start_gromacs_md_build(
     prompt: &crate::frontend::state::MdSystemPrompt,
 ) -> bool {
     if state.jobs.engine_running() {
-        state.set_message("another external engine job is already running".to_string());
+        state.status_neutral("another external engine job is already running");
         return false;
     }
     let run_dir = match ensure_active_task_run_dir(
@@ -153,7 +158,10 @@ pub(crate) fn start_gromacs_md_build(
     ) {
         Ok(path) => path,
         Err(error) => {
-            state.set_message(format!("failed to create run directory: {error}"));
+            state.report_system_error(
+                SystemSubsystem::Storage,
+                format!("failed to create run directory: {error}"),
+            );
             complete_active_task(state, TaskKind::BuildMdSystem, TaskStatus::Failed);
             return false;
         }
@@ -196,7 +204,7 @@ pub(crate) fn start_gromacs_md_build(
     let compute = match resolve_md_compute(state, crate::frontend::state::MdEngineChoice::Gromacs) {
         Ok(compute) => compute,
         Err(error) => {
-            state.set_message(error.to_string());
+            state.status_neutral(error.to_string());
             return false;
         }
     };
@@ -228,7 +236,7 @@ pub(crate) fn start_gromacs_md_build(
             task_run_id,
         );
     }
-    state.set_message("GROMACS building MD system; press Esc to stop".to_string());
+    state.status_neutral("GROMACS building MD system; press Esc to stop");
     true
 }
 
@@ -245,7 +253,7 @@ pub(crate) fn build_md_system_builtin(
     let (boxed, report) = match result {
         Ok(value) => value,
         Err(error) => {
-            state.set_message(format!("MD system build failed: {error}"));
+            state.status_error(format!("MD system build failed: {error}"));
             return false;
         }
     };
@@ -257,7 +265,7 @@ pub(crate) fn build_md_system_builtin(
         Some(options) => match crate::workflows::molecular_dynamics::solvate(&boxed, &options) {
             Ok(out) => Some(out),
             Err(error) => {
-                state.set_message(format!("MD system solvation failed: {error}"));
+                state.status_error(format!("MD system solvation failed: {error}"));
                 return false;
             }
         },
@@ -271,7 +279,10 @@ pub(crate) fn build_md_system_builtin(
     ) {
         Ok(path) => path,
         Err(error) => {
-            state.set_message(format!("failed to create run directory: {error}"));
+            state.report_system_error(
+                SystemSubsystem::Storage,
+                format!("failed to create run directory: {error}"),
+            );
             complete_active_task(state, TaskKind::BuildMdSystem, TaskStatus::Failed);
             return false;
         }
@@ -328,7 +339,7 @@ pub(crate) fn build_md_system_builtin(
     } else {
         ""
     };
-    state.set_message(format!(
+    state.status_success(format!(
         "Built MD system: {a:.1} x {b:.1} x {c:.1} A box, {} atoms{replaced}{solvation_note}",
         state.structure().atoms.len()
     ));

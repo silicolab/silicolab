@@ -31,7 +31,7 @@ pub(crate) fn start_pending_ptm(state: &mut AppState) {
     let request = match build_ptm_request(&prompt) {
         Ok(request) => request,
         Err(error) => {
-            state.set_message(error.to_string());
+            state.status_neutral(error.to_string());
             return;
         }
     };
@@ -43,21 +43,21 @@ pub(crate) fn start_pending_ptm(state: &mut AppState) {
                 .detail
                 .map(|detail| format!(" ({detail})"))
                 .unwrap_or_default();
-            state.set_message(format!(
+            state.status_success(format!(
                 "{} applied as entry #{entry_id}{detail}",
                 prompt.family.label()
             ));
             complete_active_task(state, TaskKind::ModifyProteinPtm, TaskStatus::Completed);
             close_active_task_panel(state);
         }
-        Err(error) => state.set_message(format!("modification failed: {error}")),
+        Err(error) => state.status_error(format!("modification failed: {error}")),
     }
 }
 
 pub(crate) fn cancel_pending_ptm_request(state: &mut AppState) {
     bind_active_panel_task(state, TaskPanelKind::PtmPrompt);
     state.ui.pending_ptm = None;
-    state.set_message("Protein modification canceled".to_string());
+    state.status_neutral("Protein modification canceled".to_string());
     complete_active_task(state, TaskKind::ModifyProteinPtm, TaskStatus::Failed);
     close_active_task_panel(state);
 }

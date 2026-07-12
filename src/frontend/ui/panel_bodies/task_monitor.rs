@@ -4,7 +4,7 @@ use crate::{
     backend::tasks::{TaskPanelKind, TaskStatus},
     frontend::{
         actions::AppAction,
-        state::{AppState, PrimaryView},
+        state::{AppState, OutputTarget, PrimaryView, StatusSeverity},
         status_text,
     },
 };
@@ -21,7 +21,6 @@ pub(crate) fn render_status_bar(
                 .color(pal.text_primary),
         );
         ui.separator();
-        ui.label(RichText::new(&state.message).color(pal.text_primary));
 
         // The system monitor normally lives in the primary-sidebar footer; only
         // fall back to the status bar when that sidebar is hidden, so the gauges
@@ -29,9 +28,72 @@ pub(crate) fn render_status_bar(
         if state.config.show_utilization_bars && !state.ui.layout.show_primary_sidebar {
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 super::render_status_monitor(state, ui, actions);
+                ui.separator();
+                ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
+                    render_status_notice(state, ui, actions, &pal);
+                });
             });
+        } else {
+            render_status_notice(state, ui, actions, &pal);
         }
     });
+}
+
+/// Render the single status notice: a severity icon and color, the (visually
+/// truncated) text as a link when it carries a detail target, a dismiss control
+/// for sticky notices, and expiry paused while it is hovered or focused.
+fn render_status_notice(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+    pal: &crate::frontend::theme::Palette,
+) {
+    let Some(notice) = state.status_notice() else {
+        state.set_status_paused(false, std::time::Instant::now());
+        return;
+    };
+    let severity = notice.severity;
+    let text = notice.text.clone();
+    let target = notice.target.clone();
+    let (icon, color) = severity_style(severity, pal);
+
+    ui.label(RichText::new(icon).color(color));
+    let label = RichText::new(&text).color(color);
+    let response = match &target {
+        Some(_) => ui.link(label).on_hover_text(&text),
+        None => ui.label(label).on_hover_text(&text),
+    };
+    // Hovering or focusing a notice (linked ones are focusable) freezes its expiry
+    // so it cannot vanish while the user reads or reaches for it.
+    let paused = response.hovered() || response.has_focus();
+    state.set_status_paused(paused, std::time::Instant::now());
+    if response.clicked()
+        && let Some(target) = target
+    {
+        actions.push(AppAction::OpenDetailTarget(target));
+    }
+    if severity.is_sticky()
+        && ui
+            .add(egui::Button::new(RichText::new(egui_phosphor::regular::X).small()).frame(false))
+            .on_hover_text("Dismiss")
+            .clicked()
+    {
+        actions.push(AppAction::AcknowledgeStatus);
+    }
+}
+
+/// Map severity to a text/icon and color pair, so severity is never signalled by
+/// color alone.
+fn severity_style(
+    severity: StatusSeverity,
+    pal: &crate::frontend::theme::Palette,
+) -> (&'static str, egui::Color32) {
+    match severity {
+        StatusSeverity::Neutral => (egui_phosphor::regular::INFO, pal.text_primary),
+        StatusSeverity::Success => (egui_phosphor::regular::CHECK_CIRCLE, pal.status_green),
+        StatusSeverity::Warning => (egui_phosphor::regular::WARNING, pal.status_amber),
+        StatusSeverity::Error => (egui_phosphor::regular::WARNING_OCTAGON, pal.status_red),
+    }
 }
 
 /// One shared visual tone for a run's status, so a Task row and a live Job card
@@ -336,7 +398,14 @@ fn render_controlled_jobs(state: &AppState, ui: &mut egui::Ui, actions: &mut Vec
     }
     ui.add_space(4.0);
     for job in &jobs {
-        Frame::group(ui.style())
+        let targeted = job.job_id == state.ui.activity_job_target;
+        let stroke = if targeted {
+            egui::Stroke::new(2.0_f32, pal.accent)
+        } else {
+            egui::Stroke::default()
+        };
+        let response = Frame::group(ui.style())
+            .stroke(stroke)
             .inner_margin(Margin::same(8))
             .show(ui, |ui| {
                 ui.set_width(ui.available_width());
@@ -376,7 +445,26 @@ fn render_controlled_jobs(state: &AppState, ui: &mut egui::Ui, actions: &mut Vec
                         ));
                     });
                 });
+                // The card projects the canonical exact-`JobId` log tail (it owns no
+                // second buffer) and deep-links Output to that same execution.
+                if let Some(job_id) = job.job_id {
+                    if ui
+                        .small_button(format!(
+                            "{}  Open in Output",
+                            egui_phosphor::regular::ARROW_SQUARE_OUT
+                        ))
+                        .clicked()
+                    {
+                        actions.push(AppAction::RevealOutput(OutputTarget::Job(job_id)));
+                    }
+                    for entry in state.session_log().tail_for_job(job_id, 6) {
+                        ui.monospace(&entry.text);
+                    }
+                }
             });
+        if targeted {
+            response.response.scroll_to_me(Some(Align::Center));
+        }
         ui.add_space(4.0);
     }
     ui.add_space(8.0);
@@ -451,8 +539,13 @@ fn render_active_task_summary(state: &AppState, ui: &mut egui::Ui) {
                         .color(pal.text_tertiary),
                 );
             }
-            for line in engine_job.log_tail.iter().rev().take(6).rev() {
-                ui.monospace(line);
+            if let Some(job_id) = state
+                .jobs
+                .local_execution(crate::frontend::jobs::LocalJobSlot::Engine)
+            {
+                for entry in state.session_log().tail_for_job(job_id, 6) {
+                    ui.monospace(&entry.text);
+                }
             }
         } else if let Some(optimizer) = state.jobs.optimizer.as_ref() {
             ui.add_space(6.0);

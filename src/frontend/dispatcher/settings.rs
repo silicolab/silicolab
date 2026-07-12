@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::frontend::state::SystemSubsystem;
+
 /// Apply and persist the light/dark appearance preference. egui switches the
 /// active theme immediately; the choice is written to the global settings file.
 pub(crate) fn set_theme_mode(
@@ -10,7 +12,10 @@ pub(crate) fn set_theme_mode(
     state.config.theme = mode;
     crate::frontend::theme::set_preference(ctx, mode);
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save theme preference: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save theme preference: {error}"),
+        );
     }
 }
 
@@ -23,7 +28,10 @@ pub(crate) fn set_color_scheme(
     // Rebuild the visuals live; the scheme is read back by `theme::palette`.
     crate::frontend::theme::set_scheme(ctx, scheme);
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save color scheme: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save color scheme: {error}"),
+        );
     }
 }
 
@@ -36,7 +44,10 @@ pub(crate) fn set_default_compute_target(
 ) {
     state.config.default_compute_target = target;
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save default compute target: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save default compute target: {error}"),
+        );
     }
 }
 
@@ -46,9 +57,10 @@ pub(crate) fn set_default_task_panel_placement(
 ) {
     state.config.default_task_panel_placement = placement;
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!(
-            "Could not save default task panel location: {error}"
-        ));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save default task panel location: {error}"),
+        );
     }
 }
 
@@ -62,7 +74,10 @@ pub(crate) fn set_representation(
 ) {
     state.config.representation.apply(edit);
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save representation defaults: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save representation defaults: {error}"),
+        );
     }
 }
 
@@ -73,7 +88,10 @@ pub(crate) fn reset_representation_group(
 ) {
     state.config.representation.reset_group(group);
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save representation defaults: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save representation defaults: {error}"),
+        );
     }
 }
 
@@ -81,7 +99,10 @@ pub(crate) fn reset_representation_group(
 pub(crate) fn reset_representation_defaults(state: &mut AppState) {
     state.config.representation = crate::backend::representation::RepresentationPrefs::default();
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save representation defaults: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save representation defaults: {error}"),
+        );
     }
 }
 
@@ -91,7 +112,10 @@ pub(crate) fn reset_representation_defaults(state: &mut AppState) {
 pub(crate) fn set_check_updates(state: &mut AppState, on: bool) {
     state.config.check_updates = on;
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save update preference: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save update preference: {error}"),
+        );
     }
     if on && state.jobs.update_check.is_none() && state.ui.available_update.is_none() {
         state.jobs.update_check = Some(spawn_update_check());
@@ -105,7 +129,10 @@ pub(crate) fn set_check_updates(state: &mut AppState, on: bool) {
 pub(crate) fn set_show_utilization_bars(state: &mut AppState, on: bool) {
     state.config.show_utilization_bars = on;
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save utilization preference: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save utilization preference: {error}"),
+        );
     }
     let initial = crate::frontend::jobs::refresh_interval(state.config.monitor_refresh);
     crate::frontend::jobs::apply_metrics_sampler(&mut state.jobs, on, initial);
@@ -129,7 +156,10 @@ pub(crate) fn set_monitor_refresh(
 ) {
     state.config.monitor_refresh = rate;
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save monitor refresh rate: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save monitor refresh rate: {error}"),
+        );
     }
     ctx.request_repaint();
 }
@@ -141,7 +171,10 @@ pub(crate) fn set_monitor_refresh(
 pub(crate) fn set_auto_install_updates(state: &mut AppState, on: bool) {
     state.config.auto_install_updates = on;
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save update preference: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save update preference: {error}"),
+        );
     }
     if on {
         maybe_auto_install_update(state);
@@ -165,11 +198,10 @@ pub(crate) fn maybe_auto_install_update(state: &mut AppState) {
     // once per discovered update) and point at the manual fallback, rather than
     // returning silently as if nothing were pending.
     if !crate::io::self_update::is_self_update_supported() {
-        state.set_message(
+        state.status_neutral(
             "Auto-install is unavailable here because SilicoLab's install location \
              is read-only. Use the update link in the title bar to download the new \
-             version manually."
-                .to_string(),
+             version manually.",
         );
         return;
     }
@@ -181,7 +213,7 @@ pub(crate) fn maybe_auto_install_update(state: &mut AppState) {
         .unwrap_or_default();
     state.ui.self_update = SelfUpdateStatus::Downloading;
     state.jobs.self_update = Some(spawn_self_update());
-    state.set_message(format!("Downloading SilicoLab {version}…"));
+    state.status_neutral(format!("Downloading SilicoLab {version}…"));
 }
 
 /// Persist whether the next launch reopens the last project. The stored field
@@ -190,7 +222,10 @@ pub(crate) fn maybe_auto_install_update(state: &mut AppState) {
 pub(crate) fn set_reopen_last_project(state: &mut AppState, reopen: bool) {
     state.config.closed_to_scratch = !reopen;
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save startup preference: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save startup preference: {error}"),
+        );
     }
 }
 
@@ -206,9 +241,12 @@ pub(crate) fn pick_default_project_dir(state: &mut AppState) {
     };
     state.config.default_project_dir = path;
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save default project folder: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save default project folder: {error}"),
+        );
     } else {
-        state.set_message(format!(
+        state.status_success(format!(
             "Default project folder set to {}",
             state.config.default_project_dir.display()
         ));
@@ -229,9 +267,9 @@ pub(crate) fn reveal_settings_file(state: &mut AppState) {
         false
     };
     if revealed {
-        state.set_message(format!("Revealed {}", path.display()));
+        state.status_success(format!("Revealed {}", path.display()));
     } else {
-        state.set_message(format!("Settings file: {}", path.display()));
+        state.status_neutral(format!("Settings file: {}", path.display()));
     }
 }
 
@@ -281,9 +319,12 @@ pub(crate) fn reset_all_settings(state: &mut AppState, ctx: &egui::Context) {
     crate::frontend::theme::set_preference(ctx, state.config.theme);
     crate::frontend::theme::set_scheme(ctx, state.config.color_scheme);
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save reset settings: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save reset settings: {error}"),
+        );
     } else {
-        state.set_message("All settings reset to defaults".to_string());
+        state.status_success("All settings reset to defaults");
     }
 }
 
@@ -298,8 +339,11 @@ pub(crate) fn export_settings(state: &mut AppState) {
         return;
     };
     match crate::backend::config::save_config_to(&path, &state.config) {
-        Ok(()) => state.set_message(format!("Exported settings to {}", path.display())),
-        Err(error) => state.set_message(format!("Could not export settings: {error}")),
+        Ok(()) => state.status_success(format!("Exported settings to {}", path.display())),
+        Err(error) => state.report_system_error(
+            SystemSubsystem::File,
+            format!("Could not export settings: {error}"),
+        ),
     }
 }
 
@@ -320,12 +364,18 @@ pub(crate) fn import_settings(state: &mut AppState, ctx: &egui::Context) {
             crate::frontend::theme::set_preference(ctx, state.config.theme);
             crate::frontend::theme::set_scheme(ctx, state.config.color_scheme);
             if let Err(error) = save_config(&state.config) {
-                state.set_message(format!("Imported settings, but could not save: {error}"));
+                state.report_system_error(
+                    SystemSubsystem::Settings,
+                    format!("Imported settings, but could not save: {error}"),
+                );
             } else {
-                state.set_message(format!("Imported settings from {}", path.display()));
+                state.status_success(format!("Imported settings from {}", path.display()));
             }
         }
-        Err(error) => state.set_message(format!("Could not import settings: {error}")),
+        Err(error) => state.report_system_error(
+            SystemSubsystem::File,
+            format!("Could not import settings: {error}"),
+        ),
     }
 }
 
@@ -370,7 +420,10 @@ pub(crate) fn reset_sidebar(state: &mut AppState, ctx: &egui::Context) {
 pub(crate) fn set_glass(state: &mut AppState, on: bool) {
     state.config.glass = on;
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save glass preference: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save glass preference: {error}"),
+        );
     }
 }
 
@@ -382,7 +435,10 @@ pub(crate) fn set_compute_core_count(state: &mut AppState, cores: usize) {
         crate::backend::hardware::info().logical_cores,
     );
     if let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save core-count preference: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save core-count preference: {error}"),
+        );
     }
 }
 
@@ -393,6 +449,9 @@ pub(crate) fn set_compute_core_count(state: &mut AppState, cores: usize) {
 pub(crate) fn set_glass_intensity(state: &mut AppState, value: f32, commit: bool) {
     state.config.glass_intensity = value.clamp(0.0, 1.0);
     if commit && let Err(error) = save_config(&state.config) {
-        state.set_message(format!("Could not save glass intensity: {error}"));
+        state.report_system_error(
+            SystemSubsystem::Settings,
+            format!("Could not save glass intensity: {error}"),
+        );
     }
 }

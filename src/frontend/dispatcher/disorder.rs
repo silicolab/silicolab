@@ -28,17 +28,17 @@ pub(crate) fn start_pending_disorder(state: &mut AppState) {
         return;
     };
     if state.jobs.disorder_running() {
-        state.set_message("a packing job is already running".to_string());
+        state.status_neutral("a packing job is already running");
         return;
     }
     if prompt.components.is_empty() {
-        state.set_message("Add at least one molecule to pack".to_string());
+        state.status_neutral("Add at least one molecule to pack");
         return;
     }
     let request = match build_pack_request(state, &prompt) {
         Ok(request) => request,
         Err(error) => {
-            state.set_message(error.to_string());
+            state.status_neutral(error.to_string());
             return;
         }
     };
@@ -74,7 +74,7 @@ pub(crate) fn start_pending_disorder(state: &mut AppState) {
         );
         mark_task_status(state, task_run_id, TaskStatus::Running);
     }
-    state.set_message("Packing disordered system; press Esc to stop".to_string());
+    state.status_neutral("Packing disordered system; press Esc to stop");
 }
 
 pub(crate) fn cancel_pending_disorder_request(state: &mut AppState) {
@@ -88,7 +88,7 @@ pub(crate) fn cancel_pending_disorder_request(state: &mut AppState) {
         );
     }
     state.ui.pending_disorder = None;
-    state.set_message("Packing canceled".to_string());
+    state.status_neutral("Packing canceled");
     complete_active_task(state, TaskKind::BuildDisorderedSystem, TaskStatus::Failed);
     close_active_task_panel(state);
 }
@@ -259,24 +259,27 @@ impl JobRuntime for RunningDisorderJob {
     fn request_cancel(&mut self, state: &mut AppState) -> CancelSignal {
         self.cancel
             .store(true, std::sync::atomic::Ordering::Relaxed);
-        state.set_message("Packing stopping; finishing the current pass".to_string());
+        if let Some(job_id) = state.jobs.local_execution(self.slot()) {
+            state.job_notice(job_id, "Packing stopping; finishing the current pass");
+        }
         CancelSignal::Accepted
     }
 
-    fn poll(&mut self, state: &mut AppState, _cx: &JobContext) -> JobPoll {
+    fn poll(&mut self, state: &mut AppState, cx: &JobContext) -> JobPoll {
         // Disorder streams into the entry created up front (`result_entry_id`),
         // overwriting it in place; it adds no new entry and records no ledger row.
         let entry_id = self.result_entry_id;
         loop {
             match self.receiver.try_recv() {
                 Ok(DisorderWorkerMessage::Progress { structure, report }) => {
+                    // Placement counts are structured progress Activity reads, not a
+                    // log firehose; the Esc hint is posted once, on the first update.
+                    let first = self.latest_report.is_none();
                     write_disorder_structure(state, entry_id, structure);
-                    state.set_message(format!(
-                        "Packing: {}/{} molecules placed; press Esc to stop",
-                        report.total_placed(),
-                        report.total_requested()
-                    ));
                     self.latest_report = Some(report);
+                    if first {
+                        state.status_neutral("Packing disordered system… press Esc to stop");
+                    }
                 }
                 Ok(DisorderWorkerMessage::Finished { structure, report }) => {
                     write_disorder_structure(state, entry_id, structure);
@@ -289,12 +292,20 @@ impl JobRuntime for RunningDisorderJob {
                             None,
                         );
                     }
-                    state.set_message(disorder_finished_message(&report));
+                    let message = disorder_finished_message(&report);
+                    match cx.job_id {
+                        Some(job_id) => state.job_succeeded(job_id, message),
+                        None => state.status_success(message),
+                    }
                     self.latest_report = Some(report);
                     return JobPoll::Terminal(TaskStatus::Completed);
                 }
                 Ok(DisorderWorkerMessage::Failed(error)) => {
-                    state.set_message(format!("Packing failed: {error}"));
+                    let message = format!("Packing failed: {error}");
+                    match cx.job_id {
+                        Some(job_id) => state.job_failed(job_id, message),
+                        None => state.status_error(message),
+                    }
                     return JobPoll::Terminal(TaskStatus::Failed);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => return JobPoll::Running,

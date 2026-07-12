@@ -9,9 +9,10 @@ use crate::frontend::jobs::{
     AgentHeavyJob, DockingWorkerMessage, EngineWorkerMessage, QmWorkerMessage, RunningDockingJob,
     RunningEngineJob, RunningQmJob, TrackedAgentJob, spawn_docking_job, spawn_gromacs_pipeline_job,
 };
-use crate::frontend::state::AppState;
+use crate::frontend::state::{AppState, LogLevel, SystemSubsystem};
 use crate::io::llm::types::ToolCall;
 use crate::io::structure_io::default_structure_save_path;
+use crate::job::JobId;
 
 /// Most heavy jobs the agent may have running at once. Serialized to one by
 /// default to bound memory — a ~21-atom QM run can already cost ~19 GB — so a
@@ -110,15 +111,6 @@ fn register_agent_task_run(state: &mut AppState, kind: HeavyKind, command: &str)
     task_run_id
 }
 
-fn complete_agent_task_run(state: &mut AppState, task_run_id: u64, is_error: bool) {
-    let status = if is_error {
-        TaskStatus::Failed
-    } else {
-        TaskStatus::Completed
-    };
-    crate::frontend::dispatcher::mark_task_status(state, task_run_id, status);
-}
-
 /// Launch a heavy command as a detached background job and record an immediate
 /// "started" tool result, so the model hands control back at once instead of
 /// blocking. Heavy jobs are serialized ([`MAX_AGENT_HEAVY`]): while one runs, a
@@ -184,11 +176,22 @@ pub fn spawn_heavy(state: &mut AppState, call: &ToolCall, kind: HeavyKind, ctx: 
             state.jobs.next_agent_job_id += 1;
             let conversation = state.ui.agent.active_conversation;
             let task_run_id = register_agent_task_run(state, kind, &command);
+            let job_kind = state
+                .tasks
+                .task_run(task_run_id)
+                .map(|task| task.controller_id.to_string());
+            let job_id = crate::frontend::dispatcher::begin_job_execution(
+                state,
+                task_run_id,
+                crate::backend::run_attempt::Placement::Local,
+                job_kind,
+            );
             state.jobs.agent_jobs.push(TrackedAgentJob {
                 id,
                 conversation,
                 label: label.clone(),
                 task_run_id,
+                job_id,
                 job,
             });
             record_result(
@@ -230,10 +233,13 @@ pub fn poll_agent_jobs(state: &mut AppState, ctx: &egui::Context) {
     let mut survivors = Vec::with_capacity(jobs.len());
     let mut any_completed = false;
     for mut tracked in jobs {
+        let job_id = tracked.job_id;
         let completion = match &mut tracked.job {
-            AgentHeavyJob::Qm(running) => drain_qm(state, running, tracked.task_run_id),
-            AgentHeavyJob::Engine(running) => drain_engine(state, running, tracked.task_run_id),
-            AgentHeavyJob::Docking(running) => drain_docking(state, running),
+            AgentHeavyJob::Qm(running) => drain_qm(state, running, tracked.task_run_id, job_id),
+            AgentHeavyJob::Engine(running) => {
+                drain_engine(state, running, tracked.task_run_id, job_id)
+            }
+            AgentHeavyJob::Docking(running) => drain_docking(state, running, job_id),
         };
         match completion {
             Some((summary, is_error)) => {
@@ -260,20 +266,24 @@ pub fn cancel_conversation_jobs(
     state: &mut AppState,
     conversation: AssistantConversationId,
 ) -> usize {
-    let mut cancelled_runs = Vec::new();
+    let mut cancelled_jobs = Vec::new();
     state.jobs.agent_jobs.retain(|job| {
         if job.conversation == conversation {
             job.job.cancel();
-            cancelled_runs.push(job.task_run_id);
+            cancelled_jobs.push(job.job_id);
             false
         } else {
             true
         }
     });
-    for task_run_id in &cancelled_runs {
-        crate::frontend::dispatcher::mark_task_status(state, *task_run_id, TaskStatus::Cancelled);
+    for job_id in &cancelled_jobs {
+        crate::frontend::dispatcher::complete_local_job(
+            state,
+            Some(*job_id),
+            TaskStatus::Cancelled,
+        );
     }
-    cancelled_runs.len()
+    cancelled_jobs.len()
 }
 
 /// Route a finished job to the conversation that launched it: a transcript
@@ -286,14 +296,20 @@ fn finish_agent_job(
     is_error: bool,
 ) {
     let cancelled = matches!(&tracked.job, AgentHeavyJob::Qm(job) if job.cancel_requested);
-    if cancelled {
-        crate::frontend::dispatcher::mark_task_status(
-            state,
-            tracked.task_run_id,
-            TaskStatus::Cancelled,
-        );
+    let status = if cancelled {
+        TaskStatus::Cancelled
+    } else if is_error {
+        TaskStatus::Failed
     } else {
-        complete_agent_task_run(state, tracked.task_run_id, is_error);
+        TaskStatus::Completed
+    };
+    // Finalize execution and task through the run graph exactly as a manual job
+    // does, then surface the same job-scoped feedback.
+    crate::frontend::dispatcher::complete_local_job(state, Some(tracked.job_id), status);
+    match status {
+        TaskStatus::Completed => state.job_succeeded(tracked.job_id, summary.clone()),
+        TaskStatus::Failed => state.job_failed(tracked.job_id, summary.clone()),
+        _ => state.job_notice(tracked.job_id, summary.clone()),
     }
     let verb = if cancelled {
         "cancelled"
@@ -313,17 +329,18 @@ fn finish_agent_job(
     }
 }
 
-fn drain_docking(state: &mut AppState, running: &RunningDockingJob) -> Option<(String, bool)> {
+fn drain_docking(
+    state: &mut AppState,
+    running: &mut RunningDockingJob,
+    _job_id: JobId,
+) -> Option<(String, bool)> {
     let mut completion = None;
     while let Ok(message) = running.receiver.try_recv() {
         match message {
-            DockingWorkerMessage::Progress { stage } => {
-                state.set_message(format!("Docking: {stage}; running in background"));
-            }
+            DockingWorkerMessage::Progress { stage } => running.latest_stage = Some(stage),
             DockingWorkerMessage::Finished(outcome) => {
                 let outcome = *outcome;
                 crate::frontend::docking_commands::add_pose_entries(state, &outcome);
-                state.set_message(outcome.summary.clone());
                 completion = Some((outcome.summary, false));
             }
             DockingWorkerMessage::Failed(error) => {
@@ -351,9 +368,10 @@ fn save_agent_qm_artifacts(
     }
     match crate::frontend::dispatcher::ensure_task_run_dir(state, task_run_id, kind, None) {
         Ok(run_dir) => crate::frontend::dispatcher::save_qm_artifacts(state, &run_dir, outcome),
-        Err(error) => state
-            .output_log
-            .push(format!("failed to create QM run directory: {error}")),
+        Err(error) => state.report_system_error(
+            SystemSubsystem::Storage,
+            format!("failed to create QM run directory: {error}"),
+        ),
     }
 }
 
@@ -361,12 +379,12 @@ fn drain_qm(
     state: &mut AppState,
     running: &mut RunningQmJob,
     task_run_id: u64,
+    _job_id: JobId,
 ) -> Option<(String, bool)> {
     let mut completion = None;
     while let Ok(message) = running.receiver.try_recv() {
         match message {
             QmWorkerMessage::Progress { stage } => {
-                state.set_message(format!("QM: {stage}; running in background"));
                 running.latest_stage = Some(stage);
             }
             QmWorkerMessage::Finished(outcome) => {
@@ -394,7 +412,6 @@ fn drain_qm(
                 }
                 state.ui.chart_availability.clear();
                 state.ui.task_chart_thumbnails.remove(&task_run_id);
-                state.set_message(outcome.summary.clone());
                 completion = Some((outcome.summary, false));
             }
             QmWorkerMessage::Failed(error) => {
@@ -413,15 +430,15 @@ fn drain_engine(
     state: &mut AppState,
     running: &mut RunningEngineJob,
     task_run_id: u64,
+    job_id: JobId,
 ) -> Option<(String, bool)> {
     let mut completion = None;
     while let Ok(message) = running.receiver.try_recv() {
         match message {
             EngineWorkerMessage::Stage(stage) => {
-                state.set_message(format!("{}: {stage}", running.engine));
                 running.latest_stage = Some(stage);
             }
-            EngineWorkerMessage::Log(line) => running.append_log(line),
+            EngineWorkerMessage::Log(line) => state.append_job_log(job_id, LogLevel::Info, line),
             EngineWorkerMessage::Finished(success) => {
                 let success = *success;
                 let summary = success.summary.clone();
@@ -437,7 +454,6 @@ fn drain_engine(
                     crate::frontend::dispatcher::md_run_origin(trajectory, project_root.as_deref());
                 state.entries.set_entry_origin(entry_id, origin);
                 crate::frontend::dispatcher::record_task_result_entry(state, task_run_id, entry_id);
-                state.set_message(summary.clone());
                 completion = Some((summary, false));
             }
             EngineWorkerMessage::Failed(error) => {
@@ -495,6 +511,12 @@ mod tests {
         // task's result — attributed by the TrackedAgentJob's task_run_id.
         let mut state = AppState::scratch(Default::default(), Vec::new());
         let task = register_agent_task_run(&mut state, HeavyKind::Qm, "qm optimize");
+        let job_id = crate::frontend::dispatcher::begin_job_execution(
+            &mut state,
+            task,
+            crate::backend::run_attempt::Placement::Local,
+            Some("qm-optimize".to_string()),
+        );
 
         let (tx, rx) = std::sync::mpsc::channel();
         tx.send(QmWorkerMessage::Finished(Box::new(
@@ -518,7 +540,7 @@ mod tests {
             cancel_requested: false,
         };
 
-        let completion = drain_qm(&mut state, &mut running, task);
+        let completion = drain_qm(&mut state, &mut running, task, job_id);
         let (_summary, is_error) = completion.expect("the job completes");
         assert!(!is_error, "a converged run is not an error");
         assert!(
@@ -534,16 +556,38 @@ mod tests {
 
     #[test]
     fn complete_marks_terminal_status() {
+        // An agent-launched job finalizes through the same run graph a manual job
+        // does: completing its bound execution marks the task terminal.
         let mut state = AppState::scratch(Default::default(), Vec::new());
         let ok = register_agent_task_run(&mut state, HeavyKind::Qm, "qm energy");
-        complete_agent_task_run(&mut state, ok, false);
+        let ok_job = crate::frontend::dispatcher::begin_job_execution(
+            &mut state,
+            ok,
+            crate::backend::run_attempt::Placement::Local,
+            Some("qm-energy".to_string()),
+        );
+        crate::frontend::dispatcher::complete_local_job(
+            &mut state,
+            Some(ok_job),
+            TaskStatus::Completed,
+        );
         assert_eq!(
             state.tasks.task_run(ok).unwrap().status,
             TaskStatus::Completed
         );
 
         let bad = register_agent_task_run(&mut state, HeavyKind::Md, "md run");
-        complete_agent_task_run(&mut state, bad, true);
+        let bad_job = crate::frontend::dispatcher::begin_job_execution(
+            &mut state,
+            bad,
+            crate::backend::run_attempt::Placement::Local,
+            Some("md-run".to_string()),
+        );
+        crate::frontend::dispatcher::complete_local_job(
+            &mut state,
+            Some(bad_job),
+            TaskStatus::Failed,
+        );
         assert_eq!(
             state.tasks.task_run(bad).unwrap().status,
             TaskStatus::Failed

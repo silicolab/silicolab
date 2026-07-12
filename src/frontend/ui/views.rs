@@ -230,7 +230,9 @@ pub(crate) fn render_structure_editor_window(
     if let Some(draft) = preview_update {
         *state.structure_mut() = draft;
         state.mark_structure_changed();
-        state.set_message("Editing preview updated".to_string());
+        actions.push(AppAction::PostStatusNeutral(
+            "Editing preview updated".to_string(),
+        ));
     }
 
     if apply {

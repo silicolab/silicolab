@@ -5,17 +5,17 @@ pub(crate) use residue::{select_residue, select_residue_range, select_residues};
 
 pub(crate) fn select_all(state: &mut AppState) {
     state.ui.selection.select_all(state.structure().atoms.len());
-    state.set_message(format!("Selected {} atom(s)", state.ui.selection.len()));
+    state.status_neutral(format!("Selected {} atom(s)", state.ui.selection.len()));
 }
 
 pub(crate) fn invert_selection(state: &mut AppState) {
     state.ui.selection.invert(state.structure().atoms.len());
-    state.set_message(format!("Selected {} atom(s)", state.ui.selection.len()));
+    state.status_neutral(format!("Selected {} atom(s)", state.ui.selection.len()));
 }
 
 pub(crate) fn clear_selection(state: &mut AppState) {
     state.ui.selection.clear();
-    state.set_message("Cleared atom selection".to_string());
+    state.status_neutral("Cleared atom selection".to_string());
 }
 
 pub(crate) fn select_category(state: &mut AppState, category: crate::domain::AtomCategory) {
@@ -28,9 +28,9 @@ pub(crate) fn select_category(state: &mut AppState, category: crate::domain::Ato
     let count = indices.len();
     state.ui.selection.select_indices(indices);
     if count == 0 {
-        state.set_message(format!("No {} atoms found", category.label()));
+        state.status_neutral(format!("No {} atoms found", category.label()));
     } else {
-        state.set_message(format!("Selected {count} {} atom(s)", category.label()));
+        state.status_neutral(format!("Selected {count} {} atom(s)", category.label()));
     }
 }
 
@@ -45,9 +45,9 @@ pub(crate) fn select_atom(state: &mut AppState, atom_index: usize, toggle: bool)
         .selection
         .retain_valid(state.structure().atoms.len());
     if state.ui.selection.is_empty() {
-        state.set_message("Cleared atom selection".to_string());
+        state.status_neutral("Cleared atom selection".to_string());
     } else {
-        state.set_message(format!("Selected {} atom(s)", state.ui.selection.len()));
+        state.status_neutral(format!("Selected {} atom(s)", state.ui.selection.len()));
     }
 }
 
@@ -79,14 +79,14 @@ pub(crate) fn scope_items(
 pub(crate) fn set_selection_style(state: &mut AppState, style: crate::frontend::state::AtomStyle) {
     let (indices, all) = style_scope(state);
     if indices.is_empty() {
-        state.set_message("No atoms to style".to_string());
+        state.status_neutral("No atoms to style".to_string());
         return;
     }
     let items = scope_items(state, &indices);
     let count = items.len();
     state.ui.viewport.apply_atom_styles(items, style);
     let scope = if all { "all" } else { "selected" };
-    state.set_message(format!("Set {count} {scope} atom(s) to {}", style.label()));
+    state.status_neutral(format!("Set {count} {scope} atom(s) to {}", style.label()));
 }
 
 /// Apply a visibility change to the Style panel's current scope. Visibility is a
@@ -99,7 +99,7 @@ pub(crate) fn set_selection_visibility(
     use crate::frontend::actions::VisibilityCommand;
     let atom_count = state.structure().atoms.len();
     if atom_count == 0 {
-        state.set_message("No atoms in the active entry".to_string());
+        state.status_neutral("No atoms in the active entry".to_string());
         return;
     }
     let (indices, all) = style_scope(state);
@@ -108,18 +108,18 @@ pub(crate) fn set_selection_visibility(
         VisibilityCommand::Show => {
             let count = indices.len();
             state.ui.viewport.set_atoms_hidden(indices, false);
-            state.set_message(format!("Showed {count} {scope} atom(s)"));
+            state.status_neutral(format!("Showed {count} {scope} atom(s)"));
         }
         VisibilityCommand::Hide => {
             let count = indices.len();
             state.ui.viewport.set_atoms_hidden(indices, true);
-            state.set_message(format!("Hid {count} {scope} atom(s)"));
+            state.status_neutral(format!("Hid {count} {scope} atom(s)"));
         }
         VisibilityCommand::ShowOnly => {
             let visible: std::collections::BTreeSet<usize> = indices.iter().copied().collect();
             let count = visible.len();
             state.ui.viewport.show_only(&visible, atom_count);
-            state.set_message(format!("Showing only {count} {scope} atom(s)"));
+            state.status_neutral(format!("Showing only {count} {scope} atom(s)"));
         }
     }
 }
@@ -132,7 +132,7 @@ pub(crate) fn set_hydrogen_display(
 ) {
     use crate::frontend::actions::HydrogenDisplay;
     if matches!(mode, HydrogenDisplay::PolarOnly) {
-        state.set_message("Polar-hydrogen detection is not yet implemented".to_string());
+        state.status_neutral("Polar-hydrogen detection is not yet implemented".to_string());
         return;
     }
     let (indices, _) = style_scope(state);
@@ -144,18 +144,18 @@ pub(crate) fn set_hydrogen_display(
             .collect()
     };
     if hydrogens.is_empty() {
-        state.set_message("No hydrogen atoms in scope".to_string());
+        state.status_neutral("No hydrogen atoms in scope".to_string());
         return;
     }
     let count = hydrogens.len();
     match mode {
         HydrogenDisplay::All => {
             state.ui.viewport.set_atoms_hidden(hydrogens, false);
-            state.set_message(format!("Showing {count} hydrogen(s)"));
+            state.status_neutral(format!("Showing {count} hydrogen(s)"));
         }
         HydrogenDisplay::None => {
             state.ui.viewport.set_atoms_hidden(hydrogens, true);
-            state.set_message(format!("Hid {count} hydrogen(s)"));
+            state.status_neutral(format!("Hid {count} hydrogen(s)"));
         }
         HydrogenDisplay::PolarOnly => unreachable!("handled above"),
     }
@@ -170,7 +170,7 @@ pub(crate) enum OverlayKind {
 pub(crate) fn set_overlay(state: &mut AppState, kind: OverlayKind, on: bool) {
     let (indices, _) = style_scope(state);
     if indices.is_empty() {
-        state.set_message("No atoms in the active entry".to_string());
+        state.status_neutral("No atoms in the active entry".to_string());
         return;
     }
     let items = scope_items(state, &indices);
@@ -229,13 +229,13 @@ pub(crate) fn set_overlay(state: &mut AppState, kind: OverlayKind, on: bool) {
         OverlayKind::Surface => "Surface",
     };
     let verb = if on { "Enabled" } else { "Disabled" };
-    state.set_message(format!("{verb} {label} overlay for {count} atom(s)"));
+    state.status_neutral(format!("{verb} {label} overlay for {count} atom(s)"));
 }
 
 pub(crate) fn reset_selection_style(state: &mut AppState) {
     let (indices, all) = style_scope(state);
     if indices.is_empty() {
-        state.set_message("No atoms to reset".to_string());
+        state.status_neutral("No atoms to reset".to_string());
         return;
     }
     let count = indices.len();
@@ -250,7 +250,7 @@ pub(crate) fn reset_selection_style(state: &mut AppState) {
         .set_atoms_hidden(indices.iter().copied(), false);
     state.ui.viewport.clear_atom_styles(indices);
     let scope = if all { "all" } else { "selected" };
-    state.set_message(format!("Reset style for {count} {scope} atom(s)"));
+    state.status_neutral(format!("Reset style for {count} {scope} atom(s)"));
 }
 
 pub(crate) fn undo(state: &mut AppState) {
@@ -260,7 +260,7 @@ pub(crate) fn undo(state: &mut AppState) {
     let current = state.capture_edit_snapshot();
     state.history.push_redo(current);
     state.restore_edit_snapshot(previous);
-    state.set_message("Undid last change".to_string());
+    state.status_neutral("Undid last change".to_string());
 }
 
 pub(crate) fn redo(state: &mut AppState) {
@@ -270,7 +270,7 @@ pub(crate) fn redo(state: &mut AppState) {
     let current = state.capture_edit_snapshot();
     state.history.push_undo(current);
     state.restore_edit_snapshot(next);
-    state.set_message("Redid last change".to_string());
+    state.status_neutral("Redid last change".to_string());
 }
 
 pub(crate) fn create_group(state: &mut AppState, name: String) {
@@ -279,9 +279,9 @@ pub(crate) fn create_group(state: &mut AppState, name: String) {
             state.ui.entry_list.creating_group = false;
             state.ui.entry_list.new_group_name.clear();
             state.ui.entry_list.collapsed_group_ids.remove(&group_id);
-            state.set_message(format!("Created group {}", name.trim()));
+            state.status_neutral(format!("Created group {}", name.trim()));
         }
-        None => state.set_message("Group name cannot be empty".to_string()),
+        None => state.status_neutral("Group name cannot be empty".to_string()),
     }
 }
 
@@ -298,9 +298,9 @@ pub(crate) fn delete_group(state: &mut AppState, group_id: &str) {
             state.ui.entry_list.renaming_group_id = None;
             state.ui.entry_list.rename_group_buffer.clear();
         }
-        state.set_message("Deleted group".to_string());
+        state.status_neutral("Deleted group".to_string());
     } else {
-        state.set_message("Cannot delete group".to_string());
+        state.status_neutral("Cannot delete group".to_string());
     }
 }
 
@@ -334,9 +334,9 @@ pub(crate) fn group_delete_summary(state: &AppState, group_id: &str) -> Option<(
 pub(crate) fn move_entry_to_group(state: &mut AppState, entry_id: u64, group_id: &str) {
     if state.entries.move_entry_to_group(entry_id, group_id) {
         if group_id.is_empty() {
-            state.set_message("Removed entry from group".to_string());
+            state.status_neutral("Removed entry from group".to_string());
         } else {
-            state.set_message("Moved entry to group".to_string());
+            state.status_neutral("Moved entry to group".to_string());
         }
     }
 }

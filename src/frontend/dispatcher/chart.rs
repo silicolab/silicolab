@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use super::*;
 use crate::backend::runs::{QmSeries, SERIES_FILE, load_qm_series_file};
 use crate::frontend::actions::{ChartAxis, ChartTarget};
-use crate::frontend::state::{ChartExportDraft, ChartState, StaticView};
+use crate::frontend::state::{ChartExportDraft, ChartState, LogLevel, StaticView, SystemSubsystem};
 use crate::plot::spec::{
     AxisSpec, ChartSpec, ExportFormat, ExportStyle, Mark, PresetChoice, Series,
 };
@@ -75,7 +75,7 @@ pub(crate) fn open_chart(state: &mut AppState, target: ChartTarget, ctx: &egui::
         ChartTarget::TaskRun(task_run_id) => task_series_path(state, task_run_id),
     };
     let Some((source_name, series_path)) = resolved else {
-        state.set_message("This item has no chart data".to_string());
+        state.status_neutral("This item has no chart data".to_string());
         return;
     };
     let mut chart = ChartState::new(source_name);
@@ -185,7 +185,7 @@ pub(crate) fn export_chart(state: &mut AppState) {
         return;
     };
     let Some(dataset) = chart.active_dataset() else {
-        state.set_message("No dataset to export".to_string());
+        state.status_neutral("No dataset to export".to_string());
         return;
     };
     let mut spec = dataset.clone();
@@ -219,22 +219,23 @@ pub(crate) fn export_chart(state: &mut AppState) {
                 preset: draft.preset,
                 dpi: draft.dpi,
             };
-            // The prefs save is a best-effort follow-up; fold any failure into
-            // the export confirmation so the "Chart exported" message isn't
-            // silently overwritten by the warning.
+            // The prefs save is a best-effort follow-up; a failure is logged to
+            // Output so the "Chart exported" success status isn't overwritten by
+            // a warning.
             let exported = format!("Chart exported to {}", path.display());
             if let Err(error) = save_config(&state.config) {
-                state.set_message(format!(
-                    "{exported}. Export preferences were not saved: {error}"
-                ));
-            } else {
-                state.set_message(exported);
+                state.log_system(
+                    SystemSubsystem::Settings,
+                    LogLevel::Warn,
+                    format!("Export preferences were not saved: {error}"),
+                );
             }
+            state.status_success(exported);
             if let Some(chart) = state.ui.chart.as_mut() {
                 chart.export_open = false;
             }
         }
-        Err(error) => state.set_message(format!("Chart export failed: {error}")),
+        Err(error) => state.status_error(format!("Chart export failed: {error}")),
     }
 }
 

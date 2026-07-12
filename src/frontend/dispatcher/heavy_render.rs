@@ -70,7 +70,7 @@ pub(crate) fn use_wireframe_for_heavy_entry(state: &mut AppState, entry_id: u64)
             .ui
             .viewport
             .apply_atom_styles(items, AtomStyle::Wireframe);
-        state.set_message(format!("Showing {count} atom(s) as wireframe"));
+        state.status_neutral(format!("Showing {count} atom(s) as wireframe"));
     }
     state.ui.heavy_render_decided.insert(entry_id);
     state.ui.pending_heavy_gate = None;
@@ -82,6 +82,6 @@ pub(crate) fn render_heavy_entry_at_full(state: &mut AppState, entry_id: u64) {
     state.ui.heavy_render_decided.insert(entry_id);
     state.ui.pending_heavy_gate = None;
     if state.entries.active_entry_id() == Some(entry_id) {
-        state.set_message("Rendering at full detail".to_string());
+        state.status_neutral("Rendering at full detail".to_string());
     }
 }

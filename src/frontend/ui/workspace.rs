@@ -148,7 +148,10 @@ pub(super) fn render_workspace(
                             }
                         }
                         if let Some(index) = assigned_atom {
-                            state.set_message(format!("Assigned atom {}", index + 1));
+                            actions.push(AppAction::PostStatusNeutral(format!(
+                                "Assigned atom {}",
+                                index + 1
+                            )));
                         }
                     }
                 } else if !state.workspace.is_project() && state.entries.tabs.is_empty() {
