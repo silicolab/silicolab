@@ -1,0 +1,11 @@
+# Cloudflare Workers static-assets deployment for the docs site.
+# The worker name plus the account's workers.dev subdomain form the URL:
+#   docs + silicolab.workers.dev  ->  https://docs.silicolab.workers.dev
+name = "docs"
+compatibility_date = "2025-07-01"
+
+# Serve the Astro/Starlight build output directly; no worker script needed.
+# `404-page` makes unmatched paths return the generated 404.html.
+[assets]
+directory = "./dist"
+not_found_handling = "404-page"
