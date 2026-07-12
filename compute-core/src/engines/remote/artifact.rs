@@ -100,7 +100,13 @@ impl WorkerArtifact {
                 if let Some(bytes) = read_cached_worker(&version) {
                     return Ok(bytes);
                 }
-                let (bytes, digest) = download_release(&version)?;
+                let (bytes, digest) = download_release(&version).with_context(|| {
+                    format!(
+                        "could not obtain the compute worker for version {version}. If this \
+                         machine is offline or rate-limited, run a remote job once while \
+                         online to cache the worker, then retry."
+                    )
+                })?;
                 store_cached_worker(&version, &digest, &bytes);
                 Ok(bytes)
             }
