@@ -3,7 +3,7 @@
 //! PDBQT is the input/output format of AutoDock Vina (and the `docking` crate).
 //! Compared to PDB it adds a partial-charge column and an AutoDock atom-type
 //! column, and ligands carry a `ROOT`/`BRANCH`/`TORSDOF` torsion tree. silicolab
-//! reads PDBQT (e.g. docking result poses) into [`Structure`]s and prepares
+//! reads PDBQT (e.g. docking result poses) into [`crate::domain::Structure`]s and prepares
 //! receptor/ligand PDBQT from structures for the docking engine.
 //!
 //! Preparation is best-effort: it derives AutoDock types from the element and bond

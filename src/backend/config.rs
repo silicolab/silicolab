@@ -197,19 +197,19 @@ pub struct AppConfig {
     #[serde(default)]
     pub theme: ThemeMode,
     /// Accent + neutral color scheme, applied on top of light/dark. Defaults to
-    /// `Graphite`. See [`crate::frontend::theme::Palette::for_scheme`].
+    /// `Graphite`. The frontend maps it through `Palette::for_scheme`.
     #[serde(default)]
     pub color_scheme: ColorScheme,
     /// Apple-style frosted-glass (vibrancy) material on the window chrome.
     /// Defaults off: the effect costs continuous backdrop-blur compositing while
     /// revealed, so it is opt-in (performance first). Only takes effect where the
     /// platform supports it (macOS for now) and is auto-suppressed when the OS
-    /// "Reduce Transparency" setting is on. See [`crate::frontend::glass`].
+    /// "Reduce Transparency" setting is on. See the frontend `glass` module.
     #[serde(default = "default_glass")]
     pub glass: bool,
     /// Liquid Glass tint intensity, 0.0 (ultra-clear) ..= 1.0 (fully tinted).
     /// Maps linearly onto the chrome-fill alpha range (see
-    /// [`crate::frontend::theme::glass_alpha`]); macOS 27-style user control over
+    /// `theme::glass_alpha`); macOS 27-style user control over
     /// how see-through the frosted chrome reads.
     #[serde(default = "default_glass_intensity")]
     pub glass_intensity: f32,
@@ -241,7 +241,7 @@ pub struct AppConfig {
     /// project data. `#[serde(default)]` so an older `settings.json` still parses
     /// and falls back to the default layout. Only the fixed views persist here;
     /// per-task panels are session state and are never written. See
-    /// [`crate::frontend::state::DockModel`].
+    /// the frontend `DockModel`.
     #[serde(default)]
     pub dock_layout: DockLayoutConfig,
     /// Default number of CPU cores a new job starts with — the seed every task
@@ -270,7 +270,7 @@ pub struct AppConfig {
 
 /// Persisted state of one dock area (the bottom panel or the right sidebar). The
 /// `tabs`/`active` strings are fixed-view tokens (see
-/// [`crate::frontend::state::StaticView::token`]); unknown tokens are skipped on
+/// `StaticView::token`); unknown tokens are skipped on
 /// load, so the schema tolerates reordering or removing a view.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DockAreaLayout {
@@ -280,7 +280,7 @@ pub struct DockAreaLayout {
     pub collapsed: bool,
 }
 
-/// Persisted workbench layout mirror of [`crate::frontend::state::DockModel`].
+/// Persisted workbench layout mirror of the frontend `DockModel`.
 /// Lives in the backend layer (no dependency on `frontend`), so the default
 /// placement is spelled out here with literal view tokens and sizes; a test in
 /// `state.rs` asserts it stays in lock-step with `DockModel::default()`.

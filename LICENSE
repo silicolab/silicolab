@@ -9,4 +9,6 @@ SilicoLab is available under either:
 
 If you have not entered into a commercial license agreement, you may use, copy, modify, and distribute SilicoLab only under the GPL-3.0-or-later terms. See LICENSES/GPL-3.0-or-later.txt for the GPL text and LICENSES/LicenseRef-SilicoLab-Commercial.txt for the commercial licensing notice.
 
+Cargo package metadata describes the license available to recipients of the public crate distribution and therefore lists GPL-3.0-or-later. It does not represent or grant a separate commercial agreement.
+
 Third-party components and bundled assets remain governed by their own licenses. See THIRD-PARTY-NOTICES.md.

@@ -432,11 +432,11 @@ fn resolve_hartree_method(
 }
 
 /// Whether hartree carries a dispersion parametrization for `method` + `disp` —
-/// i.e. whether [`resolve_dispersion`] would resolve it rather than bail. The
+/// i.e. whether `resolve_dispersion` would resolve it rather than bail. The
 /// panel uses this to offer only the dispersion variants the chosen functional
 /// supports (D3(BJ) covers a small set; D4 additionally covers the double
 /// hybrids). Composites carry their own and post-HF has none, so both return
-/// false. Mirrors [`resolve_dispersion`]'s key derivation exactly.
+/// false. Mirrors `resolve_dispersion`'s key derivation exactly.
 pub fn supports_dispersion(method: &QmMethod, disp: QmDispersion) -> bool {
     if method.is_post_hf() {
         return false;

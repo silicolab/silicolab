@@ -210,6 +210,10 @@ installed Rust debugger extension.
 These tests deploy the current local worker themselves. Do not pre-place a
 worker or forge the host's `_worker` cache value.
 
+This section covers the remote suite. The canonical inventory of all
+machine-specific engine tests and environment variables is
+[Testing external engines](testing-external-engines.md).
+
 First build and validate the artifact:
 
 ```text
@@ -262,6 +266,17 @@ The GROMACS test requires `gmx` on the host. If a non-interactive SSH shell must
 source an environment first, set `SILICOLAB_TEST_GMX_PRELUDE` to that one shell
 line. `SILICOLAB_DEV_WORKER` is optional for all of these tests and selects a
 non-default local artifact when set.
+
+Three additional frontend tests cover configured and auto-detected GROMACS
+launches. To exercise a non-standard executable, set
+`SILICOLAB_TEST_GMX_PROGRAM` to an absolute remote path that is neither on
+`PATH` nor in the built-in candidate list, then run:
+
+```text
+cargo test -p silicolab --features dev-worker --lib -- --ignored remote_gromacs_honors --nocapture
+cargo test -p silicolab --features dev-worker --lib -- --ignored verify_confirms_a_remote_gmx --nocapture
+cargo test -p silicolab --features dev-worker --lib -- --ignored verify_with_no_program --nocapture
+```
 
 The tests are ignored by default because they mutate the configured host's
 SilicoLab work directory and require real SSH access. They leave production

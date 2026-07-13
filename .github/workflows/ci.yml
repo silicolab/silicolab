@@ -77,15 +77,24 @@ jobs:
   static-checks:
     name: Static checks
     needs: changes
-    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt
+          linux-deps: ${{ needs.changes.outputs.code }}
+          cache: 'true'
+      - name: Validate repository documentation
+        run: cargo xtask check-docs
       - name: Format
         run: cargo fmt --all --check
+
+      - name: Build public Rust API documentation
+        if: needs.changes.outputs.code == 'true'
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --workspace --no-deps --all-features
 
       # Scope to the musl target (drops host-only pure-Rust bindings) and to the
       # worker's own subgraph. cc is the canonical native-build signal.
