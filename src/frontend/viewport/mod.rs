@@ -125,9 +125,10 @@ impl GpuInstanceKey {
 }
 
 /// Hash the styling that changes the GPU scene: per-category and per-atom style
-/// overrides, ion visibility/color, cartoon ribbon geometry, surface settings,
-/// and chain colors. Only the lighting preset and background are excluded (they
-/// do not change geometry). Camera state is excluded by construction.
+/// overrides, explicit atom visibility, ion visibility/color, cartoon ribbon
+/// geometry, surface settings, and chain colors. Only the lighting preset and
+/// background are excluded (they do not change geometry). Camera state is
+/// excluded by construction.
 fn hash_visual_state(visual_state: &ViewportVisualState) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -138,6 +139,9 @@ fn hash_visual_state(visual_state: &ViewportVisualState) -> u64 {
     for (index, style) in &visual_state.atom_styles {
         index.hash(&mut hasher);
         style.hash(&mut hasher);
+    }
+    for index in &visual_state.atom_hidden {
+        index.hash(&mut hasher);
     }
     visual_state
         .ions

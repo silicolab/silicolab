@@ -169,8 +169,98 @@ fn append_cylinder_triangles(
         ));
     }
 
-    for index in 0..BOND_RADIAL_SEGMENTS {
-        let next_index = (index + 1) % BOND_RADIAL_SEGMENTS;
+    append_ring_strip(triangles, &start_ring, &end_ring);
+
+    if caps.start {
+        append_hemisphere_cap(
+            triangles,
+            viewport,
+            span.start,
+            -axis,
+            side,
+            normal,
+            style.radius,
+            &start_ring,
+            style.color,
+        );
+    }
+    if caps.end {
+        append_hemisphere_cap(
+            triangles,
+            viewport,
+            span.end,
+            axis,
+            side,
+            normal,
+            style.radius,
+            &end_ring,
+            style.color,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn append_hemisphere_cap(
+    triangles: &mut Vec<PrimitiveTriangle>,
+    viewport: &Projector,
+    center: Point3<f32>,
+    outward_axis: Vector3<f32>,
+    side: Vector3<f32>,
+    cylinder_normal: Vector3<f32>,
+    radius: f32,
+    equator_ring: &[PrimitiveMeshVertex],
+    color: Color32,
+) {
+    let shade = surface_shade(color);
+    let latitude_segments = SPHERE_LATITUDE_SEGMENTS.div_ceil(2);
+    let mut previous_ring = equator_ring.to_vec();
+
+    for latitude in 1..latitude_segments {
+        let polar = std::f32::consts::FRAC_PI_2 * latitude as f32 / latitude_segments as f32;
+        let (axial, radial_scale) = polar.sin_cos();
+        let mut ring = Vec::with_capacity(BOND_RADIAL_SEGMENTS);
+
+        for index in 0..BOND_RADIAL_SEGMENTS {
+            let angle = TAU * index as f32 / BOND_RADIAL_SEGMENTS as f32;
+            let (sin_angle, cos_angle) = angle.sin_cos();
+            let radial = side * cos_angle + cylinder_normal * sin_angle;
+            let surface_normal = radial * radial_scale + outward_axis * axial;
+            ring.push(primitive_vertex(
+                viewport,
+                center + surface_normal * radius,
+                surface_normal,
+                shade,
+            ));
+        }
+
+        append_ring_strip(triangles, &previous_ring, &ring);
+        previous_ring = ring;
+    }
+
+    let pole = primitive_vertex(
+        viewport,
+        center + outward_axis * radius,
+        outward_axis,
+        shade,
+    );
+    for index in 0..previous_ring.len() {
+        let next_index = (index + 1) % previous_ring.len();
+        triangles.push(primitive_triangle(
+            previous_ring[index],
+            pole,
+            previous_ring[next_index],
+        ));
+    }
+}
+
+fn append_ring_strip(
+    triangles: &mut Vec<PrimitiveTriangle>,
+    start_ring: &[PrimitiveMeshVertex],
+    end_ring: &[PrimitiveMeshVertex],
+) {
+    debug_assert_eq!(start_ring.len(), end_ring.len());
+    for index in 0..start_ring.len() {
+        let next_index = (index + 1) % start_ring.len();
         triangles.push(primitive_triangle(
             start_ring[index],
             end_ring[index],
@@ -180,40 +270,6 @@ fn append_cylinder_triangles(
             start_ring[index],
             end_ring[next_index],
             start_ring[next_index],
-        ));
-    }
-
-    if caps.start {
-        append_cylinder_cap(
-            triangles,
-            viewport,
-            span.start,
-            -axis,
-            &start_ring,
-            style.color,
-        );
-    }
-    if caps.end {
-        append_cylinder_cap(triangles, viewport, span.end, axis, &end_ring, style.color);
-    }
-}
-
-fn append_cylinder_cap(
-    triangles: &mut Vec<PrimitiveTriangle>,
-    viewport: &Projector,
-    center: Point3<f32>,
-    normal: Vector3<f32>,
-    ring: &[PrimitiveMeshVertex],
-    color: Color32,
-) {
-    let center_vertex =
-        primitive_vertex(viewport, center, normal, surface_shade(darken(color, 0.06)));
-    for index in 0..ring.len() {
-        let next_index = (index + 1) % ring.len();
-        triangles.push(primitive_triangle(
-            center_vertex,
-            ring[next_index],
-            ring[index],
         ));
     }
 }
@@ -288,4 +344,89 @@ fn shade_surface_color(
     };
 
     mix_color(shaded, PAPER_TINT, soft_highlight)
+}
+
+#[cfg(test)]
+mod tests {
+    use eframe::egui::{Pos2, Rect, Vec2};
+
+    use super::*;
+
+    fn projector() -> Projector {
+        Projector::new(
+            Rect::from_min_size(Pos2::ZERO, Vec2::splat(400.0)),
+            Point3::origin(),
+            100.0,
+            1_000.0,
+            0.0,
+            0.0,
+            Vec2::ZERO,
+        )
+    }
+
+    fn cylinder(caps: CylinderCaps) -> Vec<PrimitiveTriangle> {
+        let mut triangles = Vec::new();
+        append_cylinder_triangles(
+            &mut triangles,
+            &projector(),
+            CylinderSpan {
+                start: Point3::new(-1.0, 0.0, 0.0),
+                end: Point3::new(1.0, 0.0, 0.0),
+            },
+            CylinderStyle {
+                radius: 0.25,
+                color: Color32::WHITE,
+                orientation_hint: Vector3::y(),
+            },
+            caps,
+        );
+        triangles
+    }
+
+    fn x_extent(triangles: &[PrimitiveTriangle]) -> (f32, f32) {
+        triangles
+            .iter()
+            .flat_map(|triangle| triangle.vertices.iter())
+            .map(|vertex| vertex.pos.x)
+            .fold((f32::INFINITY, f32::NEG_INFINITY), |(min, max), x| {
+                (min.min(x), max.max(x))
+            })
+    }
+
+    #[test]
+    fn cylinder_caps_add_hemispheres_independently() {
+        let open = cylinder(CylinderCaps {
+            start: false,
+            end: false,
+        });
+        let start = cylinder(CylinderCaps {
+            start: true,
+            end: false,
+        });
+        let end = cylinder(CylinderCaps {
+            start: false,
+            end: true,
+        });
+
+        let latitude_segments = SPHERE_LATITUDE_SEGMENTS.div_ceil(2);
+        let hemisphere_triangles = ((latitude_segments - 1) * 2 + 1) * BOND_RADIAL_SEGMENTS;
+        assert_eq!(
+            start.len() - open.len(),
+            hemisphere_triangles,
+            "the start cap must be a tessellated hemisphere"
+        );
+        assert_eq!(
+            end.len() - open.len(),
+            hemisphere_triangles,
+            "the end cap must be a tessellated hemisphere"
+        );
+
+        let (open_min, open_max) = x_extent(&open);
+        let (start_min, start_max) = x_extent(&start);
+        let (end_min, end_max) = x_extent(&end);
+        assert!(start_min < open_min - 24.0);
+        assert!((start_max - open_max).abs() < 0.1);
+        assert!((end_min - open_min).abs() < 0.1);
+        assert!(end_max > open_max + 24.0);
+    }
 }

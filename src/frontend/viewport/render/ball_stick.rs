@@ -14,7 +14,8 @@ use super::scene::{RenderedAtom, RenderedBondSegment, ViewportGeometry};
 use super::{
     AROMATIC_DASH_LENGTH, AROMATIC_DASH_OFFSET, AROMATIC_DASH_RADIUS, AROMATIC_GAP_LENGTH,
     MULTI_BOND_OFFSET, MULTI_BOND_RADIUS, POINT_DISC_SEGMENTS, PrimitiveMeshVertex,
-    PrimitiveTriangle, SINGLE_BOND_RADIUS, ViewportVisualState, atom_marker_radius,
+    PrimitiveTriangle, SINGLE_BOND_RADIUS, STICK_DOUBLE_BOND_OFFSET, STICK_DOUBLE_BOND_RADIUS,
+    STICK_TRIPLE_BOND_OFFSET, STICK_TRIPLE_BOND_RADIUS, ViewportVisualState, atom_marker_radius,
     atom_render_color_with_settings, atom_visible, bond_trim_radius, darken, initial_cartoon_side,
     normalize_vector3,
 };
@@ -31,6 +32,17 @@ struct TrimmedBondSegment {
     axis: Vector3<f32>,
     length: f32,
 }
+
+#[derive(Clone, Copy)]
+struct BondCylinderStyle {
+    start_atom_radius: f32,
+    end_atom_radius: f32,
+    start_color: Color32,
+    end_color: Color32,
+    involves_stick: bool,
+}
+
+const BOND_CAP_BURY_EPSILON: f32 = 0.001;
 
 /// Per-atom drawing inputs resolved once per frame: whether the atom is drawn in
 /// the ball-and-stick scene, its effective [`AtomStyle`], and its render color.
@@ -60,6 +72,39 @@ pub(super) fn build_atom_draw_table(
         .collect()
 }
 
+pub(super) fn effective_stick_degrees(structure: &Structure, atom_draw: &[AtomDraw]) -> Vec<usize> {
+    let mut degrees = vec![0; structure.atoms.len()];
+    for bond in &structure.bonds {
+        if bond.a == bond.b {
+            continue;
+        }
+        let (Some(a), Some(b)) = (atom_draw.get(bond.a), atom_draw.get(bond.b)) else {
+            continue;
+        };
+        if !(a.visible && b.visible)
+            || !(a.style.draws_stick_bonds() || b.style.draws_stick_bonds())
+        {
+            continue;
+        }
+        let (Some(atom_a), Some(atom_b)) =
+            (structure.atoms.get(bond.a), structure.atoms.get(bond.b))
+        else {
+            continue;
+        };
+        let length_squared = (atom_b.position - atom_a.position).norm_squared();
+        if !length_squared.is_finite() || length_squared <= 1e-10 {
+            continue;
+        }
+        if a.style == AtomStyle::Stick {
+            degrees[bond.a] += 1;
+        }
+        if b.style == AtomStyle::Stick {
+            degrees[bond.b] += 1;
+        }
+    }
+    degrees
+}
+
 pub(crate) fn build_ball_and_stick_scene(
     structure: &Structure,
     geometry: &ViewportGeometry,
@@ -68,6 +113,7 @@ pub(crate) fn build_ball_and_stick_scene(
     visual_state: &ViewportVisualState,
 ) -> RenderScene {
     let atom_draw = build_atom_draw_table(structure, selection, visual_state);
+    let stick_degrees = effective_stick_degrees(structure, &atom_draw);
 
     // An atom is drawn when its resolved style places it in the ball-and-stick
     // scene (i.e. not Hidden and not drawn via the cartoon path).
@@ -83,7 +129,7 @@ pub(crate) fn build_ball_and_stick_scene(
     for bond in &geometry.bonds {
         let a = atom_draw[bond.a];
         let b = atom_draw[bond.b];
-        if !(a.visible || b.visible) {
+        if !(a.visible && b.visible) {
             continue;
         }
         if a.style.draws_stick_bonds() || b.style.draws_stick_bonds() {
@@ -91,10 +137,13 @@ pub(crate) fn build_ball_and_stick_scene(
                 &mut opaque_triangles,
                 bond,
                 viewport,
-                bond_trim_radius(&structure.atoms[bond.a].element, a.style),
-                bond_trim_radius(&structure.atoms[bond.b].element, b.style),
-                a.color,
-                b.color,
+                BondCylinderStyle {
+                    start_atom_radius: bond_trim_radius(&structure.atoms[bond.a].element, a.style),
+                    end_atom_radius: bond_trim_radius(&structure.atoms[bond.b].element, b.style),
+                    start_color: a.color,
+                    end_color: b.color,
+                    involves_stick: a.style == AtomStyle::Stick || b.style == AtomStyle::Stick,
+                },
             );
         } else if a.style.draws_line_bonds() || b.style.draws_line_bonds() {
             push_split_bond_line(&mut lines, viewport, bond, structure, a.color, b.color);
@@ -105,12 +154,19 @@ pub(crate) fn build_ball_and_stick_scene(
         let index = atom_projection.index;
         let draw = atom_draw[index];
         let atom = &structure.atoms[index];
-        match atom_marker_radius(&atom.element, draw.style) {
+        let marker_radius = if draw.style == AtomStyle::Stick {
+            (stick_degrees[index] >= 2).then_some(SINGLE_BOND_RADIUS)
+        } else {
+            atom_marker_radius(&atom.element, draw.style)
+        };
+        match marker_radius {
             Some(mut radius) => {
-                if selection.primary() == Some(index) {
-                    radius *= 1.18;
-                } else if selection.contains(index) {
-                    radius *= 1.10;
+                if draw.style != AtomStyle::Stick {
+                    if selection.primary() == Some(index) {
+                        radius *= 1.18;
+                    } else if selection.contains(index) {
+                        radius *= 1.10;
+                    }
                 }
                 append_sphere_triangles(
                     &mut opaque_triangles,
@@ -213,15 +269,58 @@ fn append_atom_point(
     }
 }
 
+fn double_bond_profile(involves_stick: bool) -> (f32, f32) {
+    if involves_stick {
+        (STICK_DOUBLE_BOND_RADIUS, STICK_DOUBLE_BOND_OFFSET)
+    } else {
+        (MULTI_BOND_RADIUS, MULTI_BOND_OFFSET * 0.5)
+    }
+}
+
+fn triple_bond_profile(involves_stick: bool) -> (f32, f32) {
+    if involves_stick {
+        (STICK_TRIPLE_BOND_RADIUS, STICK_TRIPLE_BOND_OFFSET)
+    } else {
+        (MULTI_BOND_RADIUS, MULTI_BOND_OFFSET)
+    }
+}
+
+fn bond_bundle_envelope(bond_type: BondType, involves_stick: bool) -> f32 {
+    match bond_type {
+        BondType::Single => SINGLE_BOND_RADIUS,
+        BondType::Double | BondType::Triple if involves_stick => SINGLE_BOND_RADIUS,
+        BondType::Double => MULTI_BOND_OFFSET * 0.5 + MULTI_BOND_RADIUS,
+        BondType::Triple => MULTI_BOND_OFFSET + MULTI_BOND_RADIUS,
+        BondType::Aromatic => SINGLE_BOND_RADIUS.max(AROMATIC_DASH_OFFSET + AROMATIC_DASH_RADIUS),
+    }
+}
+
+fn embedded_axial_trim(atom_radius: f32, bundle_envelope: f32) -> f32 {
+    let tangent = (atom_radius * atom_radius - bundle_envelope * bundle_envelope)
+        .max(0.0)
+        .sqrt();
+    (tangent - BOND_CAP_BURY_EPSILON).max(0.0)
+}
+
+fn aromatic_dash_centerline(cursor: f32, length: f32) -> Option<(f32, f32)> {
+    let visible_end = (cursor + AROMATIC_DASH_LENGTH).min(length);
+    let centerline_start = cursor + AROMATIC_DASH_RADIUS;
+    let centerline_end = visible_end - AROMATIC_DASH_RADIUS;
+    if centerline_end - centerline_start <= 0.0001 {
+        return None;
+    }
+    Some((centerline_start, centerline_end))
+}
+
 fn append_bond_triangles(
     triangles: &mut Vec<PrimitiveTriangle>,
     bond: &RenderedBondSegment,
     viewport: &Projector,
-    start_trim: f32,
-    end_trim: f32,
-    start_color: Color32,
-    end_color: Color32,
+    style: BondCylinderStyle,
 ) {
+    let bundle_envelope = bond_bundle_envelope(bond.bond_type, style.involves_stick);
+    let start_trim = embedded_axial_trim(style.start_atom_radius, bundle_envelope);
+    let end_trim = embedded_axial_trim(style.end_atom_radius, bundle_envelope);
     let Some(trimmed) = trimmed_bond_segment(bond.start, bond.end, start_trim, end_trim) else {
         return;
     };
@@ -242,15 +341,16 @@ fn append_bond_triangles(
             },
             SplitCylinderStyle {
                 radius: SINGLE_BOND_RADIUS,
-                start_color,
-                end_color,
+                start_color: style.start_color,
+                end_color: style.end_color,
                 orientation_hint: offset_direction,
             },
             split_caps,
         ),
         BondType::Double => {
+            let (radius, offset_distance) = double_bond_profile(style.involves_stick);
             for offset_sign in [-1.0_f32, 1.0] {
-                let offset = offset_direction * (MULTI_BOND_OFFSET * offset_sign * 0.5);
+                let offset = offset_direction * (offset_distance * offset_sign);
                 append_split_cylinder(
                     triangles,
                     viewport,
@@ -259,9 +359,9 @@ fn append_bond_triangles(
                         end: trimmed.end + offset,
                     },
                     SplitCylinderStyle {
-                        radius: MULTI_BOND_RADIUS,
-                        start_color,
-                        end_color,
+                        radius,
+                        start_color: style.start_color,
+                        end_color: style.end_color,
                         orientation_hint: offset_direction,
                     },
                     split_caps,
@@ -269,6 +369,7 @@ fn append_bond_triangles(
             }
         }
         BondType::Triple => {
+            let (radius, offset_distance) = triple_bond_profile(style.involves_stick);
             append_split_cylinder(
                 triangles,
                 viewport,
@@ -277,15 +378,15 @@ fn append_bond_triangles(
                     end: trimmed.end,
                 },
                 SplitCylinderStyle {
-                    radius: MULTI_BOND_RADIUS,
-                    start_color,
-                    end_color,
+                    radius,
+                    start_color: style.start_color,
+                    end_color: style.end_color,
                     orientation_hint: offset_direction,
                 },
                 split_caps,
             );
             for offset_sign in [-1.0_f32, 1.0] {
-                let offset = offset_direction * (MULTI_BOND_OFFSET * offset_sign);
+                let offset = offset_direction * (offset_distance * offset_sign);
                 append_split_cylinder(
                     triangles,
                     viewport,
@@ -294,9 +395,9 @@ fn append_bond_triangles(
                         end: trimmed.end + offset,
                     },
                     SplitCylinderStyle {
-                        radius: MULTI_BOND_RADIUS,
-                        start_color,
-                        end_color,
+                        radius,
+                        start_color: style.start_color,
+                        end_color: style.end_color,
                         orientation_hint: offset_direction,
                     },
                     split_caps,
@@ -313,33 +414,36 @@ fn append_bond_triangles(
                 },
                 SplitCylinderStyle {
                     radius: SINGLE_BOND_RADIUS,
-                    start_color,
-                    end_color,
+                    start_color: style.start_color,
+                    end_color: style.end_color,
                     orientation_hint: offset_direction,
                 },
                 split_caps,
             );
 
-            let dashed_start = trimmed.start + offset_direction * AROMATIC_DASH_OFFSET;
+            let dash_origin = trimmed.start + offset_direction * AROMATIC_DASH_OFFSET;
             let dash_axis = trimmed.axis;
             let mut cursor = 0.0;
             while cursor < trimmed.length {
-                let dash_end = (cursor + AROMATIC_DASH_LENGTH).min(trimmed.length);
-                append_split_cylinder(
-                    triangles,
-                    viewport,
-                    CylinderSpan {
-                        start: dashed_start + dash_axis * cursor,
-                        end: dashed_start + dash_axis * dash_end,
-                    },
-                    SplitCylinderStyle {
-                        radius: AROMATIC_DASH_RADIUS,
-                        start_color,
-                        end_color,
-                        orientation_hint: offset_direction,
-                    },
-                    split_caps,
-                );
+                if let Some((dash_start, dash_end)) =
+                    aromatic_dash_centerline(cursor, trimmed.length)
+                {
+                    append_split_cylinder(
+                        triangles,
+                        viewport,
+                        CylinderSpan {
+                            start: dash_origin + dash_axis * dash_start,
+                            end: dash_origin + dash_axis * dash_end,
+                        },
+                        SplitCylinderStyle {
+                            radius: AROMATIC_DASH_RADIUS,
+                            start_color: style.start_color,
+                            end_color: style.end_color,
+                            orientation_hint: offset_direction,
+                        },
+                        split_caps,
+                    );
+                }
                 cursor += AROMATIC_DASH_LENGTH + AROMATIC_GAP_LENGTH;
             }
         }
@@ -402,7 +506,7 @@ fn bond_offset_direction(
 mod tests {
     use super::super::scene::build_viewport_geometry;
     use super::*;
-    use crate::domain::{Atom, Structure};
+    use crate::domain::{Atom, Bond, Structure};
     use crate::frontend::{AtomSelection, state::AtomStyle};
     use eframe::egui::{Pos2, Rect, Vec2};
     use nalgebra::Point3;
@@ -469,6 +573,42 @@ mod tests {
         visual
     }
 
+    fn assert_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "expected {expected}, got {actual}"
+        );
+    }
+
+    fn stick_bond_triangle_count(bond_type: BondType) -> usize {
+        let structure = Structure::with_bonds(
+            "stick bond",
+            vec![
+                Atom {
+                    element: "C".to_string(),
+                    position: Point3::new(-0.5, 0.0, 0.0),
+                    charge: 0.0,
+                },
+                Atom {
+                    element: "C".to_string(),
+                    position: Point3::new(0.5, 0.0, 0.0),
+                    charge: 0.0,
+                },
+            ],
+            vec![Bond::with_type(0, 1, bond_type)],
+        );
+        let viewport = test_projector();
+        let geometry = build_viewport_geometry(&structure, &viewport);
+        build_ball_and_stick_scene(
+            &structure,
+            &geometry,
+            &viewport,
+            &AtomSelection::default(),
+            &all_atoms_styled(2, AtomStyle::Stick),
+        )
+        .triangle_count()
+    }
+
     #[test]
     fn small_systems_use_full_sphere_meshes() {
         // Spheres are hundreds of triangles each, far above the dots LOD.
@@ -499,6 +639,56 @@ mod tests {
     }
 
     #[test]
+    fn stick_bond_orders_keep_independent_rounded_rods() {
+        let single = stick_bond_triangle_count(BondType::Single);
+        assert!(single > 0);
+        assert_eq!(stick_bond_triangle_count(BondType::Double), single * 2);
+        assert_eq!(stick_bond_triangle_count(BondType::Triple), single * 3);
+        assert_eq!(stick_bond_triangle_count(BondType::Aromatic), single * 4);
+    }
+
+    #[test]
+    fn ball_bond_trims_bury_the_full_bundle_envelope() {
+        let atom_radius = 0.6;
+        for (bond_type, involves_stick) in [
+            (BondType::Single, false),
+            (BondType::Double, true),
+            (BondType::Triple, true),
+            (BondType::Double, false),
+            (BondType::Triple, false),
+            (BondType::Aromatic, false),
+        ] {
+            let envelope = bond_bundle_envelope(bond_type, involves_stick);
+            let trim = embedded_axial_trim(atom_radius, envelope);
+            assert!(trim * trim + envelope * envelope < atom_radius * atom_radius);
+            let tangent = (atom_radius * atom_radius - envelope * envelope)
+                .max(0.0)
+                .sqrt();
+            assert_close(trim, tangent - BOND_CAP_BURY_EPSILON);
+        }
+
+        assert_eq!(
+            embedded_axial_trim(AROMATIC_DASH_RADIUS, SINGLE_BOND_RADIUS),
+            0.0
+        );
+    }
+
+    #[test]
+    fn aromatic_dash_centerlines_preserve_visible_length_and_gap() {
+        let first = aromatic_dash_centerline(0.0, 1.0).expect("first dash");
+        let pitch = AROMATIC_DASH_LENGTH + AROMATIC_GAP_LENGTH;
+        let second = aromatic_dash_centerline(pitch, 1.0).expect("second dash");
+
+        assert_close(first.0 - AROMATIC_DASH_RADIUS, 0.0);
+        assert_close(first.1 + AROMATIC_DASH_RADIUS, AROMATIC_DASH_LENGTH);
+        assert_close(
+            second.0 - AROMATIC_DASH_RADIUS - (first.1 + AROMATIC_DASH_RADIUS),
+            AROMATIC_GAP_LENGTH,
+        );
+        assert!(aromatic_dash_centerline(0.8, 0.8 + AROMATIC_DASH_RADIUS * 2.0).is_none());
+    }
+
+    #[test]
     fn apply_atom_styles_stays_sparse_against_category_default() {
         // Grid atoms have no residue → category Other → software default
         // BallAndStick.
@@ -514,7 +704,6 @@ mod tests {
 
     #[test]
     fn wireframe_bond_splits_into_two_atom_colors() {
-        use crate::domain::{Bond, BondType};
         // An O–H bond drawn as wireframe must split into two half-segments — one
         // O-colored, one H-colored — so H–O–H reads as a colored V, not a single
         // line that looks like O–O–O.

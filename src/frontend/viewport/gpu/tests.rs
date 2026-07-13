@@ -72,8 +72,27 @@ fn camera_uniform_projection_matches_cpu_projector() {
 }
 
 #[test]
-fn unit_cylinder_is_two_triangles_per_side() {
-    assert_eq!(unit_cylinder_vertices().len(), CYLINDER_SIDES * 6);
+fn unit_capsule_has_side_wall_and_hemisphere_caps() {
+    let vertices = unit_capsule_vertices();
+    let cap_vertices_per_side = (CAPSULE_CAP_RINGS - 1) * 6 + 3;
+    assert_eq!(
+        vertices.len(),
+        CYLINDER_SIDES * (6 + cap_vertices_per_side * 2)
+    );
+
+    let mut min_axial = f32::INFINITY;
+    let mut max_axial = f32::NEG_INFINITY;
+    for vertex in vertices {
+        let [x, y, fraction, axial_offset] = vertex.local;
+        let normal_length_squared = x * x + y * y + axial_offset * axial_offset;
+        assert!((normal_length_squared - 1.0).abs() < 1e-5);
+        assert!((0.0..=1.0).contains(&fraction));
+        min_axial = min_axial.min(fraction + axial_offset);
+        max_axial = max_axial.max(fraction + axial_offset);
+    }
+
+    assert!((min_axial + 1.0).abs() < 1e-6);
+    assert!((max_axial - 2.0).abs() < 1e-6);
 }
 
 fn benzene() -> Structure {

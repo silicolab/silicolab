@@ -45,13 +45,20 @@ const SPHERE_LATITUDE_SEGMENTS: usize = 10;
 const SPHERE_LONGITUDE_SEGMENTS: usize = 18;
 const BOND_RADIAL_SEGMENTS: usize = 14;
 const SINGLE_BOND_RADIUS: f32 = 0.115;
+/// Clear spacing between adjacent rods in a multiple-bond bundle. The bundle's
+/// full envelope stays equal to the single-bond diameter.
+const STICK_MULTI_BOND_GAP: f32 = SINGLE_BOND_RADIUS * 0.12;
+const STICK_DOUBLE_BOND_RADIUS: f32 = SINGLE_BOND_RADIUS * 0.5 - STICK_MULTI_BOND_GAP * 0.25;
+const STICK_DOUBLE_BOND_OFFSET: f32 = SINGLE_BOND_RADIUS - STICK_DOUBLE_BOND_RADIUS;
+const STICK_TRIPLE_BOND_RADIUS: f32 = (SINGLE_BOND_RADIUS - STICK_MULTI_BOND_GAP) / 3.0;
+const STICK_TRIPLE_BOND_OFFSET: f32 = SINGLE_BOND_RADIUS - STICK_TRIPLE_BOND_RADIUS;
 const MULTI_BOND_RADIUS: f32 = 0.082;
+const MULTI_BOND_OFFSET: f32 = 0.18;
 /// Radius of the thin rod a Wireframe (line) bond becomes on the GPU path, which
 /// has no screen-space line primitive. Wireframe atoms draw no node, so the bond
 /// carries the whole representation; kept well under [`SINGLE_BOND_RADIUS`] so
 /// wireframe still reads as light lines next to solid sticks.
 const WIREFRAME_BOND_RADIUS: f32 = 0.05;
-const MULTI_BOND_OFFSET: f32 = 0.18;
 const AROMATIC_DASH_RADIUS: f32 = 0.052;
 const AROMATIC_DASH_OFFSET: f32 = 0.17;
 const AROMATIC_DASH_LENGTH: f32 = 0.26;
@@ -125,30 +132,21 @@ fn atom_ball_radius(element: &str) -> f32 {
     element_style(element).display_radius * BALL_RADIUS_SCALE
 }
 
-/// World-space radius of the solid sphere drawn at an atom of `style`, before any
-/// selection-highlight scaling, or `None` when the style draws no sphere at the
-/// atom center (the flat "dots" disc and bond-only Wireframe own their markers).
-///
-/// Stick is deliberately special: its node matches the *bond* radius, not the
-/// element, so a bonded chain reads as one smooth uniform tube with rounded
-/// elbows — and a lone, bond-less atom still shows as a small node — rather than
-/// the fat element-sized ball of ball-and-stick. Sphere and ball-and-stick scale
-/// the element's display radius (full van der Waals, and [`BALL_RADIUS_SCALE`] of
-/// it, respectively).
+/// World-space radius of the solid atom marker drawn for `style`, before any
+/// selection-highlight scaling. Stick joints are topology-dependent connectors,
+/// not atom markers, and are emitted separately by the molecule builders.
 fn atom_marker_radius(element: &str, style: AtomStyle) -> Option<f32> {
     match style {
         AtomStyle::Sphere => Some(atom_ball_radius(element) / BALL_RADIUS_SCALE),
         AtomStyle::BallAndStick => Some(atom_ball_radius(element)),
-        AtomStyle::Stick => Some(SINGLE_BOND_RADIUS),
         _ => None,
     }
 }
 
 /// How far to sink a bond cylinder into the atom at each end so the cylinder cap
 /// is hidden. For ball styles the cylinder disappears inside the element-sized
-/// ball; for Stick (and bond-only neighbours) the cylinder runs all the way to
-/// the atom center, where the bond-sized joint node caps it flush — trimming it
-/// back would expose the flat cap as a protruding disc around the small node.
+/// ball; bond-only styles run to the atom center so rounded terminal caps and
+/// topology-dependent joints meet at the actual bond vertex.
 fn bond_trim_radius(element: &str, style: AtomStyle) -> f32 {
     match style {
         AtomStyle::Sphere | AtomStyle::BallAndStick => atom_ball_radius(element),
