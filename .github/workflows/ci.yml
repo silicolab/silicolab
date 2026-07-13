@@ -33,6 +33,8 @@ jobs:
       pull-requests: read
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      worker: ${{ steps.filter.outputs.worker }}
+      worker_tooling: ${{ steps.filter.outputs.worker_tooling }}
     steps:
       # Run the Rust jobs unless every changed file is inert: list the PR's files
       # and grep for a non-inert one. (Don't use a dorny/paths-filter "all except
@@ -44,8 +46,10 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
-          files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate -q '.[].filename') || files=""
-          echo "Changed files:"
+          # Include both sides of renames: classifying only the destination can
+          # miss code removed from a worker path and moved into an inert tree.
+          files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate -q '.[] | .filename, (.previous_filename // empty)') || files=""
+          echo "Changed paths:"
           printf '%s\n' "$files"
           # A PR touching only inert files (markdown, the docs/, docs-site/ and
           # branding/ trees, the docs workflow, root .rules/.gitignore/LICENSE)
@@ -53,15 +57,25 @@ jobs:
           # non-inert: Rust embeds its fonts/icons and builds the Windows icon
           # from it. Fail safe to running.
           inert='(\.md$|^docs(-site)?/|^branding/|^\.github/workflows/docs\.yml$|^\.rules$|^\.gitignore$|^LICENSE(-[A-Za-z0-9]+)?$)'
-          if [ -z "$files" ] || printf '%s\n' "$files" | grep -qvE "$inert"; then
+          worker_paths='^(compute-core/|silicolab-compute/|xtask/|\.cargo/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.github/actions/setup-rust/|\.github/workflows/ci\.yml$)'
+          worker_tooling_paths='^(xtask/|\.cargo/|Cargo\.(toml|lock)$|compute-core/Cargo\.toml$|silicolab-compute/Cargo\.toml$|rust-toolchain\.toml$|\.github/actions/setup-rust/|\.github/workflows/ci\.yml$)'
+          if [ -z "$files" ]; then
+            # Fail safe when the API is unavailable: run every check, including
+            # the cross-host worker build.
             code=true
+            worker=true
+            worker_tooling=true
           else
-            code=false
+            if printf '%s\n' "$files" | grep -qvE "$inert"; then code=true; else code=false; fi
+            if printf '%s\n' "$files" | grep -qE "$worker_paths"; then worker=true; else worker=false; fi
+            if printf '%s\n' "$files" | grep -qE "$worker_tooling_paths"; then worker_tooling=true; else worker_tooling=false; fi
           fi
           echo "code=$code" | tee -a "$GITHUB_OUTPUT"
+          echo "worker=$worker" | tee -a "$GITHUB_OUTPUT"
+          echo "worker_tooling=$worker_tooling" | tee -a "$GITHUB_OUTPUT"
 
-  fmt:
-    name: Format
+  static-checks:
+    name: Static checks
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
@@ -70,7 +84,38 @@ jobs:
       - uses: ./.github/actions/setup-rust
         with:
           components: rustfmt
-      - run: cargo fmt --all --check
+      - name: Format
+        run: cargo fmt --all --check
+
+      # Scope to the musl target (drops host-only pure-Rust bindings) and to the
+      # worker's own subgraph. cc is the canonical native-build signal.
+      - name: Assert the worker pulls no C-toolchain / native build dependency
+        if: needs.changes.outputs.worker == 'true'
+        run: |
+          TREE=$(cargo tree -p silicolab-compute --target x86_64-unknown-linux-musl -e normal,build --prefix none | sort -u)
+          echo "$TREE"
+          if echo "$TREE" | grep -qiE '^(cc|ring|aws-lc-rs|aws-lc-sys|openssl-sys) '; then
+            echo "::error::silicolab-compute pulls a C-toolchain / native build dependency; keep it pure Rust"
+            exit 1
+          fi
+
+      # Keep the limit in sync with .rules.
+      - name: Assert no Rust file exceeds 800 physical lines
+        run: |
+          limit=800
+          fail=0
+          while IFS= read -r f; do
+            n=$(wc -l < "$f")
+            if [ "$n" -gt "$limit" ]; then
+              echo "::error file=$f::$f has $n physical lines (limit $limit)"
+              fail=1
+            fi
+          done < <(git ls-files '*.rs')
+          if [ "$fail" -ne 0 ]; then
+            echo "Split the files above; see the size rule in .rules."
+            exit 1
+          fi
+          echo "All Rust source files are within the $limit physical-line limit."
 
   # `-D warnings` lives here, not in the workflow-level env: a warning is a lint
   # verdict, and only this job reports lint verdicts. Denying warnings across
@@ -95,37 +140,11 @@ jobs:
       - name: Lint workspace with all features
         run: cargo clippy --workspace --all-targets --all-features
 
-  # Guard dependency purity separately from the cross-platform build matrix.
-  # This graph query identifies which native dependency caused the regression.
-  worker-pure-rust:
-    name: Worker is pure Rust
-    needs: changes
-    if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: ./.github/actions/setup-rust
-      # Scope to the musl target (drops host-only pure-Rust bindings) and to the
-      # worker's own subgraph (its compute-core dep has networking off, so no TLS
-      # stack and no cc/ring). cc is the canonical native-build signal.
-      - name: Assert the worker pulls no C-toolchain / native build dependency
-        run: |
-          TREE=$(cargo tree -p silicolab-compute --target x86_64-unknown-linux-musl -e normal,build --prefix none | sort -u)
-          echo "$TREE"
-          if echo "$TREE" | grep -qiE '^(cc|ring|aws-lc-rs|aws-lc-sys|openssl-sys) '; then
-            echo "::error::silicolab-compute pulls a C-toolchain / native build dependency; keep it pure Rust"
-            exit 1
-          fi
-
   worker-build:
-    name: Worker build (${{ matrix.os }})
+    name: Worker build (ubuntu-latest)
     needs: changes
-    if: needs.changes.outputs.code == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    if: needs.changes.outputs.worker == 'true'
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/setup-rust
@@ -135,35 +154,28 @@ jobs:
       - name: Build and validate the development worker ELF
         run: cargo xtask build-dev-worker
       - name: Smoke-test the worker version command
-        if: runner.os == 'Linux'
         run: ./target/x86_64-unknown-linux-musl/release/silicolab-compute --version
 
-  # Enforce the .rules size cap: every Rust source file stays under 800 physical
-  # lines. Plain line counting, no toolchain — keeps files small enough for an
-  # agent to hold whole in context. Keep the limit here in sync with .rules.
-  file-size:
-    name: File size
+  # Windows and macOS validate the contributor-facing cross-host build plumbing,
+  # not a distinct production artifact. Run them only when that plumbing or the
+  # worker dependency graph changes, and build cold to avoid low-value caches.
+  # Host tests already cover ordinary compute-core source portability.
+  worker-build-cross-host:
+    name: Worker build (${{ matrix.os }})
     needs: changes
-    if: needs.changes.outputs.code == 'true'
-    runs-on: ubuntu-latest
+    if: needs.changes.outputs.worker_tooling == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
-      - name: Assert no Rust file exceeds 800 physical lines
-        run: |
-          limit=800
-          fail=0
-          while IFS= read -r f; do
-            n=$(wc -l < "$f")
-            if [ "$n" -gt "$limit" ]; then
-              echo "::error file=$f::$f has $n physical lines (limit $limit)"
-              fail=1
-            fi
-          done < <(git ls-files '*.rs')
-          if [ "$fail" -ne 0 ]; then
-            echo "Split the files above; see the size rule in .rules."
-            exit 1
-          fi
-          echo "All Rust source files are within the $limit physical-line limit."
+      - uses: ./.github/actions/setup-rust
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: Build and validate the development worker ELF
+        run: cargo xtask build-dev-worker
 
   test:
     name: Test (${{ matrix.os }})
@@ -195,7 +207,7 @@ jobs:
   ci-complete:
     name: CI complete
     if: always()
-    needs: [changes, fmt, clippy, worker-pure-rust, worker-build, file-size, test]
+    needs: [changes, static-checks, clippy, worker-build, worker-build-cross-host, test]
     runs-on: ubuntu-latest
     steps:
       - name: Require every upstream job to have succeeded or been skipped
