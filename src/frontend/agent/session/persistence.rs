@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use crate::backend::config::AssistantModelSelection;
 use crate::backend::storage::{
     PersistedAssistantConversation, PersistedChatMessage, PersistedContentBlock,
     PersistedReasoningBlob, PersistedRole, PersistedTranscriptEntry, PersistedUsage,
@@ -28,9 +29,12 @@ impl AgentSession {
         }
     }
 
-    pub fn from_project_snapshot(snapshot: ProjectAssistantSnapshot) -> Self {
+    pub fn from_project_snapshot(
+        snapshot: ProjectAssistantSnapshot,
+        default_selection: AssistantModelSelection,
+    ) -> Self {
         if snapshot.conversations.is_empty() {
-            return Self::default();
+            return Self::with_selection(default_selection);
         }
         let mut conversations: Vec<AssistantConversation> = snapshot
             .conversations
@@ -39,7 +43,7 @@ impl AgentSession {
             .map(restore_conversation)
             .collect();
         if conversations.is_empty() {
-            return Self::default();
+            return Self::with_selection(default_selection);
         }
         conversations.sort_by_key(|conversation| conversation.id.raw());
         let active_conversation = conversations
@@ -94,6 +98,8 @@ fn persist_conversation(conversation: &AssistantConversation) -> PersistedAssist
     PersistedAssistantConversation {
         id: conversation.id.raw(),
         title: conversation.title.clone(),
+        provider: conversation.selection.provider.clone(),
+        model: conversation.selection.model.clone(),
         history: resumable.history.iter().map(persist_message).collect(),
         transcript,
         input: conversation.input.clone(),
@@ -105,7 +111,11 @@ fn persist_conversation(conversation: &AssistantConversation) -> PersistedAssist
 fn restore_conversation(payload: PersistedAssistantConversation) -> AssistantConversation {
     let id = AssistantConversationId::new(payload.id);
     let title = normalize_title(&payload.title);
-    let mut conversation = AssistantConversation::new(id, title);
+    let selection = AssistantModelSelection {
+        provider: payload.provider,
+        model: payload.model,
+    };
+    let mut conversation = AssistantConversation::new(id, title, selection);
     conversation.history = payload.history.into_iter().map(restore_message).collect();
     conversation.transcript = payload
         .transcript

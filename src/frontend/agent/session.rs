@@ -6,6 +6,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::{Deref, DerefMut};
 
+use crate::backend::config::AssistantModelSelection;
 use crate::frontend::console::RiskLevel;
 use crate::io::llm::types::{ChatMessage, ContentBlock, ToolCall, Usage};
 
@@ -107,6 +108,7 @@ impl AssistantConversationId {
 pub struct AssistantConversation {
     pub id: AssistantConversationId,
     pub title: String,
+    pub selection: AssistantModelSelection,
     /// Neutral conversation history replayed to the provider each turn (includes
     /// prior assistant turns with their opaque reasoning blobs). The system
     /// prompt is *not* stored here — it is rebuilt per turn into `LlmConfig`.
@@ -157,10 +159,11 @@ pub struct AssistantConversation {
 }
 
 impl AssistantConversation {
-    fn new(id: AssistantConversationId, title: String) -> Self {
+    fn new(id: AssistantConversationId, title: String, selection: AssistantModelSelection) -> Self {
         Self {
             id,
             title,
+            selection,
             history: Vec::new(),
             transcript: Vec::new(),
             input: String::new(),
@@ -281,11 +284,18 @@ pub struct AgentSession {
 
 impl Default for AgentSession {
     fn default() -> Self {
+        Self::with_selection(AssistantModelSelection::default())
+    }
+}
+
+impl AgentSession {
+    pub fn with_selection(selection: AssistantModelSelection) -> Self {
         let active_conversation = AssistantConversationId::new(1);
         Self {
             conversations: vec![AssistantConversation::new(
                 active_conversation,
                 "Chat 1".to_string(),
+                selection,
             )],
             active_conversation,
             skills: Vec::new(),
@@ -382,7 +392,7 @@ impl AgentSession {
         !active.is_busy() && active.phase != AgentPhase::AwaitingApproval
     }
 
-    pub fn start_new_conversation(&mut self) {
+    pub fn start_new_conversation(&mut self, selection: AssistantModelSelection) {
         if !self.can_manage_conversations() {
             return;
         }
@@ -393,7 +403,7 @@ impl AgentSession {
         let title = format!("Chat {}", self.next_conversation_number);
         self.next_conversation_number += 1;
         self.conversations
-            .push(AssistantConversation::new(id, title));
+            .push(AssistantConversation::new(id, title, selection));
         self.active_conversation = id;
     }
 
@@ -437,7 +447,8 @@ impl AgentSession {
                 let conversation = self.active_mut();
                 let id = conversation.id;
                 let title = conversation.title.clone();
-                *conversation = AssistantConversation::new(id, title);
+                let selection = conversation.selection.clone();
+                *conversation = AssistantConversation::new(id, title, selection);
             }
             self.renaming_conversation = None;
             self.rename_buffer.clear();
@@ -504,6 +515,10 @@ mod tests {
         }
     }
 
+    fn selection() -> AssistantModelSelection {
+        AssistantModelSelection::default()
+    }
+
     #[test]
     fn new_conversation_switches_to_empty_state_and_preserves_old_content() {
         let mut session = AgentSession::default();
@@ -514,7 +529,7 @@ mod tests {
             .push(TranscriptEntry::User("old".to_string()));
         session.input = "draft".to_string();
 
-        session.start_new_conversation();
+        session.start_new_conversation(selection());
 
         assert_ne!(session.active_conversation, first);
         assert!(session.history.is_empty());
@@ -556,7 +571,7 @@ mod tests {
             ..Usage::default()
         });
 
-        session.start_new_conversation();
+        session.start_new_conversation(selection());
         let second = session.active_conversation;
         session.history.push(ChatMessage::user_text("second"));
         session.input = "second draft".to_string();
@@ -579,7 +594,11 @@ mod tests {
     fn project_snapshot_restores_conversations_without_runtime_state() {
         let mut session = AgentSession::default();
         let first = session.active_conversation;
-        session.start_new_conversation();
+        let second_selection = AssistantModelSelection {
+            provider: "openai".to_string(),
+            model: "gpt-5.5".to_string(),
+        };
+        session.start_new_conversation(second_selection.clone());
         session
             .transcript
             .push(TranscriptEntry::Assistant("second".to_string()));
@@ -600,10 +619,11 @@ mod tests {
         session.active_conversation = active;
 
         let snapshot = session.project_snapshot();
-        let restored = AgentSession::from_project_snapshot(snapshot);
+        let restored = AgentSession::from_project_snapshot(snapshot, selection());
 
         assert_eq!(restored.active_conversation, active);
         assert_eq!(restored.conversations.len(), 2);
+        assert_eq!(restored.active().selection, second_selection);
         let first_restored = restored
             .conversations
             .iter()
@@ -619,12 +639,27 @@ mod tests {
     }
 
     #[test]
+    fn empty_project_snapshot_uses_configured_default_selection() {
+        let default_selection = AssistantModelSelection {
+            provider: "openai".to_string(),
+            model: "gpt-5.5".to_string(),
+        };
+
+        let restored = AgentSession::from_project_snapshot(
+            crate::backend::storage::ProjectAssistantSnapshot::default(),
+            default_selection.clone(),
+        );
+
+        assert_eq!(restored.selection, default_selection);
+    }
+
+    #[test]
     fn deleting_active_conversation_selects_neighbor() {
         let mut session = AgentSession::default();
         let first = session.active_conversation;
-        session.start_new_conversation();
+        session.start_new_conversation(selection());
         let second = session.active_conversation;
-        session.start_new_conversation();
+        session.start_new_conversation(selection());
         let third = session.active_conversation;
 
         session.switch_conversation(second);
@@ -666,7 +701,7 @@ mod tests {
         let mut session = AgentSession::default();
         let original = session.active_conversation;
         session.phase = AgentPhase::AwaitingModel;
-        session.start_new_conversation();
+        session.start_new_conversation(selection());
         assert_eq!(session.active_conversation, original);
         assert_eq!(session.conversations.len(), 1);
 
@@ -690,7 +725,8 @@ mod tests {
 
     #[test]
     fn flush_current_backlog_clears_backlog() {
-        let mut conv = AssistantConversation::new(AssistantConversationId::new(1), "c".into());
+        let mut conv =
+            AssistantConversation::new(AssistantConversationId::new(1), "c".into(), selection());
         conv.note_backlog_start("compare methods".into(), 0);
         conv.flush_current_backlog();
         assert!(conv.current_backlog.is_none());
@@ -698,14 +734,16 @@ mod tests {
 
     #[test]
     fn flush_without_backlog_is_noop() {
-        let mut conv = AssistantConversation::new(AssistantConversationId::new(1), "c".into());
+        let mut conv =
+            AssistantConversation::new(AssistantConversationId::new(1), "c".into(), selection());
         conv.flush_current_backlog();
         assert!(conv.current_backlog.is_none());
     }
 
     #[test]
     fn resolve_drops_backlog_that_spawned_a_job() {
-        let mut conv = AssistantConversation::new(AssistantConversationId::new(1), "c".into());
+        let mut conv =
+            AssistantConversation::new(AssistantConversationId::new(1), "c".into(), selection());
         conv.note_backlog_start("optimize this".into(), 0);
         conv.resolve_current_backlog(1);
         assert!(conv.current_backlog.is_none());
@@ -713,7 +751,8 @@ mod tests {
 
     #[test]
     fn resolve_clears_backlog_when_no_new_job() {
-        let mut conv = AssistantConversation::new(AssistantConversationId::new(1), "c".into());
+        let mut conv =
+            AssistantConversation::new(AssistantConversationId::new(1), "c".into(), selection());
         conv.note_backlog_start("just answer".into(), 2);
         conv.resolve_current_backlog(2);
         assert!(conv.current_backlog.is_none());

@@ -371,6 +371,9 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::DeleteAssistantConversation(id) => {
             crate::frontend::agent::delete_assistant_conversation(state, id)
         }
+        AppAction::SwitchAssistantConversationModel { provider, model } => {
+            crate::frontend::agent::switch_assistant_conversation_model(state, &provider, &model)
+        }
         AppAction::CancelAgent => crate::frontend::agent::cancel_agent(state, ctx),
         AppAction::ApproveToolCall(id) => {
             crate::frontend::agent::approve_tool_call(state, &id, ctx)

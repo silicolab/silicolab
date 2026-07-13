@@ -201,8 +201,10 @@ mod tests {
 
         let config = AppConfig {
             assistant: AssistantConfig {
-                provider: "openai".to_string(),
-                model: "gpt-5.1".to_string(),
+                default_selection: crate::backend::config::AssistantModelSelection {
+                    provider: "openai".to_string(),
+                    model: "gpt-5.1".to_string(),
+                },
                 ..AssistantConfig::default()
             },
             ..AppConfig::default()
@@ -212,8 +214,8 @@ mod tests {
         // No temp file left behind after the rename.
         assert!(!path.with_extension("tmp").exists());
         let back = load_config_from(&path).expect("load back");
-        assert_eq!(back.assistant.provider, "openai");
-        assert_eq!(back.assistant.model, "gpt-5.1");
+        assert_eq!(back.assistant.default_selection.provider, "openai");
+        assert_eq!(back.assistant.default_selection.model, "gpt-5.1");
 
         let _ = fs::remove_dir_all(&dir);
     }

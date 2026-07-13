@@ -521,6 +521,8 @@ fn assistant_history_survives_save_and_load() {
         conversations: vec![PersistedAssistantConversation {
             id: 2,
             title: "Protein setup".to_string(),
+            provider: "openai".to_string(),
+            model: "gpt-5.5".to_string(),
             history: vec![
                 PersistedChatMessage {
                     role: PersistedRole::User,
@@ -622,6 +624,8 @@ fn corrupt_assistant_state_warns_but_project_loads() {
                 conversations: vec![PersistedAssistantConversation {
                     id: 1,
                     title: "Chat".to_string(),
+                    provider: "anthropic".to_string(),
+                    model: "claude-sonnet-4-6".to_string(),
                     history: Vec::new(),
                     transcript: Vec::new(),
                     input: String::new(),

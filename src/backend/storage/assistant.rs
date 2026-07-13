@@ -50,6 +50,8 @@ impl ProjectAssistantSnapshot {
 pub struct PersistedAssistantConversation {
     pub id: u64,
     pub title: String,
+    pub provider: String,
+    pub model: String,
     #[serde(default)]
     pub history: Vec<PersistedChatMessage>,
     #[serde(default)]

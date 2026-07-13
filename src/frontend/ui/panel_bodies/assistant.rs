@@ -10,7 +10,10 @@ use crate::frontend::{actions::AppAction, agent::AssistantConversationId, state:
 /// area's bottom margin (where the panel content rect clips) and the status bar.
 const COMPOSER_BOTTOM_PAD: f32 = 8.0;
 const ASSISTANT_SIDE_PAD: f32 = 8.0;
-pub(crate) const ASSISTANT_COMPOSER_HEIGHT: f32 = 58.0;
+/// Fixed two-row composer height. The text editor owns the full first row and
+/// the mode/model/actions own the second, so long input can never push the
+/// persistent Send/Stop controls outside the panel.
+pub(crate) const ASSISTANT_COMPOSER_HEIGHT: f32 = 92.0;
 // Must stay >= an icon button's natural width (glyph advance + 2 * button_padding.x,
 // ~29px at the current 8px padding). This is both the buttons' `min_size` width and
 // the per-button term in `reserved_width`; keeping it >= natural makes min_size win,
@@ -33,7 +36,9 @@ pub(crate) fn render_assistant_panel(
     let pal = crate::frontend::theme::palette(ui);
     ui.set_width(ui.available_width());
 
-    let provider = registry::active_provider(&state.config.assistant);
+    let selection = state.ui.agent.selection.clone();
+    let provider = registry::provider_spec(&selection.provider).unwrap_or(&registry::PROVIDERS[0]);
+    let model_selected = !selection.model.trim().is_empty();
     // Cached (the live check reads env + the key store); refreshed off the hot path.
     let key_present = state.ui.agent.key_available.unwrap_or(false);
     // Cloned so the cards can render without holding a borrow on `state`.
@@ -69,6 +74,7 @@ pub(crate) fn render_assistant_panel(
 
     let panel_rect = ui.available_rect_before_wrap();
     let content_rect = panel_rect.shrink2(egui::vec2(ASSISTANT_SIDE_PAD, 0.0));
+    let mut open_assistant_settings = false;
     ui.scope_builder(
         egui::UiBuilder::new()
             .max_rect(content_rect)
@@ -77,18 +83,11 @@ pub(crate) fn render_assistant_panel(
             ui.set_width(content_rect.width());
 
             let toolbar_height = 32.0;
-            let status_height = 28.0
-                + if state.ui.agent.last_usage.is_some() {
-                    24.0
-                } else {
-                    0.0
-                };
             let panel_width = ui.available_width();
             let approval_height = approval_block_height(&gated_calls, panel_width);
             let running_height = running_strip_height(&running_jobs);
             let queued_height = queued_strip_height(&queued);
-            let footer_height = status_height
-                + approval_height
+            let footer_height = approval_height
                 + running_height
                 + queued_height
                 + ASSISTANT_COMPOSER_HEIGHT
@@ -117,10 +116,12 @@ pub(crate) fn render_assistant_panel(
                         .show(ui, |ui| {
                             ui.set_width(transcript_content_width);
                             if state.ui.agent.transcript.is_empty() {
-                                render_assistant_empty_state(
+                                open_assistant_settings |= render_assistant_empty_state(
                                     ui,
                                     &pal,
+                                    state.config.assistant.enabled,
                                     key_present,
+                                    model_selected,
                                     provider,
                                     transcript_content_width,
                                 );
@@ -176,42 +177,7 @@ pub(crate) fn render_assistant_panel(
                 },
             );
 
-            weak_panel_hairline(ui, 14);
-            ui.add_space(3.0);
-
-            assistant_inset_row(ui, status_height.max(18.0), |ui| {
-                ui.spacing_mut().item_spacing.y = 2.0;
-                ui.add(
-                    egui::Label::new(
-                        RichText::new(format!(
-                            "{} | {}",
-                            provider.label, state.config.assistant.model
-                        ))
-                        .small()
-                        .color(pal.text_tertiary),
-                    )
-                    .wrap_mode(egui::TextWrapMode::Wrap),
-                );
-                if let Some(usage) = &state.ui.agent.last_usage {
-                    let session = &state.ui.agent.session_usage;
-                    ui.add(
-                        egui::Label::new(
-                            RichText::new(format!(
-                                "last in {} out {}; session in {} out {}",
-                                compact(usage.input_total()),
-                                compact(usage.output),
-                                compact(session.input_total()),
-                                compact(session.output),
-                            ))
-                            .small()
-                            .color(pal.text_tertiary),
-                        )
-                        .wrap_mode(egui::TextWrapMode::Wrap),
-                    );
-                }
-            });
-
-            ui.add_space(3.0);
+            ui.add_space(6.0);
 
             if !gated_calls.is_empty() {
                 assistant_inset_row(ui, approval_height, |ui| {
@@ -235,11 +201,18 @@ pub(crate) fn render_assistant_panel(
                 ui.add_space(4.0);
             }
 
-            render_assistant_composer(state, ui, actions, &pal, &running_jobs, &queued);
+            open_assistant_settings |=
+                render_assistant_composer(state, ui, actions, &pal, &running_jobs, &queued);
 
             ui.add_space(COMPOSER_BOTTOM_PAD);
         },
     );
+    if open_assistant_settings {
+        state.ui.settings.search_query.clear();
+        state.ui.settings.selected_category =
+            crate::frontend::ui::settings_registry::SettingCategory::Assistant;
+        state.ui.layout.settings_open = true;
+    }
     ui.advance_cursor_after_rect(panel_rect);
 }
 
@@ -271,8 +244,29 @@ fn assistant_toolbar(
                 ASSISTANT_TOOLBAR_BUTTON_WIDTH,
                 ASSISTANT_TOOLBAR_BUTTON_HEIGHT,
             );
+            let delete_confirm_id = ("del_conversation", active_id);
+            let confirming_delete = crate::frontend::ui::widgets::destructive_confirmation_is_armed(
+                ui,
+                delete_confirm_id,
+            );
 
-            if is_renaming {
+            if confirming_delete {
+                let is_last = conversations.len() <= 1;
+                let (prompt, confirm_word) = if is_last {
+                    ("Clear this conversation?", "Clear")
+                } else {
+                    ("Delete this conversation?", "Delete")
+                };
+                if crate::frontend::ui::widgets::confirm_destructive(
+                    ui,
+                    delete_confirm_id,
+                    prompt,
+                    confirm_word,
+                    |ui| ui.button(confirm_word),
+                ) {
+                    actions.push(AppAction::DeleteAssistantConversation(active_id));
+                }
+            } else if is_renaming {
                 let reserved_width =
                     2.0 * ASSISTANT_TOOLBAR_BUTTON_WIDTH + 2.0 * ASSISTANT_TOOLBAR_GAP;
                 let edit_width = (ui.available_width() - reserved_width).max(72.0);
@@ -281,15 +275,23 @@ fn assistant_toolbar(
                     egui::TextEdit::singleline(&mut state.ui.agent.rename_buffer)
                         .desired_width(edit_width),
                 );
+                if !response.has_focus() {
+                    response.request_focus();
+                }
                 let name_filled = !state.ui.agent.rename_buffer.trim().is_empty();
                 let submit = response.lost_focus()
                     && ui.input(|input| input.key_pressed(egui::Key::Enter))
                     && name_filled;
+                let cancel = ui.input(|input| input.key_pressed(egui::Key::Escape));
                 if submit {
                     actions.push(AppAction::RenameAssistantConversation {
                         id: active_id,
                         title: state.ui.agent.rename_buffer.clone(),
                     });
+                }
+                if cancel {
+                    state.ui.agent.renaming_conversation = None;
+                    state.ui.agent.rename_buffer.clear();
                 }
                 if ui
                     .add_enabled(
@@ -379,7 +381,7 @@ fn assistant_toolbar(
                 };
                 if crate::frontend::ui::widgets::confirm_destructive(
                     ui,
-                    ("del_conversation", active_id),
+                    delete_confirm_id,
                     prompt,
                     confirm_word,
                     |ui| {
@@ -565,15 +567,129 @@ pub(crate) fn assistant_inset_row<R>(
     )
 }
 
+pub(super) fn render_assistant_model_picker(
+    state: &AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+    provider: &crate::frontend::agent::registry::ProviderSpec,
+    current_model: &str,
+    width: f32,
+) -> bool {
+    use crate::frontend::agent::registry;
+
+    let can_switch = state.ui.agent.can_manage_conversations();
+    let selected_label = provider
+        .models
+        .iter()
+        .find(|model| model.id == current_model)
+        .map(|model| model.label)
+        .unwrap_or(current_model);
+    let selected_label = if selected_label.trim().is_empty() {
+        "Choose model…".to_string()
+    } else {
+        compact_model_label(selected_label, if width < 76.0 { 8 } else { 14 })
+    };
+    let mut open_settings = false;
+    let response = egui::ComboBox::from_id_salt("assistant.conversation_model")
+        .selected_text(assistant_text(selected_label))
+        .width(width.max(28.0))
+        .truncate()
+        .show_ui(ui, |ui| {
+            crate::frontend::theme::stabilize_selectable_rows(ui);
+            ui.set_min_width(220.0);
+            for spec in registry::PROVIDERS {
+                ui.label(RichText::new(spec.label).small().strong());
+                let available = registry::api_key_for(spec).is_some();
+                let fetched = state
+                    .ui
+                    .agent
+                    .fetched_models
+                    .get(spec.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default();
+                let models = registry::merged_model_ids(spec, fetched);
+                if models.is_empty() {
+                    ui.label(
+                        RichText::new("Choose in Assistant settings")
+                            .small()
+                            .color(crate::frontend::theme::palette(ui).text_tertiary),
+                    );
+                }
+                for (model, label) in models {
+                    let selected = spec.id == provider.id && model == current_model;
+                    let response = ui.add_enabled(
+                        can_switch && available,
+                        egui::Button::selectable(selected, assistant_text(&label)),
+                    );
+                    let response = if available {
+                        response
+                    } else {
+                        response.on_hover_text("Add an API key for this provider first")
+                    };
+                    if response.clicked() && !selected {
+                        actions.push(AppAction::SwitchAssistantConversationModel {
+                            provider: spec.id.to_string(),
+                            model,
+                        });
+                        ui.close();
+                    }
+                }
+                if !available {
+                    ui.label(
+                        RichText::new("API key required")
+                            .small()
+                            .color(crate::frontend::theme::palette(ui).text_tertiary),
+                    );
+                }
+                ui.add_space(3.0);
+            }
+            ui.separator();
+            if ui.button("Manage providers and API keys…").clicked() {
+                open_settings = true;
+                ui.close();
+            }
+        });
+    let mut hover = format!("{} · {}", provider.label, current_model);
+    if let Some(usage) = &state.ui.agent.last_usage {
+        let session = &state.ui.agent.session_usage;
+        hover.push_str(&format!(
+            "\nLast: {} in / {} out\nSession: {} in / {} out",
+            compact(usage.input_total()),
+            compact(usage.output),
+            compact(session.input_total()),
+            compact(session.output),
+        ));
+    }
+    response.response.on_hover_text(hover);
+    open_settings
+}
+
+fn compact_model_label(label: &str, max_chars: usize) -> String {
+    let without_qualifier = label.split(" (").next().unwrap_or(label);
+    let short = ["Claude ", "Anthropic ", "OpenAI ", "Google "]
+        .iter()
+        .find_map(|prefix| without_qualifier.strip_prefix(prefix))
+        .unwrap_or(without_qualifier);
+    let count = short.chars().count();
+    if count <= max_chars {
+        return short.to_string();
+    }
+    let keep = max_chars.saturating_sub(1);
+    format!("{}…", short.chars().take(keep).collect::<String>())
+}
+
 /// First-run welcome shown when the transcript is empty: a centered prompt plus
 /// a missing-key callout when no credential is configured.
 fn render_assistant_empty_state(
     ui: &mut egui::Ui,
     pal: &crate::frontend::theme::Palette,
+    assistant_enabled: bool,
     key_present: bool,
+    model_selected: bool,
     provider: &crate::frontend::agent::registry::ProviderSpec,
     width: f32,
-) {
+) -> bool {
+    let mut open_settings = false;
     ui.set_width(width);
     ui.add_space(12.0);
     ui.vertical_centered(|ui| {
@@ -584,35 +700,80 @@ fn render_assistant_empty_state(
                 .color(pal.accent_soft()),
         );
         ui.add_space(6.0);
-        ui.label(
-            RichText::new("How can I help?")
-                .strong()
-                .color(pal.text_primary),
-        );
+        let title = if assistant_enabled && key_present && model_selected {
+            "How can I help?"
+        } else if assistant_enabled && key_present {
+            "Choose a model"
+        } else {
+            "Set up your Assistant"
+        };
+        ui.label(RichText::new(title).strong().color(pal.text_primary));
         ui.add_space(2.0);
-        ui.label(
-            RichText::new(
-                "Fetch a structure, restyle the view, or set up a calculation — try \
-                 \"fetch 1ubq and show it as cartoon\". I drive SilicoLab with the same \
-                 console commands you would type.",
-            )
-            .small()
-            .color(pal.text_tertiary),
-        );
+        let description = if assistant_enabled && key_present && model_selected {
+            "Fetch a structure, restyle the view, or set up a calculation — try \
+             “fetch 1ubq and show it as cartoon”. I drive SilicoLab with the same \
+             console commands you would type."
+        } else if assistant_enabled && key_present {
+            "Refresh models from your local server or enter its exact model id before your first message."
+        } else if !assistant_enabled && key_present {
+            "The Assistant is turned off. Enable it to start using the model already configured."
+        } else if !assistant_enabled {
+            "The Assistant is turned off. Enable it, choose a provider, and add its API key."
+        } else {
+            "Connect a model before your first message. It takes three quick steps:"
+        };
+        ui.label(RichText::new(description).small().color(pal.text_tertiary));
+        if !assistant_enabled || !key_present || !model_selected {
+            ui.add_space(8.0);
+            let steps = if assistant_enabled && key_present && !model_selected {
+                [
+                    "1  Start Ollama or a compatible server",
+                    "2  Refresh models or enter a model id",
+                    "3  Return here and start chatting",
+                ]
+            } else if !assistant_enabled && key_present {
+                [
+                    "1  Enable the Assistant",
+                    "2  Review the default model",
+                    "3  Return here and start chatting",
+                ]
+            } else {
+                [
+                    "1  Choose a provider",
+                    "2  Add its API key",
+                    "3  Return here and start chatting",
+                ]
+            };
+            for step in steps {
+                ui.label(RichText::new(step).small().color(pal.text_primary));
+            }
+            ui.add_space(10.0);
+            let label = if assistant_enabled && key_present && !model_selected {
+                "Choose model"
+            } else if assistant_enabled {
+                "Set up Assistant"
+            } else {
+                "Enable and set up Assistant"
+            };
+            if ui
+                .add(
+                    Button::new(RichText::new(label).color(Color32::WHITE))
+                        .fill(pal.accent)
+                        .corner_radius(CornerRadius::same(crate::frontend::theme::radius::CONTROL)),
+                )
+                .clicked()
+            {
+                open_settings = true;
+            }
+            ui.add_space(5.0);
+            ui.label(
+                RichText::new(format!("Current choice: {}", provider.label))
+                    .small()
+                    .color(pal.text_tertiary),
+            );
+        }
     });
-    if !key_present {
-        ui.add_space(10.0);
-        ui.label(
-            RichText::new(format!(
-                "{}  No API key found. Add one in Settings ▸ Assistant, set {} and restart, \
-                 or pick another provider there.",
-                egui_phosphor::regular::WARNING,
-                provider.key_env
-            ))
-            .small()
-            .color(pal.status_amber),
-        );
-    }
+    open_settings
 }
 
 /// Linear blend toward `b` (`t` = 0 → `a`, `t` = 1 → `b`), used for tinted

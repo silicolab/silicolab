@@ -1,7 +1,22 @@
-//! Persisted settings for the in-app LLM assistant: provider/model selection and
-//! the command-approval policy. Re-exported from [`super::config`].
+//! Persisted settings for the in-app LLM assistant: new-conversation defaults,
+//! provider options, and the command-approval policy.
 
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AssistantModelSelection {
+    pub provider: String,
+    pub model: String,
+}
+
+impl Default for AssistantModelSelection {
+    fn default() -> Self {
+        Self {
+            provider: "anthropic".to_string(),
+            model: "claude-sonnet-4-6".to_string(),
+        }
+    }
+}
 
 /// How aggressively assistant-issued commands auto-run. Combined with each
 /// command's `RiskLevel` (declared in the console grammar) to decide whether a
@@ -53,9 +68,9 @@ impl ApprovalMode {
     }
 }
 
-/// Settings for the in-app LLM assistant. Holds only non-secret selection: the
-/// provider id, model, effort, an optional `base_url` override for
-/// OpenAI-compatible providers, and the command-approval policy. **The API key is
+/// Settings for the in-app LLM assistant. Holds only non-secret defaults: the
+/// selection copied into new conversations, effort, per-provider URL overrides,
+/// model capabilities, and the command-approval policy. **The API key is
 /// never stored here** — it is read from the provider's environment variable at
 /// call time (see `frontend::agent::registry`), preserving the
 /// no-secrets-in-config invariant SSH already follows.
@@ -64,24 +79,17 @@ pub struct AssistantConfig {
     /// Whether the assistant is usable (the Assistant tab still renders a hint when a
     /// key is missing). On by default.
     pub enabled: bool,
-    /// Active provider id, keyed into `frontend::agent::registry::PROVIDERS`.
-    pub provider: String,
-    /// Active model id within the selected provider.
-    pub model: String,
+    /// Provider and model copied into each newly-created conversation.
+    pub default_selection: AssistantModelSelection,
     /// Reasoning effort; adapters map or drop it per model capability.
     pub effort: crate::io::llm::types::Effort,
-    /// Base-URL override for OpenAI-compatible providers. `None` uses
-    /// the provider's registry default. Non-secret.
+    /// Base-URL overrides keyed by provider id. Missing uses the registry default.
     #[serde(default)]
-    pub base_url: Option<String>,
-    /// Per-model override for whether the active OpenAI-compatible model accepts
-    /// a reasoning-effort knob. `None` uses the registry heuristic (known model
-    /// → its declared capability; unknown / free-typed id → assume yes); `Some`
-    /// pins it. Lets users point a custom endpoint at a reasoning model the
-    /// built-in table can't know about — or silence the picker for one that
-    /// rejects the knob. Reset when the model or provider changes. Non-secret.
+    pub base_urls: std::collections::BTreeMap<String, String>,
+    /// Capability overrides keyed by provider, then model id.
     #[serde(default)]
-    pub effort_override: Option<bool>,
+    pub model_effort_overrides:
+        std::collections::BTreeMap<String, std::collections::BTreeMap<String, bool>>,
     /// How much of what the assistant proposes auto-runs. `#[serde(default)]` so
     /// an older `settings.json` parses to the default (AutoSafe).
     #[serde(default)]
@@ -92,13 +100,10 @@ impl Default for AssistantConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            provider: "anthropic".to_string(),
-            // Sonnet 4.6: cheaper/faster than Opus, very strong tool use — the
-            // recommended default driver (Opus 4.8 remains selectable).
-            model: "claude-sonnet-4-6".to_string(),
+            default_selection: AssistantModelSelection::default(),
             effort: crate::io::llm::types::Effort::High,
-            base_url: None,
-            effort_override: None,
+            base_urls: Default::default(),
+            model_effort_overrides: Default::default(),
             approval_mode: ApprovalMode::default(),
         }
     }

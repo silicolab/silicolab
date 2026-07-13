@@ -48,7 +48,9 @@ pub fn send_agent_message(state: &mut AppState, text: &str, ctx: &egui::Context)
 /// key / bad provider without mutating history.
 fn begin_user_turn(state: &mut AppState, text: &str, ctx: &egui::Context) {
     // Surface a missing key / bad provider up front, before recording the turn.
-    if let Err(reason) = registry::build_provider(&state.config.assistant) {
+    if let Err(reason) =
+        registry::build_provider(&state.config.assistant, &state.ui.agent.selection)
+    {
         notice(state, &reason);
         return;
     }
@@ -78,7 +80,8 @@ pub fn spawn_next_turn(state: &mut AppState, ctx: &egui::Context) {
         return;
     }
 
-    let provider = match registry::build_provider(&state.config.assistant) {
+    let selection = state.ui.agent.selection.clone();
+    let provider = match registry::build_provider(&state.config.assistant, &selection) {
         Ok(provider) => provider,
         Err(reason) => {
             notice(state, &reason);
@@ -92,8 +95,9 @@ pub fn spawn_next_turn(state: &mut AppState, ctx: &egui::Context) {
         notice(state, "Trimmed older conversation to stay within context.");
     }
 
-    let stream = registry::active_provider(&state.config.assistant)
-        .caps_for(&state.config.assistant.model)
+    let stream = registry::provider_spec(&selection.provider)
+        .unwrap_or(&registry::PROVIDERS[0])
+        .caps_for(&selection.model)
         .supports_streaming;
     let project_root = state
         .workspace
@@ -101,7 +105,7 @@ pub fn spawn_next_turn(state: &mut AppState, ctx: &egui::Context) {
         .map(|project| project.root.clone());
     state.ui.agent.ensure_skills_loaded(project_root);
     let cfg = LlmConfig {
-        model: state.config.assistant.model.clone(),
+        model: selection.model,
         effort: state.config.assistant.effort,
         max_output_tokens: MAX_OUTPUT_TOKENS,
         stream,
@@ -215,10 +219,11 @@ pub fn handle_turn_result(
 
     // Record the assistant turn for replay via the provider's encoder (with a
     // provider-agnostic fallback when one can't be built, e.g. in tests).
-    let assistant_message = match registry::build_provider(&state.config.assistant) {
-        Ok(provider) => provider.encode_assistant_for_replay(&turn),
-        Err(_) => fallback_encode(&turn),
-    };
+    let assistant_message =
+        match registry::build_provider(&state.config.assistant, &state.ui.agent.selection) {
+            Ok(provider) => provider.encode_assistant_for_replay(&turn),
+            Err(_) => fallback_encode(&turn),
+        };
     state.ui.agent.history.push(assistant_message);
 
     if turn.stop == StopReason::ToolUse && !turn.tool_calls.is_empty() {
@@ -293,7 +298,9 @@ fn begin_job_followup(
     is_error: bool,
     ctx: &egui::Context,
 ) {
-    if let Err(reason) = registry::build_provider(&state.config.assistant) {
+    if let Err(reason) =
+        registry::build_provider(&state.config.assistant, &state.ui.agent.selection)
+    {
         notice(state, &reason);
         return;
     }

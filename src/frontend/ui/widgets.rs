@@ -318,6 +318,19 @@ pub(crate) fn confirm_destructive(
     fired
 }
 
+/// Whether a [`confirm_destructive`] control with this salt is currently armed.
+/// Callers can use this to give the confirmation row more room than its resting
+/// trigger without owning a second copy of the transient state.
+pub(crate) fn destructive_confirmation_is_armed(
+    ui: &egui::Ui,
+    id_salt: impl std::hash::Hash,
+) -> bool {
+    let confirm_id = ui.id().with(id_salt);
+    let now = ui.ctx().cumulative_pass_nr();
+    let armed_at = ui.data(|data| data.get_temp::<u64>(confirm_id));
+    confirm_is_armed(armed_at, now)
+}
+
 /// Armed only if the flag was refreshed on the current or immediately preceding
 /// pass; a wider gap means the control was off-screen for a pass, which disarms.
 fn confirm_is_armed(armed_at: Option<u64>, now: u64) -> bool {
@@ -358,6 +371,19 @@ mod tests {
                 confirm_destructive(ui, "salt", "Delete it?", "Delete", |ui| ui.button("Delete"));
         });
         assert!(!fired, "resting frame with no click must not fire");
+    }
+
+    #[test]
+    fn destructive_confirmation_state_is_visible_to_layout_callers() {
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let salt = ("delete", 7_u64);
+            let id = ui.id().with(salt);
+            let now = ui.ctx().cumulative_pass_nr();
+            ui.data_mut(|data| data.insert_temp(id, now));
+
+            assert!(destructive_confirmation_is_armed(ui, salt));
+        });
     }
 
     #[test]

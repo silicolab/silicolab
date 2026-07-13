@@ -266,7 +266,10 @@ pub(crate) fn replace_workspace_from_project(
     state.ui.project_viewport = snapshot.view.viewport;
     state.ui.viewport = state.ui.project_viewport.clone();
     state.ui.entry_viewports = snapshot.view.entry_viewports;
-    state.ui.agent = crate::frontend::agent::AgentSession::from_project_snapshot(assistant);
+    state.ui.agent = crate::frontend::agent::AgentSession::from_project_snapshot(
+        assistant,
+        state.config.assistant.default_selection.clone(),
+    );
     state.ui.entry_list.selected_entry_ids.clear();
     if let Some(id) = state.entries.active_entry_id() {
         state.ui.entry_list.selected_entry_ids.insert(id);
@@ -399,7 +402,9 @@ fn close_project_without_persist(state: &mut AppState, run_maintenance: bool) {
     state.ui.project_viewport = Default::default();
     state.ui.viewport = Default::default();
     state.ui.entry_viewports.clear();
-    state.ui.agent = crate::frontend::agent::AgentSession::default();
+    state.ui.agent = crate::frontend::agent::AgentSession::with_selection(
+        state.config.assistant.default_selection.clone(),
+    );
     state.config.closed_to_scratch = true;
     state.config.last_project_path = None;
     if let Err(error) = save_config(&state.config) {
