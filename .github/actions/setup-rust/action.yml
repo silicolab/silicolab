@@ -2,8 +2,12 @@ name: Set up Rust
 description: >-
   Install the Rust toolchain (with optional components/targets and the GUI
   system libraries needed to build on Linux) and restore the shared cargo cache.
-  Only main writes the cache; PRs restore it read-only, keeping total usage near
-  one ~3 GB set under GitHub's 10 GB/repo cap so every PR starts warm.
+  Only main writes the cache; PRs restore it read-only.
+
+outputs:
+  cache-hit:
+    description: Whether rust-cache restored an exact cache-key match.
+    value: ${{ steps.cache.outputs.cache-hit }}
 
 inputs:
   components:
@@ -29,13 +33,14 @@ runs:
         sudo apt-get update
         sudo apt-get install -y libgtk-3-dev libxkbcommon-dev libwayland-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 
-    - uses: dtolnay/rust-toolchain@stable
+    - uses: dtolnay/rust-toolchain@1.97.0
       with:
         components: ${{ inputs.components }}
         targets: ${{ inputs.targets }}
 
     - name: Restore cargo cache
+      id: cache
       if: inputs.cache == 'true'
-      uses: Swatinem/rust-cache@v2
+      uses: Swatinem/rust-cache@v2.9.1
       with:
         save-if: ${{ github.ref == 'refs/heads/main' }}
