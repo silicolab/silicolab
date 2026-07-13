@@ -4,26 +4,6 @@ use nalgebra::Point3;
 use crate::domain::UnitCell;
 
 use super::super::camera::Projector;
-use super::backend::{LineSegmentPrimitive, RenderScene};
-
-pub(crate) fn build_cell_scene(viewport: &Projector, cell: &UnitCell) -> RenderScene {
-    let corners = cell.corners();
-    let color = Color32::from_rgb(35, 40, 46);
-    let mut lines = Vec::new();
-
-    for (a, b) in cell_edges() {
-        lines.push(LineSegmentPrimitive {
-            start: viewport.project(corners[a]).pos,
-            end: viewport.project(corners[b]).pos,
-            color,
-            width: 1.5,
-        });
-    }
-
-    let mut scene = RenderScene::default();
-    scene.push_lines(lines);
-    scene
-}
 
 pub(crate) fn draw_cell_labels(
     painter: &eframe::egui::Painter,
@@ -64,21 +44,4 @@ fn draw_cell_label(
         FontId::proportional(12.0),
         Color32::from_rgb(35, 40, 46),
     );
-}
-
-fn cell_edges() -> [(usize, usize); 12] {
-    [
-        (0, 1),
-        (0, 2),
-        (0, 3),
-        (1, 4),
-        (1, 5),
-        (2, 4),
-        (2, 6),
-        (3, 5),
-        (3, 6),
-        (4, 7),
-        (5, 7),
-        (6, 7),
-    ]
 }

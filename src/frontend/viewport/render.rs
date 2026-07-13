@@ -1,4 +1,4 @@
-use eframe::egui::{self, Color32, FontId, Pos2, Rect, Vec2};
+use eframe::egui::{self, Color32, FontId, Rect, Vec2};
 use nalgebra::{Point3, Vector3};
 
 use crate::{
@@ -7,43 +7,21 @@ use crate::{
     frontend::{AtomSelection, state::AtomStyle},
 };
 
-use super::{GeometryCache, SurfaceCache, SurfaceCacheKey, ViewportCacheKey, ViewportVisualState};
+use super::{SurfaceCache, SurfaceCacheKey, ViewportVisualState};
 
-mod backend;
-mod ball_stick;
-mod canvas;
 mod cartoon;
 mod cell;
 mod instances;
 mod scene;
 mod surface;
 
-pub(super) use backend::{
-    MAX_RENDER_TRIANGLES, RenderScene, submit_scene_to_canvas,
-    submit_scene_to_painter_within_budget,
-};
-pub(super) use ball_stick::build_ball_and_stick_scene;
-pub(super) use canvas::HeadlessCanvas;
-pub(super) use cartoon::{
-    ScreenDepthBuffer, build_biopolymer_cartoon_scene, build_cached_biopolymer_cartoon_scene,
-    build_opaque_depth_buffer,
-};
-pub(super) use cell::{build_cell_scene, draw_cell_labels};
+pub(super) use cell::draw_cell_labels;
 pub(super) use instances::build_cached_molecule_instances;
-#[cfg(test)]
 pub(super) use instances::build_molecule_instances;
-pub(super) use scene::{
-    PickTarget, ViewportGeometry, build_viewport_geometry, cached_geometry, pick_atom,
-    project_pick_targets,
-};
-pub(super) use surface::{
-    SurfaceSceneGeometry, build_cached_surface_scene, build_surface_scene, build_surface_world_mesh,
-};
+pub(super) use scene::{PickTarget, pick_atom, project_pick_targets};
+pub(super) use surface::{SurfaceSceneGeometry, build_surface_world_mesh};
 
 const BALL_RADIUS_SCALE: f32 = 0.78;
-const SPHERE_LATITUDE_SEGMENTS: usize = 10;
-const SPHERE_LONGITUDE_SEGMENTS: usize = 18;
-const BOND_RADIAL_SEGMENTS: usize = 14;
 const SINGLE_BOND_RADIUS: f32 = 0.115;
 /// Clear spacing between adjacent rods in a multiple-bond bundle. The bundle's
 /// full envelope stays equal to the single-bond diameter.
@@ -63,24 +41,6 @@ const AROMATIC_DASH_RADIUS: f32 = 0.052;
 const AROMATIC_DASH_OFFSET: f32 = 0.17;
 const AROMATIC_DASH_LENGTH: f32 = 0.26;
 const AROMATIC_GAP_LENGTH: f32 = 0.14;
-const MESH_OCCLUSION_DEPTH_EPSILON: f32 = 0.03;
-const MESH_VISIBILITY_SAMPLE_PIXELS: f32 = 5.0;
-
-/// Triangle fan segments used to draw an atom as a point disc (the "dots"
-/// style).
-const POINT_DISC_SEGMENTS: usize = 8;
-
-#[derive(Clone, Copy)]
-pub(super) struct PrimitiveMeshVertex {
-    pos: Pos2,
-    depth: f32,
-    color: Color32,
-}
-
-pub(super) struct PrimitiveTriangle {
-    depth: f32,
-    vertices: [PrimitiveMeshVertex; 3],
-}
 
 pub(super) fn draw_hovered_atom_label(
     painter: &egui::Painter,
@@ -140,17 +100,6 @@ fn atom_marker_radius(element: &str, style: AtomStyle) -> Option<f32> {
         AtomStyle::Sphere => Some(atom_ball_radius(element) / BALL_RADIUS_SCALE),
         AtomStyle::BallAndStick => Some(atom_ball_radius(element)),
         _ => None,
-    }
-}
-
-/// How far to sink a bond cylinder into the atom at each end so the cylinder cap
-/// is hidden. For ball styles the cylinder disappears inside the element-sized
-/// ball; bond-only styles run to the atom center so rounded terminal caps and
-/// topology-dependent joints meet at the actual bond vertex.
-fn bond_trim_radius(element: &str, style: AtomStyle) -> f32 {
-    match style {
-        AtomStyle::Sphere | AtomStyle::BallAndStick => atom_ball_radius(element),
-        _ => 0.0,
     }
 }
 
@@ -235,35 +184,6 @@ fn ion_within_protein_distance(structure: &Structure, atom_index: usize, distanc
             (structure.atoms[protein_atom_index].position - ion_position).norm_squared()
                 <= cutoff_sq
         })
-}
-
-/// Whether any atom currently draws a cartoon ribbon, used to decide whether to
-/// build the cartoon (and dependent surface) scene at all. Driven by the
-/// cartoon overlay (which includes the legacy `Cartoon` base style as the
-/// polymer default; see [`ViewportVisualState::cartoon_enabled`]).
-pub(super) fn any_atoms_drawn_as_cartoon(
-    structure: &Structure,
-    visual_state: &ViewportVisualState,
-) -> bool {
-    let Some(biopolymer) = usable_biopolymer(structure) else {
-        return false;
-    };
-    biopolymer
-        .residues
-        .iter()
-        .filter(|residue| residue.has_cartoon_trace())
-        .filter_map(|residue| residue.alpha_carbon)
-        .any(|atom_index| visual_state.cartoon_enabled(structure, atom_index))
-}
-
-/// Whether any atom draws a molecular-surface overlay this frame.
-pub(super) fn any_atoms_drawn_as_surface(
-    structure: &Structure,
-    visual_state: &ViewportVisualState,
-) -> bool {
-    !visual_state.surface_overlay.is_empty()
-        && (0..structure.atoms.len())
-            .any(|atom_index| visual_state.surface_enabled(structure, atom_index))
 }
 
 /// Sorted indices of atoms with the surface overlay enabled. Feeds the
@@ -426,37 +346,5 @@ fn color32(point: Point3<f32>) -> Color32 {
         (point.x.clamp(0.0, 1.0) * 255.0) as u8,
         (point.y.clamp(0.0, 1.0) * 255.0) as u8,
         (point.z.clamp(0.0, 1.0) * 255.0) as u8,
-    )
-}
-
-fn primitive_triangle(
-    first: PrimitiveMeshVertex,
-    second: PrimitiveMeshVertex,
-    third: PrimitiveMeshVertex,
-) -> PrimitiveTriangle {
-    PrimitiveTriangle {
-        depth: (first.depth + second.depth + third.depth) / 3.0,
-        vertices: [first, second, third],
-    }
-}
-
-fn desaturate_color(color: Color32, amount: f32) -> Color32 {
-    let grayscale = perceived_luminance(color).round() as u8;
-    let neutral = Color32::from_rgb(grayscale, grayscale, grayscale.saturating_add(6));
-    mix_color(color, neutral, amount.clamp(0.0, 1.0))
-}
-
-fn perceived_luminance(color: Color32) -> f32 {
-    color.r() as f32 * 0.299 + color.g() as f32 * 0.587 + color.b() as f32 * 0.114
-}
-
-fn edge_function(a: Pos2, b: Pos2, c: Pos2) -> f32 {
-    (c.x - a.x) * (b.y - a.y) - (c.y - a.y) * (b.x - a.x)
-}
-
-fn lerp_pos2(start: Pos2, end: Pos2, t: f32) -> Pos2 {
-    Pos2::new(
-        start.x + (end.x - start.x) * t,
-        start.y + (end.y - start.y) * t,
     )
 }

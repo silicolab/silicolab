@@ -309,6 +309,47 @@ fn gpu_renders_benzene_to_png() {
     eprintln!("wrote {}", path.display());
 }
 
+#[test]
+#[ignore = "needs a GPU adapter"]
+fn gpu_export_api_writes_png() {
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+    let adapter =
+        pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
+            .expect("request adapter");
+    let (device, queue) =
+        pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default()))
+            .expect("request device");
+    let exporter = GpuExporter { device, queue };
+
+    let structure = benzene();
+    let visual = ViewportVisualState::default();
+    let instances = build_molecule_instances(&structure, &AtomSelection::default(), &visual);
+    let (width, height) = (320, 240);
+    let (center, radius) = view_center_and_radius(&structure, false);
+    let projector = Projector::new(
+        Rect::from_min_size(Pos2::ZERO, Vec2::new(width as f32, height as f32)),
+        center,
+        width.min(height) as f32 * 0.35 / radius,
+        radius * 3.2,
+        0.6,
+        0.45,
+        Vec2::ZERO,
+    );
+    let path = std::path::Path::new("target").join("gpu_export_api.png");
+    export_png(
+        &exporter,
+        &instances,
+        &projector,
+        width,
+        height,
+        visual.background_color,
+        &path,
+    )
+    .expect("GPU export");
+    let decoded = image::open(&path).expect("decode exported PNG");
+    assert_eq!((decoded.width(), decoded.height()), (width, height));
+}
+
 /// A synthetic single-chain protein: an idealized α-helix followed by an
 /// extended β-strand, so the cartoon renders a helix ribbon, a coil turn, and
 /// a sheet arrow.
@@ -471,6 +512,36 @@ fn gpu_renders_surface_to_png() {
     let pixels = render_offscreen(&instances, &projector, width, height, background);
 
     let path = std::path::Path::new("target").join("gpu_smoke_surface.png");
+    image::RgbaImage::from_raw(width, height, pixels)
+        .expect("image buffer")
+        .save(&path)
+        .expect("save png");
+    eprintln!("wrote {}", path.display());
+
+    visual_state.surface.style = crate::frontend::SurfaceStyle::Mesh;
+    let surface_key = SurfaceCacheKey::new(1, 1, &structure, &visual_state);
+    instances.surface = build_surface_world_mesh(
+        &structure,
+        &surface_key,
+        &visual_state,
+        &mut SurfaceCache::default(),
+    );
+    instances.surface_wireframe = true;
+    let pixels = render_offscreen(&instances, &projector, width, height, background);
+    let background_bytes = [
+        (background[0] * 255.0) as u8,
+        (background[1] * 255.0) as u8,
+        (background[2] * 255.0) as u8,
+    ];
+    assert!(
+        pixels.chunks_exact(4).any(|pixel| {
+            pixel[0].abs_diff(background_bytes[0]) > 8
+                || pixel[1].abs_diff(background_bytes[1]) > 8
+                || pixel[2].abs_diff(background_bytes[2]) > 8
+        }),
+        "wireframe surface should draw visible pixels"
+    );
+    let path = std::path::Path::new("target").join("gpu_smoke_surface_mesh.png");
     image::RgbaImage::from_raw(width, height, pixels)
         .expect("image buffer")
         .save(&path)
