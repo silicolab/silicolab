@@ -16,15 +16,18 @@ use crate::{
 };
 
 use super::super::gpu::{CylinderInstance, MeshVertex, MoleculeInstances, SphereInstance};
-use super::ball_stick::build_atom_draw_table;
+#[cfg(test)]
+use super::STICK_MULTI_BOND_GAP;
+use super::ball_stick::{build_atom_draw_table, effective_stick_degrees};
 #[cfg(test)]
 use super::cartoon::build_biopolymer_cartoon_world_mesh;
 use super::cartoon::build_cached_biopolymer_cartoon_world_mesh;
 use super::scene::{BondWorldSegment, bond_world_segments};
 use super::{
     AROMATIC_DASH_LENGTH, AROMATIC_DASH_OFFSET, AROMATIC_DASH_RADIUS, AROMATIC_GAP_LENGTH,
-    MULTI_BOND_OFFSET, MULTI_BOND_RADIUS, SINGLE_BOND_RADIUS, WIREFRAME_BOND_RADIUS,
-    atom_ball_radius, atom_marker_radius,
+    MULTI_BOND_OFFSET, MULTI_BOND_RADIUS, SINGLE_BOND_RADIUS, STICK_DOUBLE_BOND_OFFSET,
+    STICK_DOUBLE_BOND_RADIUS, STICK_TRIPLE_BOND_OFFSET, STICK_TRIPLE_BOND_RADIUS,
+    WIREFRAME_BOND_RADIUS, atom_ball_radius, atom_marker_radius,
 };
 
 /// World radius (relative to the full ball-and-stick radius) used to draw atoms
@@ -65,13 +68,19 @@ fn build_molecule_instances_with_cartoon(
     cartoon: Vec<MeshVertex>,
 ) -> MoleculeInstances {
     let atom_draw = build_atom_draw_table(structure, selection, visual_state);
+    let stick_degrees = effective_stick_degrees(structure, &atom_draw);
 
     let mut spheres = Vec::new();
     for (index, draw) in atom_draw.iter().enumerate() {
         if !draw.visible {
             continue;
         }
-        if let Some(radius) = sphere_radius(structure, index, draw.style, selection) {
+        let radius = if draw.style == AtomStyle::Stick {
+            (stick_degrees[index] >= 2).then_some(SINGLE_BOND_RADIUS)
+        } else {
+            sphere_radius(structure, index, draw.style, selection)
+        };
+        if let Some(radius) = radius {
             let position = structure.atoms[index].position;
             spheres.push(SphereInstance {
                 pos_radius: [position.x, position.y, position.z, radius],
@@ -85,7 +94,7 @@ fn build_molecule_instances_with_cartoon(
     for segment in bond_world_segments(structure) {
         let start = atom_draw[segment.start_atom];
         let end = atom_draw[segment.end_atom];
-        if !(start.visible || end.visible) {
+        if !(start.visible && end.visible) {
             continue;
         }
         if start.style.draws_stick_bonds() || end.style.draws_stick_bonds() {
@@ -96,6 +105,7 @@ fn build_molecule_instances_with_cartoon(
                 &segment,
                 start.color,
                 end.color,
+                start.style == AtomStyle::Stick || end.style == AtomStyle::Stick,
             );
         } else if start.style.draws_line_bonds() || end.style.draws_line_bonds() {
             append_wireframe_bond(&mut cylinders, &segment, start.color, end.color);
@@ -153,6 +163,7 @@ fn append_bond_cylinders(
     segment: &BondWorldSegment,
     color_a: Color32,
     color_b: Color32,
+    involves_stick: bool,
 ) {
     let (start, end) = (segment.start, segment.end);
     let mut push = |s: Point3<f32>, e: Point3<f32>, radius: f32, ca: Color32, cb: Color32| {
@@ -170,29 +181,27 @@ fn append_bond_cylinders(
         BondType::Single => push(start, end, SINGLE_BOND_RADIUS, color_a, color_b),
         BondType::Double => {
             let offset = bond_offset_direction(structure, adjacency, segment);
+            let (radius, bond_offset) = if involves_stick {
+                (STICK_DOUBLE_BOND_RADIUS, STICK_DOUBLE_BOND_OFFSET)
+            } else {
+                (MULTI_BOND_RADIUS, MULTI_BOND_OFFSET * 0.5)
+            };
             for sign in [-1.0_f32, 1.0] {
-                let shift = offset * (MULTI_BOND_OFFSET * 0.5 * sign);
-                push(
-                    start + shift,
-                    end + shift,
-                    MULTI_BOND_RADIUS,
-                    color_a,
-                    color_b,
-                );
+                let shift = offset * (bond_offset * sign);
+                push(start + shift, end + shift, radius, color_a, color_b);
             }
         }
         BondType::Triple => {
-            push(start, end, MULTI_BOND_RADIUS, color_a, color_b);
+            let (radius, bond_offset) = if involves_stick {
+                (STICK_TRIPLE_BOND_RADIUS, STICK_TRIPLE_BOND_OFFSET)
+            } else {
+                (MULTI_BOND_RADIUS, MULTI_BOND_OFFSET)
+            };
+            push(start, end, radius, color_a, color_b);
             let offset = bond_offset_direction(structure, adjacency, segment);
             for sign in [-1.0_f32, 1.0] {
-                let shift = offset * (MULTI_BOND_OFFSET * sign);
-                push(
-                    start + shift,
-                    end + shift,
-                    MULTI_BOND_RADIUS,
-                    color_a,
-                    color_b,
-                );
+                let shift = offset * (bond_offset * sign);
+                push(start + shift, end + shift, radius, color_a, color_b);
             }
         }
         BondType::Aromatic => {
@@ -221,19 +230,21 @@ fn append_aromatic_dashes(
     let mut cursor = 0.0;
     while cursor < length {
         let dash_end = (cursor + AROMATIC_DASH_LENGTH).min(length);
-        let color = if (cursor + dash_end) * 0.5 < length * 0.5 {
-            color_a
-        } else {
-            color_b
-        };
-        if let Some(cylinder) = cylinder_instance(
-            dash_origin + axis * cursor,
-            dash_origin + axis * dash_end,
-            AROMATIC_DASH_RADIUS,
-            color,
-            color,
-        ) {
-            cylinders.push(cylinder);
+        if dash_end - cursor > AROMATIC_DASH_RADIUS * 2.0 {
+            let color = if (cursor + dash_end) * 0.5 < length * 0.5 {
+                color_a
+            } else {
+                color_b
+            };
+            if let Some(cylinder) = cylinder_instance(
+                dash_origin + axis * (cursor + AROMATIC_DASH_RADIUS),
+                dash_origin + axis * (dash_end - AROMATIC_DASH_RADIUS),
+                AROMATIC_DASH_RADIUS,
+                color,
+                color,
+            ) {
+                cylinders.push(cylinder);
+            }
         }
         cursor += AROMATIC_DASH_LENGTH + AROMATIC_GAP_LENGTH;
     }
@@ -338,8 +349,14 @@ mod tests {
     use crate::domain::{Atom, Bond, BondType, Structure};
     use nalgebra::Point3;
 
-    /// Two carbons bonded along x, both forced to `style`.
     fn bonded_pair(style: AtomStyle) -> (Structure, ViewportVisualState) {
+        bonded_pair_with_type(style, BondType::Single)
+    }
+
+    fn bonded_pair_with_type(
+        style: AtomStyle,
+        bond_type: BondType,
+    ) -> (Structure, ViewportVisualState) {
         let structure = Structure::with_bonds(
             "pair",
             vec![
@@ -354,12 +371,69 @@ mod tests {
                     charge: 0.0,
                 },
             ],
-            vec![Bond::with_type(0, 1, BondType::Single)],
+            vec![Bond::with_type(0, 1, bond_type)],
         );
         let mut visual = ViewportVisualState::default();
         visual.atom_styles.insert(0, style);
         visual.atom_styles.insert(1, style);
         (structure, visual)
+    }
+
+    fn stick_chain(bond_type: BondType) -> (Structure, ViewportVisualState) {
+        let structure = Structure::with_bonds(
+            "chain",
+            vec![
+                Atom {
+                    element: "C".to_string(),
+                    position: Point3::new(0.0, 0.0, 0.0),
+                    charge: 0.0,
+                },
+                Atom {
+                    element: "C".to_string(),
+                    position: Point3::new(1.5, 0.0, 0.0),
+                    charge: 0.0,
+                },
+                Atom {
+                    element: "C".to_string(),
+                    position: Point3::new(3.0, 0.0, 0.0),
+                    charge: 0.0,
+                },
+            ],
+            vec![
+                Bond::with_type(0, 1, bond_type),
+                Bond::with_type(1, 2, bond_type),
+            ],
+        );
+        let mut visual = ViewportVisualState::default();
+        for index in 0..structure.atoms.len() {
+            visual.atom_styles.insert(index, AtomStyle::Stick);
+        }
+        (structure, visual)
+    }
+
+    fn cylinder_start_distance(a: &CylinderInstance, b: &CylinderInstance) -> f32 {
+        let delta = Vector3::new(
+            a.start_len[0] - b.start_len[0],
+            a.start_len[1] - b.start_len[1],
+            a.start_len[2] - b.start_len[2],
+        );
+        delta.norm()
+    }
+
+    fn cylinder_start_offset(cylinder: &CylinderInstance) -> f32 {
+        Vector3::new(
+            cylinder.start_len[0],
+            cylinder.start_len[1],
+            cylinder.start_len[2],
+        )
+        .norm()
+    }
+
+    fn assert_close(actual: f32, expected: f32) {
+        assert!(
+            (actual - expected).abs() < 1e-6,
+            "expected {expected}, got {actual}"
+        );
     }
 
     #[test]
@@ -375,17 +449,173 @@ mod tests {
     }
 
     #[test]
-    fn stick_joint_matches_its_bond_radius() {
-        // The joint node must be exactly as thick as the bond so a stick chain
-        // reads as one smooth tube, not a string of beads at every atom.
+    fn stick_pair_uses_terminal_caps_without_atom_spheres() {
         let (structure, visual) = bonded_pair(AtomStyle::Stick);
         let instances = build_molecule_instances(&structure, &AtomSelection::default(), &visual);
-        assert_eq!(instances.spheres.len(), 2, "each atom caps its bond");
-        for sphere in &instances.spheres {
-            assert_eq!(sphere.pos_radius[3], SINGLE_BOND_RADIUS);
-        }
+        assert!(instances.spheres.is_empty());
         assert_eq!(instances.cylinders.len(), 1);
         assert_eq!(instances.cylinders[0].axis_radius[3], SINGLE_BOND_RADIUS);
+    }
+
+    #[test]
+    fn stick_chain_emits_only_one_internal_joint() {
+        let (structure, visual) = stick_chain(BondType::Single);
+        let instances = build_molecule_instances(&structure, &AtomSelection::default(), &visual);
+        assert_eq!(instances.spheres.len(), 1);
+        assert_eq!(
+            instances.spheres[0].pos_radius,
+            [1.5, 0.0, 0.0, SINGLE_BOND_RADIUS]
+        );
+        assert_eq!(instances.cylinders.len(), 2);
+    }
+
+    #[test]
+    fn selecting_stick_joint_does_not_change_its_radius() {
+        let (structure, visual) = stick_chain(BondType::Single);
+        let mut selection = AtomSelection::default();
+        selection.select_only(1);
+        let instances = build_molecule_instances(&structure, &selection, &visual);
+        assert_eq!(instances.spheres.len(), 1);
+        assert_eq!(instances.spheres[0].pos_radius[3], SINGLE_BOND_RADIUS);
+    }
+
+    #[test]
+    fn stick_double_bond_emits_two_parallel_rods() {
+        let (structure, visual) = bonded_pair_with_type(AtomStyle::Stick, BondType::Double);
+        let instances = build_molecule_instances(&structure, &AtomSelection::default(), &visual);
+        assert!(instances.spheres.is_empty());
+        assert_eq!(instances.cylinders.len(), 2);
+        assert_ne!(
+            instances.cylinders[0].start_len,
+            instances.cylinders[1].start_len
+        );
+        for cylinder in &instances.cylinders {
+            assert_eq!(
+                cylinder.axis_radius,
+                [1.0, 0.0, 0.0, STICK_DOUBLE_BOND_RADIUS]
+            );
+            let offset = cylinder_start_offset(cylinder);
+            assert_close(offset + STICK_DOUBLE_BOND_RADIUS, SINGLE_BOND_RADIUS);
+        }
+        let center_distance =
+            cylinder_start_distance(&instances.cylinders[0], &instances.cylinders[1]);
+        assert_close(
+            center_distance - 2.0 * STICK_DOUBLE_BOND_RADIUS,
+            STICK_MULTI_BOND_GAP,
+        );
+    }
+
+    #[test]
+    fn stick_triple_bond_emits_center_and_two_parallel_side_rods() {
+        let (structure, visual) = bonded_pair_with_type(AtomStyle::Stick, BondType::Triple);
+        let instances = build_molecule_instances(&structure, &AtomSelection::default(), &visual);
+        assert!(instances.spheres.is_empty());
+        assert_eq!(instances.cylinders.len(), 3);
+        assert_eq!(instances.cylinders[0].start_len, [0.0, 0.0, 0.0, 1.5]);
+        for cylinder in &instances.cylinders {
+            assert_eq!(
+                cylinder.axis_radius,
+                [1.0, 0.0, 0.0, STICK_TRIPLE_BOND_RADIUS]
+            );
+        }
+        for side in &instances.cylinders[1..] {
+            let center_distance = cylinder_start_distance(&instances.cylinders[0], side);
+            assert_close(
+                center_distance + STICK_TRIPLE_BOND_RADIUS,
+                SINGLE_BOND_RADIUS,
+            );
+            assert_close(
+                center_distance - 2.0 * STICK_TRIPLE_BOND_RADIUS,
+                STICK_MULTI_BOND_GAP,
+            );
+        }
+    }
+
+    #[test]
+    fn stick_aromatic_bond_emits_full_rod_and_parallel_dashes() {
+        let (structure, visual) = bonded_pair_with_type(AtomStyle::Stick, BondType::Aromatic);
+        let instances = build_molecule_instances(&structure, &AtomSelection::default(), &visual);
+        assert!(instances.spheres.is_empty());
+        assert_eq!(instances.cylinders.len(), 5);
+        assert_eq!(
+            instances.cylinders[0].axis_radius,
+            [1.0, 0.0, 0.0, SINGLE_BOND_RADIUS]
+        );
+        let dashes = &instances.cylinders[1..];
+        for dash in dashes {
+            assert_eq!(dash.axis_radius, [1.0, 0.0, 0.0, AROMATIC_DASH_RADIUS]);
+        }
+        let surface_intervals = dashes
+            .iter()
+            .map(|dash| {
+                (
+                    dash.start_len[0] - AROMATIC_DASH_RADIUS,
+                    dash.start_len[0] + dash.start_len[3] + AROMATIC_DASH_RADIUS,
+                )
+            })
+            .collect::<Vec<_>>();
+        for intervals in surface_intervals.windows(2) {
+            assert_close(intervals[1].0 - intervals[0].1, AROMATIC_GAP_LENGTH);
+        }
+        assert!(surface_intervals[0].0 >= -1e-6);
+        assert!(surface_intervals.last().unwrap().1 <= 1.5 + 1e-6);
+
+        let (mut short_structure, short_visual) =
+            bonded_pair_with_type(AtomStyle::Stick, BondType::Aromatic);
+        short_structure.atoms[1].position.x = 1.3;
+        let short_instances =
+            build_molecule_instances(&short_structure, &AtomSelection::default(), &short_visual);
+        assert_eq!(short_instances.cylinders.len(), 4);
+    }
+
+    #[test]
+    fn mixed_stick_double_bond_also_emits_two_parallel_rods() {
+        let (structure, mut visual) = bonded_pair_with_type(AtomStyle::Stick, BondType::Double);
+        visual.atom_styles.insert(1, AtomStyle::BallAndStick);
+        let instances = build_molecule_instances(&structure, &AtomSelection::default(), &visual);
+        assert_eq!(instances.spheres.len(), 1);
+        assert_eq!(instances.cylinders.len(), 2);
+        for cylinder in &instances.cylinders {
+            assert_eq!(cylinder.axis_radius[3], STICK_DOUBLE_BOND_RADIUS);
+            assert_close(cylinder_start_offset(cylinder), STICK_DOUBLE_BOND_OFFSET);
+        }
+    }
+
+    #[test]
+    fn ball_and_stick_preserves_legacy_multiple_bond_profile() {
+        let (double_structure, double_visual) =
+            bonded_pair_with_type(AtomStyle::BallAndStick, BondType::Double);
+        let double_instances =
+            build_molecule_instances(&double_structure, &AtomSelection::default(), &double_visual);
+        assert_eq!(double_instances.cylinders.len(), 2);
+        for cylinder in &double_instances.cylinders {
+            assert_eq!(cylinder.axis_radius[3], MULTI_BOND_RADIUS);
+            assert_close(cylinder_start_offset(cylinder), MULTI_BOND_OFFSET * 0.5);
+        }
+
+        let (triple_structure, triple_visual) =
+            bonded_pair_with_type(AtomStyle::BallAndStick, BondType::Triple);
+        let triple_instances =
+            build_molecule_instances(&triple_structure, &AtomSelection::default(), &triple_visual);
+        assert_eq!(triple_instances.cylinders.len(), 3);
+        assert_eq!(
+            triple_instances.cylinders[0].axis_radius[3],
+            MULTI_BOND_RADIUS
+        );
+        assert_close(cylinder_start_offset(&triple_instances.cylinders[0]), 0.0);
+        for side in &triple_instances.cylinders[1..] {
+            assert_eq!(side.axis_radius[3], MULTI_BOND_RADIUS);
+            assert_close(cylinder_start_offset(side), MULTI_BOND_OFFSET);
+        }
+    }
+
+    #[test]
+    fn hidden_endpoint_removes_the_entire_stick_bond() {
+        let (structure, mut visual) = bonded_pair(AtomStyle::Stick);
+        visual.set_atoms_hidden([1], true);
+        let instances = build_molecule_instances(&structure, &AtomSelection::default(), &visual);
+        assert!(instances.spheres.is_empty());
+        assert!(instances.cylinders.is_empty());
     }
 
     #[test]

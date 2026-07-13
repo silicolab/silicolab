@@ -1,7 +1,7 @@
 //! GPU-accelerated molecular rendering.
 //!
 //! Atoms are drawn as instanced billboard sphere impostors and bonds as
-//! instanced low-poly cylinders, all in a single egui paint callback that draws
+//! instanced capsule meshes, all in a single egui paint callback that draws
 //! into egui's render pass against its depth buffer (enabled via
 //! `NativeOptions::depth_buffer` in `app.rs`). The shaders (`molecule.wgsl`)
 //! replicate the CPU [`Projector`] projection and the CPU "paper" shading so the
@@ -19,9 +19,8 @@ use super::camera::Projector;
 /// (32 bits → [`wgpu::TextureFormat::Depth32Float`]) configured in `app.rs`.
 pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 
-/// Sides of the unit bond cylinder. Bonds are thin, so a coarse ring reads as
-/// round; ends are left open because the atom spheres cover them.
-const CYLINDER_SIDES: usize = 10;
+const CYLINDER_SIDES: usize = 16;
+const CAPSULE_CAP_RINGS: usize = 5;
 
 // ---------------------------------------------------------------------------
 // GPU data (std430/vertex-buffer layouts; kept in sync with `molecule.wgsl`).
@@ -91,7 +90,7 @@ struct CameraUniform {
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct CylinderVertex {
-    /// rx, ry, y, cap (unused here; sides only).
+    /// Radial xy, axial length fraction, and radius-scaled axial offset/normal.
     local: [f32; 4],
 }
 
@@ -125,9 +124,29 @@ fn camera_uniform(projector: &Projector) -> CameraUniform {
     }
 }
 
-fn unit_cylinder_vertices() -> Vec<CylinderVertex> {
+fn capsule_ring_vertex(
+    side: usize,
+    latitude: f32,
+    axial_fraction: f32,
+    axial_sign: f32,
+) -> [f32; 4] {
     use std::f32::consts::TAU;
-    let mut vertices = Vec::with_capacity(CYLINDER_SIDES * 6);
+    let azimuth = TAU * side as f32 / CYLINDER_SIDES as f32;
+    let (azimuth_sin, azimuth_cos) = azimuth.sin_cos();
+    let (axial, radial) = latitude.sin_cos();
+    [
+        radial * azimuth_cos,
+        radial * azimuth_sin,
+        axial_fraction,
+        axial_sign * axial,
+    ]
+}
+
+fn unit_capsule_vertices() -> Vec<CylinderVertex> {
+    use std::f32::consts::{FRAC_PI_2, TAU};
+    let cap_vertices_per_side = (CAPSULE_CAP_RINGS - 1) * 6 + 3;
+    let mut vertices = Vec::with_capacity(CYLINDER_SIDES * (6 + cap_vertices_per_side * 2));
+
     for side in 0..CYLINDER_SIDES {
         let a0 = TAU * side as f32 / CYLINDER_SIDES as f32;
         let a1 = TAU * (side + 1) as f32 / CYLINDER_SIDES as f32;
@@ -141,6 +160,42 @@ fn unit_cylinder_vertices() -> Vec<CylinderVertex> {
             vertices.push(CylinderVertex { local });
         }
     }
+
+    for (axial_fraction, axial_sign) in [(0.0, -1.0), (1.0, 1.0)] {
+        for ring in 0..CAPSULE_CAP_RINGS {
+            let latitude0 = FRAC_PI_2 * ring as f32 / CAPSULE_CAP_RINGS as f32;
+            let latitude1 = FRAC_PI_2 * (ring + 1) as f32 / CAPSULE_CAP_RINGS as f32;
+            for side in 0..CYLINDER_SIDES {
+                let v00 = capsule_ring_vertex(side, latitude0, axial_fraction, axial_sign);
+                let v10 = capsule_ring_vertex(side + 1, latitude0, axial_fraction, axial_sign);
+
+                if ring + 1 == CAPSULE_CAP_RINGS {
+                    let pole = [0.0, 0.0, axial_fraction, axial_sign];
+                    let triangle = if axial_sign < 0.0 {
+                        [v00, pole, v10]
+                    } else {
+                        [v00, v10, pole]
+                    };
+                    for local in triangle {
+                        vertices.push(CylinderVertex { local });
+                    }
+                    continue;
+                }
+
+                let v11 = capsule_ring_vertex(side + 1, latitude1, axial_fraction, axial_sign);
+                let v01 = capsule_ring_vertex(side, latitude1, axial_fraction, axial_sign);
+                let triangles = if axial_sign < 0.0 {
+                    [v00, v11, v10, v00, v01, v11]
+                } else {
+                    [v00, v10, v11, v00, v11, v01]
+                };
+                for local in triangles {
+                    vertices.push(CylinderVertex { local });
+                }
+            }
+        }
+    }
+
     vertices
 }
 
@@ -373,12 +428,12 @@ impl MoleculeRenderer {
                 cache: None,
             });
 
-        let unit_cylinder = unit_cylinder_vertices();
+        let unit_capsule = unit_capsule_vertices();
         let cylinder_vertices = create_static_buffer(
             device,
-            "molecule_unit_cylinder",
+            "molecule_unit_capsule",
             wgpu::BufferUsages::VERTEX,
-            bytemuck::cast_slice(&unit_cylinder),
+            bytemuck::cast_slice(&unit_capsule),
         );
 
         let spheres = create_dynamic_buffer::<SphereInstance>(device, "molecule_spheres", 1);
@@ -394,7 +449,7 @@ impl MoleculeRenderer {
             camera_buffer,
             camera_bind_group,
             cylinder_vertices,
-            cylinder_vertex_count: unit_cylinder.len() as u32,
+            cylinder_vertex_count: unit_capsule.len() as u32,
             spheres,
             sphere_capacity: 1,
             sphere_count: 0,

@@ -1,7 +1,7 @@
 // GPU molecular rendering for the viewport.
 //
 // Atoms are drawn as camera-facing billboard impostors with a ray-sphere
-// intersection in the fragment shader; bonds as instanced low-poly cylinders.
+// intersection in the fragment shader; bonds as instanced capsule meshes.
 // Both replicate the CPU `Projector` projection exactly so they line up with the
 // CPU-drawn unit-cell box, atom labels, and picking, and both reproduce the CPU
 // "paper" shading (`ball_stick::shade_surface_color`) so the look is unchanged.
@@ -165,10 +165,10 @@ fn sphere_fs(in: SphereOut) -> FragOut {
 }
 
 // ---------------------------------------------------------------------------
-// Bond cylinders (instanced unit-cylinder mesh).
+// Bond capsules (instanced unit mesh).
 
 struct CylinderIn {
-    @location(0) local: vec4<f32>,       // unit mesh: rx, ry, y, cap (-1 bottom, 0 side, +1 top)
+    @location(0) local: vec4<f32>,       // radial xy, length fraction, radius-scaled axial offset/normal
     @location(1) start_len: vec4<f32>,   // instance: xyz start, w length
     @location(2) axis_radius: vec4<f32>, // instance: xyz unit axis, w radius
     @location(3) side_u: vec4<f32>,      // instance: xyz U basis
@@ -180,40 +180,33 @@ struct CylinderIn {
 struct CylinderOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) normal_view: vec3<f32>,
-    @location(1) color: vec3<f32>,
+    @location(1) color_a: vec3<f32>,
+    @location(2) color_b: vec3<f32>,
+    @location(3) axial_fraction: f32,
 };
 
 @vertex
 fn cylinder_vs(in: CylinderIn) -> CylinderOut {
-    let radial = in.side_u.xyz * in.local.x + in.side_v.xyz * in.local.y;
-    let world = in.start_len.xyz + in.axis_radius.xyz * (in.start_len.w * in.local.z)
-        + radial * in.axis_radius.w;
+    let radial_normal = in.side_u.xyz * in.local.x + in.side_v.xyz * in.local.y;
+    let axial = in.start_len.w * in.local.z + in.axis_radius.w * in.local.w;
+    let world = in.start_len.xyz + in.axis_radius.xyz * axial
+        + radial_normal * in.axis_radius.w;
     let view = to_view(world);
-
-    var world_normal: vec3<f32>;
-    if abs(in.local.w) < 0.5 {
-        world_normal = normalize(radial);
-    } else {
-        world_normal = in.axis_radius.xyz * sign(in.local.w);
-    }
-
-    var color: vec3<f32>;
-    if in.local.z < 0.5 {
-        color = in.color_a.rgb;
-    } else {
-        color = in.color_b.rgb;
-    }
+    let world_normal = normalize(radial_normal + in.axis_radius.xyz * in.local.w);
 
     var out: CylinderOut;
     out.clip = vec4<f32>(view_to_ndc(view), depth_ndc(view.z), 1.0);
     out.normal_view = (camera.rotation * vec4<f32>(world_normal, 0.0)).xyz;
-    out.color = color;
+    out.color_a = in.color_a.rgb;
+    out.color_b = in.color_b.rgb;
+    out.axial_fraction = in.local.z;
     return out;
 }
 
 @fragment
 fn cylinder_fs(in: CylinderOut) -> @location(0) vec4<f32> {
-    return frame_color(shade(in.color, in.normal_view));
+    let color = select(in.color_a, in.color_b, in.axial_fraction >= 0.5);
+    return frame_color(shade(color, in.normal_view));
 }
 
 // ---------------------------------------------------------------------------
