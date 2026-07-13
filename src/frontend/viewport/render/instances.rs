@@ -1,7 +1,5 @@
 //! Builds the camera-independent GPU instance set (sphere + cylinder) for the
-//! ball-and-stick representation, reusing the same per-atom style/visibility/
-//! color resolution and bond segmentation as the CPU path so the two stay
-//! visually consistent.
+//! ball-and-stick representation.
 
 use eframe::egui::Color32;
 use nalgebra::{Point3, Vector3};
@@ -18,10 +16,9 @@ use crate::{
 use super::super::gpu::{CylinderInstance, MeshVertex, MoleculeInstances, SphereInstance};
 #[cfg(test)]
 use super::STICK_MULTI_BOND_GAP;
-use super::ball_stick::{build_atom_draw_table, effective_stick_degrees};
-#[cfg(test)]
-use super::cartoon::build_biopolymer_cartoon_world_mesh;
-use super::cartoon::build_cached_biopolymer_cartoon_world_mesh;
+use super::cartoon::{
+    build_biopolymer_cartoon_world_mesh, build_cached_biopolymer_cartoon_world_mesh,
+};
 use super::scene::{BondWorldSegment, bond_world_segments};
 use super::{
     AROMATIC_DASH_LENGTH, AROMATIC_DASH_OFFSET, AROMATIC_DASH_RADIUS, AROMATIC_GAP_LENGTH,
@@ -35,7 +32,51 @@ use super::{
 /// become small shaded spheres rather than flat screen-space discs.
 const POINT_SPHERE_SCALE: f32 = 0.5;
 
-#[cfg(test)]
+#[derive(Clone, Copy)]
+struct AtomDraw {
+    visible: bool,
+    style: AtomStyle,
+    color: Color32,
+}
+
+fn build_atom_draw_table(
+    structure: &Structure,
+    selection: &AtomSelection,
+    visual_state: &ViewportVisualState,
+) -> Vec<AtomDraw> {
+    (0..structure.atoms.len())
+        .map(|index| AtomDraw {
+            visible: super::atom_visible(structure, visual_state, index),
+            style: visual_state.resolved_base_style(structure, index),
+            color: super::atom_render_color_with_settings(
+                structure,
+                index,
+                selection,
+                visual_state,
+            ),
+        })
+        .collect()
+}
+
+fn effective_stick_degrees(structure: &Structure, atom_draw: &[AtomDraw]) -> Vec<usize> {
+    let mut degrees = vec![0; structure.atoms.len()];
+    for bond in &structure.bonds {
+        if bond.a == bond.b {
+            continue;
+        }
+        let start = atom_draw[bond.a];
+        let end = atom_draw[bond.b];
+        if start.visible
+            && end.visible
+            && (start.style.draws_stick_bonds() || end.style.draws_stick_bonds())
+        {
+            degrees[bond.a] += 1;
+            degrees[bond.b] += 1;
+        }
+    }
+    degrees
+}
+
 pub(crate) fn build_molecule_instances(
     structure: &Structure,
     selection: &AtomSelection,
@@ -109,6 +150,31 @@ fn build_molecule_instances_with_cartoon(
             );
         } else if start.style.draws_line_bonds() || end.style.draws_line_bonds() {
             append_wireframe_bond(&mut cylinders, &segment, start.color, end.color);
+        }
+    }
+
+    if visual_state.show_cell
+        && let Some(cell) = &structure.cell
+    {
+        let corners = cell.corners();
+        let color = Color32::from_rgb(35, 40, 46);
+        for (a, b) in [
+            (0, 1),
+            (0, 2),
+            (0, 3),
+            (1, 4),
+            (1, 5),
+            (2, 4),
+            (2, 6),
+            (3, 5),
+            (3, 6),
+            (4, 7),
+            (5, 7),
+            (6, 7),
+        ] {
+            if let Some(cylinder) = cylinder_instance(corners[a], corners[b], 0.025, color, color) {
+                cylinders.push(cylinder);
+            }
         }
     }
 

@@ -5,10 +5,9 @@ use std::f32::consts::TAU;
 use eframe::egui::Color32;
 use nalgebra::{Point3, Vector3};
 
-use crate::frontend::{LightPreset, ViewportCartoonState, ViewportVisualState};
+use crate::frontend::ViewportCartoonState;
 
-use super::super::super::camera::Projector;
-use super::super::{PrimitiveMeshVertex, darken, lighten, normalize_vector3};
+use super::super::{darken, lighten, normalize_vector3};
 
 /// Corner-rounding of the swept ribbon cross-section, as a fraction of the
 /// half-thickness. Wide/thin styles (helix, sheet) become flat ribbons with
@@ -70,30 +69,6 @@ pub(crate) fn cartoon_ring_geometry(
         .collect()
 }
 
-pub(crate) fn build_cartoon_ring(
-    viewport: &Projector,
-    sample: &CartoonSweepSample,
-    segments: usize,
-    visual_state: &ViewportVisualState,
-) -> Vec<PrimitiveMeshVertex> {
-    cartoon_ring_geometry(sample, segments)
-        .into_iter()
-        .map(|(position, normal)| {
-            let projected = viewport.project(position);
-            PrimitiveMeshVertex {
-                pos: projected.pos,
-                depth: projected.depth,
-                color: shade_cartoon_color(
-                    viewport,
-                    sample.color,
-                    normal,
-                    visual_state.lighting.preset,
-                ),
-            }
-        })
-        .collect()
-}
-
 pub(crate) fn cartoon_style(
     kind: CartoonSegmentKind,
     settings: &ViewportCartoonState,
@@ -121,32 +96,5 @@ pub(crate) fn lerp_cartoon_style(start: CartoonStyle, end: CartoonStyle, t: f32)
     CartoonStyle {
         half_width: start.half_width + (end.half_width - start.half_width) * t,
         half_thickness: start.half_thickness + (end.half_thickness - start.half_thickness) * t,
-    }
-}
-
-pub(crate) fn shade_cartoon_color(
-    viewport: &Projector,
-    base_color: Color32,
-    surface_normal: Vector3<f32>,
-    light_preset: LightPreset,
-) -> Color32 {
-    let view_normal = normalize_vector3(
-        viewport.rotate_to_view(surface_normal),
-        Vector3::new(0.0, 0.0, 1.0),
-    );
-    let light_direction =
-        normalize_vector3(Vector3::new(-0.35, 0.45, 1.0), Vector3::new(0.0, 0.0, 1.0));
-    let diffuse = view_normal.dot(&light_direction).max(0.0);
-    let rim = (1.0 - view_normal.z.abs()).powi(2) * 0.18;
-    let (ambient, diffuse_strength, rim_strength) = match light_preset {
-        LightPreset::Soft => (0.38, 0.55, 1.0),
-        LightPreset::Gentle => (0.48, 0.34, 0.65),
-        LightPreset::Studio => (0.30, 0.72, 1.2),
-    };
-    let brightness = (ambient + diffuse * diffuse_strength + rim * rim_strength).clamp(0.0, 1.0);
-    if brightness >= 0.5 {
-        lighten(base_color, (brightness - 0.5) * 0.75)
-    } else {
-        darken(base_color, (0.5 - brightness) * 1.2)
     }
 }

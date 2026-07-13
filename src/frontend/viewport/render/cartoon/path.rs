@@ -60,8 +60,7 @@ struct ChainResiduePoint {
 }
 
 /// The per-fragment ribbon sweep samples (smoothed spline frames with cross-
-/// section styles) for every drawable chain. Shared by the CPU rasterizer and
-/// the GPU mesh builder so the two stay geometrically identical.
+/// section styles) for every drawable chain.
 pub(crate) fn cartoon_chain_sweeps(
     structure: &Structure,
     biopolymer: &Biopolymer,

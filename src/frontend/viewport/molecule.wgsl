@@ -57,8 +57,7 @@ fn mix3(a: vec3<f32>, b: vec3<f32>, t: f32) -> vec3<f32> {
     return a + (b - a) * clamp(t, 0.0, 1.0);
 }
 
-// `surface_shade`: the base-color-only part, hoisted in the CPU path per
-// primitive and reproduced here per fragment (cheap on the GPU).
+// Base-color-only shading, evaluated per fragment.
 fn washed_color(base: vec3<f32>) -> vec3<f32> {
     let lum = luminance(base);
     let neutral = vec3<f32>(lum, lum, min(lum + 6.0 / 255.0, 1.0));
@@ -225,16 +224,39 @@ struct MeshOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) normal_view: vec3<f32>,
     @location(1) color: vec4<f32>,
+    @location(2) @interpolate(linear) barycentric: vec3<f32>,
 };
 
 @vertex
-fn mesh_vs(in: MeshIn) -> MeshOut {
+fn mesh_vs(in: MeshIn, @builtin(vertex_index) vertex_index: u32) -> MeshOut {
     let view = to_view(in.position);
     var out: MeshOut;
     out.clip = vec4<f32>(view_to_ndc(view), depth_ndc(view.z), 1.0);
     out.normal_view = (camera.rotation * vec4<f32>(in.normal, 0.0)).xyz;
     out.color = in.color;
+    let corner = vertex_index % 3u;
+    out.barycentric = select(
+        select(vec3<f32>(0.0, 0.0, 1.0), vec3<f32>(0.0, 1.0, 0.0), corner == 1u),
+        vec3<f32>(1.0, 0.0, 0.0),
+        corner == 0u,
+    );
     return out;
+}
+
+@fragment
+fn mesh_wire_fs(in: MeshOut) -> @location(0) vec4<f32> {
+    let nearest_edge = min(in.barycentric.x, min(in.barycentric.y, in.barycentric.z));
+    let width = max(fwidth(nearest_edge) * 1.35, 0.00001);
+    let coverage = 1.0 - smoothstep(0.0, width, nearest_edge);
+    if coverage <= 0.01 {
+        discard;
+    }
+    var n = in.normal_view;
+    if n.z < 0.0 {
+        n = -n;
+    }
+    let lit = frame_color(shade(in.color.rgb, n));
+    return vec4<f32>(lit.rgb, in.color.a * coverage);
 }
 
 @fragment

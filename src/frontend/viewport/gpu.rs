@@ -4,10 +4,10 @@
 //! instanced capsule meshes, all in a single egui paint callback that draws
 //! into egui's render pass against its depth buffer (enabled via
 //! `NativeOptions::depth_buffer` in `app.rs`). The shaders (`molecule.wgsl`)
-//! replicate the CPU [`Projector`] projection and the CPU "paper" shading so the
-//! GPU view lines up with the still-CPU-drawn cell box / labels / picking and
-//! looks the same as before — only far faster, because per-atom data is uploaded
-//! once and rotation just updates a small camera uniform.
+//! replicate the [`Projector`] projection and the "paper" shading, and the same
+//! [`MoleculeRenderer`] drives both the live viewport and offscreen PNG export
+//! ([`export`]) — only far faster, because per-atom data is uploaded once and
+//! rotation just updates a small camera uniform.
 
 use bytemuck::{Pod, Zeroable};
 use eframe::{egui, egui_wgpu, wgpu};
@@ -15,9 +15,27 @@ use nalgebra::Vector3;
 
 use super::camera::Projector;
 
+mod export;
+
+pub(super) use export::export_png;
+
 /// Depth format of egui's render pass. Must match `NativeOptions::depth_buffer`
 /// (32 bits → [`wgpu::TextureFormat::Depth32Float`]) configured in `app.rs`.
 pub(crate) const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+pub(crate) struct GpuExporter {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+}
+
+impl GpuExporter {
+    pub(crate) fn new(render_state: &egui_wgpu::RenderState) -> Self {
+        Self {
+            device: render_state.device.clone(),
+            queue: render_state.queue.clone(),
+        }
+    }
+}
 
 const CYLINDER_SIDES: usize = 16;
 const CAPSULE_CAP_RINGS: usize = 5;
@@ -73,6 +91,7 @@ pub(super) struct MoleculeInstances {
     pub(super) cylinders: Vec<CylinderInstance>,
     pub(super) cartoon: Vec<MeshVertex>,
     pub(super) surface: Vec<MeshVertex>,
+    pub(super) surface_wireframe: bool,
 }
 
 #[repr(C)]
@@ -207,6 +226,7 @@ pub(crate) struct MoleculeRenderer {
     cylinder_pipeline: wgpu::RenderPipeline,
     mesh_opaque_pipeline: wgpu::RenderPipeline,
     mesh_transparent_pipeline: wgpu::RenderPipeline,
+    mesh_wire_pipeline: wgpu::RenderPipeline,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
     cylinder_vertices: wgpu::Buffer,
@@ -223,6 +243,7 @@ pub(crate) struct MoleculeRenderer {
     surface: wgpu::Buffer,
     surface_capacity: u32,
     surface_count: u32,
+    surface_wireframe: bool,
     srgb_framebuffer: bool,
 }
 
@@ -403,7 +424,7 @@ impl MoleculeRenderer {
                     module: &shader,
                     entry_point: Some("mesh_vs"),
                     compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: &[mesh_layout],
+                    buffers: std::slice::from_ref(&mesh_layout),
                 },
                 primitive,
                 depth_stencil: Some(wgpu::DepthStencilState {
@@ -428,6 +449,41 @@ impl MoleculeRenderer {
                 cache: None,
             });
 
+        let mesh_wire_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("molecule_mesh_wire_pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("mesh_vs"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: std::slice::from_ref(&mesh_layout),
+            },
+            primitive: wgpu::PrimitiveState {
+                cull_mode: Some(wgpu::Face::Back),
+                ..primitive
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH_FORMAT,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::LessEqual),
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("mesh_wire_fs"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: target_format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+
         let unit_capsule = unit_capsule_vertices();
         let cylinder_vertices = create_static_buffer(
             device,
@@ -446,6 +502,7 @@ impl MoleculeRenderer {
             cylinder_pipeline,
             mesh_opaque_pipeline,
             mesh_transparent_pipeline,
+            mesh_wire_pipeline,
             camera_buffer,
             camera_bind_group,
             cylinder_vertices,
@@ -462,6 +519,7 @@ impl MoleculeRenderer {
             surface,
             surface_capacity: 1,
             surface_count: 0,
+            surface_wireframe: false,
             srgb_framebuffer: target_format.is_srgb(),
         }
     }
@@ -481,6 +539,7 @@ impl MoleculeRenderer {
         self.cylinder_count = instances.cylinders.len() as u32;
         self.cartoon_count = instances.cartoon.len() as u32;
         self.surface_count = instances.surface.len() as u32;
+        self.surface_wireframe = instances.surface_wireframe;
         if self.sphere_count > self.sphere_capacity {
             self.sphere_capacity = self.sphere_count.next_power_of_two();
             self.spheres = create_dynamic_buffer::<SphereInstance>(
@@ -552,7 +611,11 @@ impl MoleculeRenderer {
         }
         // Translucent last (depth-tested, no depth write): molecular surface.
         if self.surface_count > 0 {
-            render_pass.set_pipeline(&self.mesh_transparent_pipeline);
+            render_pass.set_pipeline(if self.surface_wireframe {
+                &self.mesh_wire_pipeline
+            } else {
+                &self.mesh_transparent_pipeline
+            });
             render_pass.set_vertex_buffer(0, self.surface.slice(..));
             render_pass.draw(0..self.surface_count, 0..1);
         }

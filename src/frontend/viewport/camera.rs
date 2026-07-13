@@ -16,8 +16,6 @@ pub(super) struct Projector {
     pub(super) center: Point3<f32>,
     pub(super) scale: f32,
     pub(super) camera_distance: f32,
-    pub(super) yaw: f32,
-    pub(super) pitch: f32,
     pub(super) pan: Vec2,
     /// Yaw/pitch sines and cosines, computed once at construction. The viewport
     /// projects and shades hundreds of surface vertices per atom; recomputing
@@ -53,8 +51,6 @@ impl Projector {
             center,
             scale,
             camera_distance,
-            yaw,
-            pitch,
             pan,
             sin_yaw,
             cos_yaw,
@@ -129,21 +125,4 @@ fn rotate_with(v: Vector3<f32>, sy: f32, cy: f32, sp: f32, cp: f32) -> Vector3<f
     let z = sp * v.y + cp * z;
 
     Vector3::new(x, y, z)
-}
-
-pub(super) fn inverse_rotate(v: Vector3<f32>, yaw: f32, pitch: f32) -> Vector3<f32> {
-    let (sy, cy) = yaw.sin_cos();
-    let (sp, cp) = pitch.sin_cos();
-    let y = cp * v.y + sp * v.z;
-    let z = -sp * v.y + cp * v.z;
-    let x = cy * v.x - sy * z;
-    let z = sy * v.x + cy * z;
-
-    Vector3::new(x, y, z)
-}
-
-pub(super) fn camera_forward_world(viewport: &Projector) -> Vector3<f32> {
-    inverse_rotate(Vector3::new(0.0, 0.0, 1.0), viewport.yaw, viewport.pitch)
-        .try_normalize(0.000001)
-        .unwrap_or(Vector3::new(0.0, 0.0, 1.0))
 }
