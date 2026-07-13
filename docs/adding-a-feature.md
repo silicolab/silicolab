@@ -12,14 +12,11 @@ See [ARCHITECTURE.md](../ARCHITECTURE.md) for *why* the layers and the
 build/test/land. Changes to a remote-capable engine or the `wire`/`payload`
 contract must also follow
 [Developing remote execution](developing-remote-execution.md) so the current
-worker is rebuilt and exercised instead of a released worker. Layer order
-(lowest owns it) spans two crates: **compute-core**
-`domain → io → md → engines → workflows` (no GUI deps; also holds `hosts`/
-`payload`/`wire`; `md` is the engine-neutral molecular-dynamics model), then
-**silicolab** `backend → frontend` (depends on compute-core); the headless
-worker crate `silicolab-compute` links compute-core alone. The module paths
-below are relative to a crate: `md/`, `engines/`, `io/`, `workflows/` live under
-`compute-core/src/`; `backend/`, `frontend/` under `src/`.
+worker is rebuilt and exercised instead of a released worker. The architecture
+document owns the layer order and dependency exceptions; do not duplicate them
+here. Module paths below are relative to a crate: `md/`, `engines/`, `io/`, and
+`workflows/` live under `compute-core/src/`; `backend/` and `frontend/` live
+under `src/`.
 
 ## Pick the template
 
@@ -31,10 +28,10 @@ below are relative to a crate: `md/`, `engines/`, `io/`, `workflows/` live under
 | Background compute **task** (panel + result entries) | the `qm-energy` task, end-to-end — see the checklist | For a CPU loop that streams intermediate structures, also study `build-disordered-system`. |
 | Multi-entry picker panel | `disorder` | `SetDisorderComponentEntry`, `with_disorder_prompt`, and the `ensure_panel_form` seeding. |
 | Inline edit task (no panel, acts on the active structure) | `add-hydrogens` / `recompute-bonds` | Executor runs the op and marks the task complete; no prompt state. |
-| New `.sls` command group | `frontend/qm_commands.rs` | Sub-dispatch + a `--flag` scanner; register the verb in `console.rs`. Defining it once makes it a CLI command too. |
+| New `.sls` command group | `frontend/qm_commands.rs` | Put the top-level verb in `console/grammar.rs::Command`, classify it in `Command::risk`, dispatch it there, and add it to `command_catalog()`. Defining it once makes it a CLI command too. |
 | New molecular file format | `io/formats/cif.rs` (single) / `mol2.rs`, `pdb.rs` (multi-record) | Plus 3 registry edits — see Traps. Declare whether records concatenate in `StructureFormat::multi_structure_file`. |
 | New GUI interaction (no task) | an `AppAction` variant + arm in `dispatcher/mod.rs` + a handler in a `dispatcher/*.rs` | Widgets only emit actions; only `dispatch` mutates state. |
-| Expose a capability to the in-app assistant | — | Automatic via the `run_command` tool once a `.sls` verb exists. Only gate the verb in `agent/tools.rs::command_needs_confirmation`, and heavy-classify it in `agent/loop_driver/heavy.rs` if it is CPU-bound. |
+| Expose a capability to the in-app assistant | — | Automatic via the `run_command` tool once a `.sls` verb exists. `Command::risk` controls approval; heavy-classify it in `agent/loop_driver/heavy.rs` if it is CPU-bound. |
 
 ## Background compute task — the full checklist
 
@@ -66,9 +63,10 @@ arms won't build); ⚠ marks the steps it does **not** catch.
    `dispatcher/mod.rs`.
 9. **`frontend/ui/secondary_sidebar/task_panels.rs`** — `render_x_task_panel`
    (`pub(crate)`), dispatched from `frontend/ui/dock.rs::render_task_body`.
-10. **`frontend/<x>_commands.rs`** — the `.sls` command; `mod` in
-    `frontend/mod.rs`; an arm in `console.rs` plus the `command_catalog()` /
-    `help_text()` strings.
+10. **`frontend/<x>_commands.rs`** — the `.sls` implementation; `mod` in
+    `frontend/mod.rs`; a `Command` variant, dispatch arm, and exhaustive risk arm
+    in `console/grammar.rs`; plus an entry in `console.rs::command_catalog()`.
+    Clap generates `help`; do not add a second hand-written help list.
 11. **Assistant** — gate the verb in `agent/tools.rs`; if CPU-bound, add
     `HeavyKind` + `AgentHeavyJob` arms in `agent/loop_driver/heavy.rs`.
 
@@ -96,7 +94,7 @@ new `EntryOrigin` variant.
   `cancel` is best-effort: honored before the call starts; in-flight work runs to
   completion and the result is discarded. Don't promise mid-run cancellation.
 - **Console commands are shared GUI+CLI.** Define the command once in
-  `console.rs`; never add a GUI-only path.
+  `console/grammar.rs`; never add a GUI-only path.
 
 ---
 

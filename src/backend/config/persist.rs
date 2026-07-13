@@ -24,7 +24,7 @@ pub fn recent_projects_path() -> PathBuf {
 }
 
 /// Load the app config. A missing file is a normal first run (silent default). A
-/// file that exists but fails to parse is preserved (see [`back_up_corrupt_file`])
+/// file that exists but fails to parse is preserved (see `back_up_corrupt_file`)
 /// and a warning is returned, rather than silently resetting every setting — the
 /// silent reset is what made an interrupted write look like the app randomly
 /// forgetting the assistant model.

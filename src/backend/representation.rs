@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 
 /// Default representation for atoms that use base atom/bond geometry. The four
 /// styles the renderer can draw as a *base* geometry; each maps 1:1 onto an
-/// [`crate::frontend::state::AtomStyle`] frontend-side. (Protein chains keep
+/// frontend `AtomStyle`. (Protein chains keep
 /// their Cartoon default and follow [`CartoonPrefs`] instead.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum BaseStyle {

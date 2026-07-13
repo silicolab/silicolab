@@ -34,7 +34,7 @@ const TRAJECTORY_MAX_INTERVAL: u64 = 5_000;
 ///
 /// MD output is saved by default so each dynamics step of a run is playable;
 /// passing `save_trajectory = false` disables it (only final structures are
-/// kept). The interval targets [`TRAJECTORY_TARGET_FRAMES`] frames for the
+/// kept). The interval targets `TRAJECTORY_TARGET_FRAMES` frames for the
 /// stage's length, so a short equilibration step still yields a usable track
 /// instead of two or three frames.
 ///

@@ -27,7 +27,7 @@ mod tests;
 /// The Console tab's full session state: the command input, the recall history,
 /// and the transient view state (wrap, auto-follow, and the clear-view / unread
 /// cursors over the command transcript). The transcript itself is owned by the
-/// [`SessionLogStore`](crate::frontend::state::SessionLogStore); this holds only
+/// the private `SessionLogStore`; this holds only
 /// what the view needs.
 #[derive(Debug, Clone)]
 pub struct CommandConsoleState {

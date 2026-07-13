@@ -20,7 +20,7 @@
 //! future on-disk overlay; the consistency tests below are the correctness gate
 //! that both the embedded core and any overlay must pass — in particular every
 //! pinned `--method`/`--basis` is checked against the curated
-//! [`VETTED_FUNCTIONALS`]/[`VETTED_BASES`] allowlists, so a rule can never name a
+//! `VETTED_FUNCTIONALS`/`VETTED_BASES` allowlists, so a rule can never name a
 //! molecular method or basis this build can't run.
 
 use std::sync::OnceLock;

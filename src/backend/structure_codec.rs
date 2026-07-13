@@ -25,7 +25,7 @@ use crate::frontend::AtomSelection;
 use compute_core::payload::{StructurePayload, payload_to_structure, structure_to_payload};
 
 /// Payload format tag stored next to each blob. Bump when the on-disk shape of
-/// [`StructurePayload`]/[`SnapshotPayload`] changes incompatibly.
+/// [`StructurePayload`]/`SnapshotPayload` changes incompatibly.
 pub const PAYLOAD_FORMAT: i64 = 1;
 
 /// A compressed structure blob plus the length of its uncompressed JSON.

@@ -5,7 +5,7 @@ materials modeling. It is split into three crates:
 
 - **`silicolab`** (repository root, `src/`) — the desktop application: an
   egui/wgpu GUI and a headless CLI, both driven by the same `.sls` scripting
-  language defined in `src/frontend/console.rs`.
+  language defined in `src/frontend/console/grammar.rs`.
 - **`compute-core`** (`compute-core/`) — the compute stack (domain model, IO,
   engines, workflows) plus the remote-host descriptor, the serializable payload
   bridge, and the engine-job wire contract. It carries **no GUI dependencies**.
@@ -13,7 +13,7 @@ materials modeling. It is split into three crates:
   self-contained static musl binary deployed to a remote host on first use. It
   links `compute-core` alone.
 
-A script command is defined **once** in `console.rs` and is then available in
+A script command is defined **once** in `console/grammar.rs` and is then available in
 both the GUI console and the CLI. When you add or change a command, you do not
 wire it up twice — keep that single definition the source of truth so the two
 front-ends can never drift apart.
@@ -33,9 +33,9 @@ which is what makes the dual-front-end guarantee above hold.
 
 ## Module layers
 
-Code is organized as a one-directional stack; a lower layer never depends on a
-higher one. The stack spans two crates — the GUI app depends on `compute-core`,
-never the reverse:
+The compute stack is organized as a one-directional stack; a lower compute
+layer never depends on a higher one. The GUI app and worker depend on
+`compute-core`, never the reverse:
 
 ```
 compute-core crate (no GUI deps):
@@ -50,29 +50,37 @@ compute-core crate (no GUI deps):
      wire         engine-job request/outcome contract)
 
 silicolab crate (depends on compute-core):
-    → backend/   persistence (SQLite projects, config, secrets)
-    → frontend/  egui / wgpu, the .sls console, the dispatcher
+  backend/    persistence (SQLite projects, config, secrets)
+  frontend/   egui / wgpu, the .sls console, the dispatcher
 
 silicolab-compute crate (depends on compute-core):
     the headless worker that runs wire requests on a remote host
 ```
 
-**Why:** keeping `domain/` free of UI and IO — and `compute-core` free of GUI
+**Why:** keeping `domain/` free of UI and IO - and `compute-core` free of GUI
 deps entirely — makes the core data model testable, reusable by both front-ends,
 and linkable by the headless worker alone. The strict direction prevents
 dependency cycles and keeps compute and persistence independent of rendering.
 When adding code, put it in the lowest layer (and lowest crate) that can own it,
 and don't reach upward.
 
-## GUI data flow: single direction, single mutator
+The app crate is not a strict `backend <- frontend` stack today. Persistence
+serializes a small set of frontend-owned view DTOs such as `AtomSelection` and
+`ViewportVisualState`. Treat that as an explicit compatibility seam, not a
+general permission for backend code to call UI behavior. New shared persisted
+DTOs should live below both users when practical; do not expand the seam merely
+for convenience.
+
+## GUI data flow: persisted changes through actions
 
 The GUI is an Elm-style loop:
 
-- UI code under `frontend/ui/` is **pure rendering**. It reads `AppState` and
-  emits `AppAction`s (`frontend/actions.rs`). It never mutates application state.
-- **Only `dispatcher.rs::dispatch` mutates `AppState`.**
+- UI code under `frontend/ui/` reads `AppState` and emits `AppAction`s
+  (`frontend/actions.rs`) for persisted or undoable workspace changes.
+- `frontend/dispatcher/mod.rs::dispatch` is the entry point for those semantic
+  state transitions.
 - A new GUI operation = add an `AppAction` variant → handle it in
-  `dispatcher.rs` → emit it from the widget.
+  `dispatcher/mod.rs` → emit it from the widget.
 
 **Why:** funneling every state change through one function gives a single,
 auditable place where state transitions happen. That is what makes undo/replay,
@@ -82,23 +90,25 @@ code and impossible to track.
 
 ### Exception: transient render state
 
-There is one deliberate, narrow exception for **transient/derived render
-state** — fields that are:
+Direct UI mutation is reserved for **transient/derived render state** - fields
+that are:
 
 1. recomputed every frame from other state or from system queries,
 2. never persisted, and
 3. never subject to undo or replay.
 
-Such fields may be written directly in the app loop (`app.rs`) or in the
-rendering pass itself, bypassing `AppAction → dispatch`.
+Such fields may be written directly in the app loop (`app.rs`) or rendering
+pass, bypassing `AppAction → dispatch`. Local widget state, modal drafts, focus
+flags, selection gestures, and background-job handles follow the same rule when
+they are neither persisted workspace data nor undoable semantic changes.
 
 Current example: `UiState::glass_active`, derived each frame from `config.glass`
 plus an OS accessibility check.
 
-Everything else is **persisted application state** and must go through
+Persisted or undoable workspace state must go through
 `AppAction → dispatch`. Before adding a field to this exception, confirm all
-three criteria hold: pure derivation, frame-scoped, no semantic history. When in
-doubt, route it through dispatch.
+three criteria hold, or that it is an explicitly transient UI/job handle with no
+semantic history. When in doubt, route it through dispatch.
 
 **Why this distinction is first-class:** the line between "derived render state"
 and "persisted application state" is the most load-bearing decision in the GUI,
@@ -125,9 +135,10 @@ dispatcher.
 
 ## Engine discovery is performance-sensitive
 
-`registry.rs::probe()` is cheap: it only checks `PATH` and configured overrides
-and spawns no subprocess. `detect_versions()` and `probe_with_versions()` are
-**slow** — they run each engine's `--version`, which cold-starts WSL.
+`EngineRegistry::probe()` is cheap: it only checks `PATH` and configured
+overrides and spawns no subprocess. `verify_launch()` and `probe_local()` are
+**slow** - they run each candidate engine's version command, which can
+cold-start WSL.
 
 Run the slow paths only when the user explicitly asks to detect or refresh
 engine versions. Never trigger them on routine events such as opening the
@@ -139,14 +150,16 @@ user-initiated action.
 
 ## Subprocess execution
 
-The subprocess layer (`engines/process.rs`) is **async-runtime-free** and runs
-only on `JobManager` worker threads — never on the UI thread. Cancellation is via
-an `AtomicBool`, and runaway processes are bounded by a wall-clock timeout.
+The subprocess layer (`engines/process.rs`) is **async-runtime-free** and must
+run on caller-owned worker threads - never on the UI thread. Cancellation is via
+an `AtomicBool`. A `ProcessConfig` may carry a wall-clock timeout; GROMACS stages
+and engine verification do, while deliberately unbounded engine calls such as
+ORCA currently rely on cancellation and the external program's own termination.
 
 **Why:** external compute engines can run for minutes and must never block
 rendering. Keeping this layer free of an async runtime keeps it simple and
-portable, and confining it to worker threads guarantees the UI stays responsive
-and cancellable.
+portable. Callers must provide worker-thread isolation and choose a timeout when
+the operation has a meaningful upper bound.
 
 ## Launching engines: WSL vs native
 

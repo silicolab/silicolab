@@ -187,7 +187,7 @@ impl OverlayScope {
 pub struct ViewportVisualState {
     pub background_color: Color32,
     /// Project-level style override for each chemical category, overriding the
-    /// [`software_default_style`]. Empty categories fall back to the software
+    /// `software_default_style`. Empty categories fall back to the software
     /// default. This is the "project display style" the user sets in View.
     pub category_styles: BTreeMap<AtomCategory, AtomStyle>,
     /// Per-atom style overrides, keyed by atom index. Sparse — only atoms the

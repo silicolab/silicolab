@@ -7,7 +7,7 @@
 //! [`crate::domain::Structure`].
 //!
 //! Implicit hydrogens are *not* stored; they are derived on demand from the
-//! valence model in [`valence`] so the depiction stays a clean heavy-atom
+//! valence model in the private `valence` module so the depiction stays a clean heavy-atom
 //! skeleton. The same model decides when an atom is over-bonded so the canvas
 //! can flag it.
 

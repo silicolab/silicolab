@@ -10,7 +10,7 @@
 ; Charmm2GMX written by András Wacha and Justin Lemkul, based on the original
 ; port by E. Prabhu Raman, Justin A. Lemkul, Robert Best and Alexander D. 
 ; MacKerell, Jr.
-; please see forcefield.doc for a list of source files and references
+; see VERSION for the upstream release, retained subset, and generator metadata
 
 #define _FF_CHARMM
 

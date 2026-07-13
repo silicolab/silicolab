@@ -4,7 +4,7 @@
 //! (such as GROMACS) with streamed stdout/stderr, a
 //! cooperative cancellation flag, and a wall-clock timeout. It deliberately
 //! avoids any async runtime so that engine jobs can be spawned from worker
-//! threads spawned by [`crate::frontend::jobs::JobManager`].
+//! threads owned by the calling application rather than an async runtime.
 
 use std::{
     collections::HashMap,

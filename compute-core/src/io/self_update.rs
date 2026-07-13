@@ -28,9 +28,8 @@ const ARCHIVE_BIN_NAME: &str = "silicolab";
 
 /// On macOS the release archive ships a `.app` bundle, so the executable is
 /// nested rather than at the archive root. `self_update` locates the binary by
-/// an *exact* path match against the archive entries (see `release.yml`, which
-/// packages the bundle without a leading `./`), so this must match the layout
-/// the workflow produces.
+/// an *exact* path match against the archive entries. The release contract in
+/// the repository's `RELEASING.md` requires this layout without a leading `./`.
 #[cfg(target_os = "macos")]
 const MACOS_BIN_PATH_IN_ARCHIVE: &str = "silicolab.app/Contents/MacOS/silicolab";
 

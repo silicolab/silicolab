@@ -63,7 +63,7 @@ impl EngineRequest {
 
     /// A request for a built-in engine, which runs in-process and needs no
     /// external program. Misuse (passing an engine that does need one) is caught
-    /// by [`validate_request`] and by the executor, so this cannot smuggle an
+    /// by the private `validate_request` guard and by the executor, so this cannot smuggle an
     /// unlaunchable job past them — it only skips an impossible error path.
     pub fn builtin(engine: Engine, cores: Option<usize>) -> Self {
         debug_assert!(
@@ -679,7 +679,7 @@ fn run_request(
 
 /// Process a staged `request.json` and write `outcome.json`. This is the engine
 /// entry a subprocess (and a remote worker) runs; malformed input fails the parse
-/// or [`validate_request`] and returns an error, so the process exits non-zero.
+/// or the private `validate_request` guard and returns an error, so the process exits non-zero.
 pub fn exec(request_path: &Path, outcome_path: &Path) -> Result<()> {
     let bytes =
         std::fs::read(request_path).with_context(|| format!("read {}", request_path.display()))?;

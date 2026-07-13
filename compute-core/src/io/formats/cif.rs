@@ -41,7 +41,7 @@ pub fn parse_cif(input: &str) -> Result<Structure> {
 
 /// Serialize a structure as a minimal mmCIF document with Cartesian
 /// coordinates. This is the canonical on-disk form produced on save and read
-/// back by [`parse_mmcif`].
+/// back by the private `parse_mmcif` parser.
 pub fn to_cif(structure: &Structure) -> Result<String> {
     let mut output = String::new();
     output.push_str(&format!("data_{}\n", sanitize_identifier(&structure.title)));

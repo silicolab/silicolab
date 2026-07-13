@@ -44,7 +44,16 @@ Download prebuilt executables from
 
 ### Build from source
 
-Install the [Rust toolchain](https://rustup.rs), then build the release
+Install the [Rust toolchain](https://rustup.rs). On Debian or Ubuntu, install
+the GUI development libraries used by eframe/wgpu first:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y libgtk-3-dev libxkbcommon-dev libwayland-dev \
+  libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+```
+
+Windows and macOS need no additional build packages. Then build the release
 executable:
 
 ```sh
@@ -85,7 +94,10 @@ engine when the user configures its executable path. See the manual for setup de
 
 - [Contributing guide](CONTRIBUTING.md)
 - [Architecture notes](ARCHITECTURE.md)
+- [Documentation map](docs/README.md)
 - [Feature wiring guide](docs/adding-a-feature.md)
+- [Release process](RELEASING.md)
+- [Security policy](SECURITY.md)
 
 ## License
 
@@ -95,6 +107,10 @@ SilicoLab is available under either:
 - a separate commercial license granted in writing by the SilicoLab copyright holders.
 
 If you do not have a signed commercial license agreement, your rights are under GPL-3.0-or-later. The repository records this dual-license structure with REUSE/SPDX metadata in [REUSE.toml](REUSE.toml): GPL-3.0-or-later OR LicenseRef-SilicoLab-Commercial.
+
+The public Cargo packages list `GPL-3.0-or-later` because downloading a crate
+does not grant the separate commercial license; that license exists only under
+a written agreement with the copyright holders.
 
 Third-party components remain under their own licenses; see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md).
 
