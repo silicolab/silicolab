@@ -82,12 +82,21 @@ pub(crate) fn render_assistant_settings(
     );
     ui.add_space(6.0);
 
-    let provider = registry::active_provider(&state.config.assistant);
-    let current_model = state.config.assistant.model.clone();
+    let provider = registry::default_provider(&state.config.assistant);
+    let current_model = state.config.assistant.default_selection.model.clone();
+
+    ui.label(
+        RichText::new(
+            "These defaults are copied into new conversations. Switch the current conversation's model directly in Assistant.",
+        )
+        .size(CAPTION_SIZE)
+        .color(pal.text_tertiary),
+    );
+    ui.add_space(4.0);
 
     // Provider picker (data-driven).
     ui.horizontal(|ui| {
-        ui.label("Provider");
+        ui.label("Default provider");
         egui::ComboBox::from_id_salt("assistant.provider")
             .selected_text(provider.label)
             .show_ui(ui, |ui| {
@@ -98,11 +107,22 @@ pub(crate) fn render_assistant_settings(
                         .clicked()
                         && spec.id != provider.id
                     {
-                        // Switching provider resets to its first model.
+                        // Prefer a curated model, then a previously discovered
+                        // live model. Dynamic providers such as Local remain
+                        // intentionally blank until discovery or manual entry.
                         let model = spec
                             .models
                             .first()
                             .map(|model| model.id.to_string())
+                            .or_else(|| {
+                                state
+                                    .ui
+                                    .agent
+                                    .fetched_models
+                                    .get(spec.id)
+                                    .and_then(|models| models.first())
+                                    .cloned()
+                            })
                             .unwrap_or_default();
                         actions.push(AppAction::SwitchProviderModel {
                             provider: spec.id.to_string(),
@@ -129,13 +149,26 @@ pub(crate) fn render_assistant_settings(
         .iter()
         .find(|(id, _)| *id == current_model)
         .map(|(_, label)| label.clone())
-        .unwrap_or_else(|| current_model.clone());
+        .unwrap_or_else(|| {
+            if current_model.trim().is_empty() {
+                "Choose model…".to_string()
+            } else {
+                current_model.clone()
+            }
+        });
     ui.horizontal(|ui| {
-        ui.label("Model");
+        ui.label("Default model");
         egui::ComboBox::from_id_salt("assistant.model")
             .selected_text(selected_model_label)
             .show_ui(ui, |ui| {
                 crate::frontend::theme::stabilize_selectable_rows(ui);
+                if models.is_empty() {
+                    ui.label(
+                        RichText::new("No models detected")
+                            .small()
+                            .color(pal.text_tertiary),
+                    );
+                }
                 for (id, label) in &models {
                     if ui.selectable_label(*id == current_model, label).clicked()
                         && *id != current_model
@@ -175,8 +208,13 @@ pub(crate) fn render_assistant_settings(
         }
         _ => {}
     }
+    let model_help = if provider.models.is_empty() {
+        "Refresh from the local server or enter its exact model id below."
+    } else {
+        "Live list from the provider; offline keeps the built-in list."
+    };
     ui.label(
-        RichText::new("Live list from the provider; offline keeps the built-in list.")
+        RichText::new(model_help)
             .size(CAPTION_SIZE)
             .color(pal.text_tertiary),
     );
@@ -188,7 +226,11 @@ pub(crate) fn render_assistant_settings(
         "assistant.model_text",
         "Model id",
         &current_model,
-        "e.g. deepseek-reasoner",
+        if provider.id == "local" {
+            "e.g. llama3.1"
+        } else {
+            "e.g. deepseek-reasoner"
+        },
     ) && model != current_model
     {
         actions.push(AppAction::SwitchProviderModel {
@@ -216,7 +258,11 @@ pub(crate) fn render_assistant_settings(
     // Effort picker — only meaningful where the model accepts it. Caps fold in
     // the per-model override (see `registry::effective_caps`), so a custom
     // endpoint pointed at a reasoning model isn't greyed out.
-    let caps = registry::effective_caps(&state.config.assistant, provider);
+    let caps = registry::effective_caps(
+        &state.config.assistant,
+        &state.config.assistant.default_selection,
+        provider,
+    );
     let current_effort = state.config.assistant.effort;
     ui.horizontal(|ui| {
         ui.label("Effort");

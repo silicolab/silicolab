@@ -2,7 +2,7 @@
 //! OpenRouter, a local model) is a row here plus reuse of the OpenAI-compatible
 //! adapter — not new loop code.
 
-use crate::backend::config::AssistantConfig;
+use crate::backend::config::{AssistantConfig, AssistantModelSelection};
 use crate::io::llm::anthropic::{AnthropicProvider, caps_for_model};
 use crate::io::llm::openai_compat::OpenAiCompatProvider;
 use crate::io::llm::provider::{LlmProvider, ProviderCaps};
@@ -92,22 +92,22 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         models: &[
             ModelSpec {
                 id: "claude-sonnet-4-6",
-                label: "Claude Sonnet 4.6 (recommended)",
+                label: "Claude Sonnet 4.6",
                 supports_effort: true,
             },
             ModelSpec {
                 id: "claude-opus-4-8",
-                label: "Claude Opus 4.8 (most capable)",
+                label: "Claude Opus 4.8",
                 supports_effort: true,
             },
             ModelSpec {
                 id: "claude-fable-5",
-                label: "Claude Fable 5 (frontier)",
+                label: "Claude Fable 5",
                 supports_effort: true,
             },
             ModelSpec {
                 id: "claude-haiku-4-5",
-                label: "Claude Haiku 4.5 (fastest)",
+                label: "Claude Haiku 4.5",
                 supports_effort: false,
             },
         ],
@@ -155,7 +155,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
             },
             ModelSpec {
                 id: "gemini-3.1-pro-preview",
-                label: "Gemini 3.1 Pro (preview)",
+                label: "Gemini 3.1 Pro",
                 supports_effort: false,
             },
             ModelSpec {
@@ -220,12 +220,12 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         models: &[
             ModelSpec {
                 id: "anthropic/claude-opus-4.8",
-                label: "Claude Opus 4.8 (via OpenRouter)",
+                label: "Claude Opus 4.8",
                 supports_effort: false,
             },
             ModelSpec {
                 id: "z-ai/glm-5.2",
-                label: "GLM-5.2 (via OpenRouter)",
+                label: "GLM-5.2",
                 supports_effort: false,
             },
         ],
@@ -239,7 +239,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         reasoning_replay: false,
         models: &[ModelSpec {
             id: "gpt-5.5",
-            label: "gpt-5.5 (edit to your model)",
+            label: "gpt-5.5",
             // Default-on like any free-typed OpenAI-compatible id; the Effort
             // toggle in settings overrides this per model.
             supports_effort: true,
@@ -253,11 +253,9 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         // Keyless: a local server ignores the bearer token.
         key_env: "",
         reasoning_replay: false,
-        models: &[ModelSpec {
-            id: "llama3.1",
-            label: "llama3.1 (edit to your model)",
-            supports_effort: false,
-        }],
+        // A local server can expose any model. Never pretend a particular one
+        // is installed; populate this provider from `/models` or free text.
+        models: &[],
     },
 ];
 
@@ -268,15 +266,16 @@ pub fn provider_spec(id: &str) -> Option<&'static ProviderSpec> {
 
 /// The provider a config points at, falling back to the first row if its id is
 /// unknown (e.g. a hand-edited or future-version `settings.json`).
-pub fn active_provider(config: &AssistantConfig) -> &'static ProviderSpec {
-    provider_spec(&config.provider).unwrap_or(&PROVIDERS[0])
+pub fn default_provider(config: &AssistantConfig) -> &'static ProviderSpec {
+    provider_spec(&config.default_selection.provider).unwrap_or(&PROVIDERS[0])
 }
 
 /// The effective base URL for a config: its override, else the provider default.
 pub fn effective_base_url(config: &AssistantConfig, spec: &ProviderSpec) -> String {
     config
-        .base_url
-        .as_deref()
+        .base_urls
+        .get(spec.id)
+        .map(String::as_str)
         .map(str::trim)
         .filter(|url| !url.is_empty())
         .unwrap_or(spec.base_url)
@@ -374,35 +373,54 @@ pub fn merged_model_ids(spec: &ProviderSpec, fetched: &[String]) -> Vec<(String,
 /// override applied. The override only exists for OpenAI-compatible providers
 /// (native Anthropic derives caps reliably from the model id); for those it
 /// pins `supports_effort`/`supports_thinking` on top of [`ProviderSpec::caps_for`].
-pub fn effective_caps(config: &AssistantConfig, spec: &ProviderSpec) -> ProviderCaps {
-    let mut caps = spec.caps_for(&config.model);
+pub fn effective_caps(
+    config: &AssistantConfig,
+    selection: &AssistantModelSelection,
+    spec: &ProviderSpec,
+) -> ProviderCaps {
+    let mut caps = spec.caps_for(&selection.model);
     if spec.kind == ProviderKind::OpenAiCompat
-        && let Some(supported) = config.effort_override
+        && let Some(supported) = config
+            .model_effort_overrides
+            .get(&selection.provider)
+            .and_then(|models| models.get(&selection.model))
     {
-        caps.supports_effort = supported;
-        caps.supports_thinking = supported;
+        caps.supports_effort = *supported;
+        caps.supports_thinking = *supported;
     }
     caps
 }
 
 /// Build a provider trait object from the assistant config + its env key, or a
 /// user-facing reason it can't be built (unknown provider or missing key).
-pub fn build_provider(config: &AssistantConfig) -> Result<Box<dyn LlmProvider>, String> {
-    let spec = provider_spec(&config.provider)
-        .ok_or_else(|| format!("Unknown assistant provider `{}`.", config.provider))?;
+pub fn build_provider(
+    config: &AssistantConfig,
+    selection: &AssistantModelSelection,
+) -> Result<Box<dyn LlmProvider>, String> {
+    let spec = provider_spec(&selection.provider)
+        .ok_or_else(|| format!("Unknown assistant provider `{}`.", selection.provider))?;
+    if selection.model.trim().is_empty() {
+        return Err(format!(
+            "Choose a model for {} before sending a message.",
+            spec.label
+        ));
+    }
     let key = api_key_for(spec).ok_or_else(|| {
         format!(
             "Set the {} environment variable to use {}.",
             spec.key_env, spec.label
         )
     })?;
-    let caps = effective_caps(config, spec);
+    let caps = effective_caps(config, selection, spec);
     match spec.kind {
-        ProviderKind::Native => Ok(Box::new(AnthropicProvider::new(key, config.model.clone()))),
+        ProviderKind::Native => Ok(Box::new(AnthropicProvider::new(
+            key,
+            selection.model.clone(),
+        ))),
         ProviderKind::OpenAiCompat => Ok(Box::new(OpenAiCompatProvider::new(
             key,
             effective_base_url(config, spec),
-            config.model.clone(),
+            selection.model.clone(),
             caps,
             spec.reasoning_replay,
             spec.id,
@@ -418,21 +436,36 @@ mod tests {
     fn local_provider_is_keyless() {
         let local = provider_spec("local").unwrap();
         assert_eq!(api_key_for(local), Some(String::new()));
+        assert!(local.models.is_empty());
+    }
+
+    #[test]
+    fn local_provider_requires_an_explicit_model() {
+        let config = AssistantConfig::default();
+        let selection = AssistantModelSelection {
+            provider: "local".to_string(),
+            model: String::new(),
+        };
+        let error = build_provider(&config, &selection)
+            .err()
+            .expect("blank local model should be rejected");
+        assert!(error.contains("Choose a model"));
     }
 
     #[test]
     fn base_url_override_wins() {
         let spec = provider_spec("deepseek").unwrap();
         let mut config = AssistantConfig {
-            provider: "deepseek".into(),
-            base_url: Some("https://proxy.internal/v1".into()),
             ..AssistantConfig::default()
         };
+        config
+            .base_urls
+            .insert("deepseek".into(), "https://proxy.internal/v1".into());
         assert_eq!(
             effective_base_url(&config, spec),
             "https://proxy.internal/v1"
         );
-        config.base_url = Some("   ".into());
+        config.base_urls.insert("deepseek".into(), "   ".into());
         assert_eq!(effective_base_url(&config, spec), spec.base_url);
     }
 
@@ -462,20 +495,28 @@ mod tests {
     #[test]
     fn effort_override_pins_caps_for_openai_compat() {
         let custom = provider_spec("custom_openai").expect("custom provider exists");
-        let mut config = AssistantConfig {
+        let selection = AssistantModelSelection {
             provider: "custom_openai".into(),
             model: "my-local-model".into(),
-            ..AssistantConfig::default()
         };
+        let mut config = AssistantConfig::default();
         // Default heuristic: unknown id → effort-on.
-        assert!(effective_caps(&config, custom).supports_effort);
+        assert!(effective_caps(&config, &selection, custom).supports_effort);
         // Override forces it off…
-        config.effort_override = Some(false);
-        assert!(!effective_caps(&config, custom).supports_effort);
-        assert!(!effective_caps(&config, custom).supports_thinking);
+        config
+            .model_effort_overrides
+            .entry(selection.provider.clone())
+            .or_default()
+            .insert(selection.model.clone(), false);
+        assert!(!effective_caps(&config, &selection, custom).supports_effort);
+        assert!(!effective_caps(&config, &selection, custom).supports_thinking);
         // …and back on.
-        config.effort_override = Some(true);
-        assert!(effective_caps(&config, custom).supports_effort);
+        config
+            .model_effort_overrides
+            .entry(selection.provider.clone())
+            .or_default()
+            .insert(selection.model.clone(), true);
+        assert!(effective_caps(&config, &selection, custom).supports_effort);
     }
 
     #[test]

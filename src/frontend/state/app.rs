@@ -160,6 +160,11 @@ impl AppState {
                 .set_active_entry(state.entries.active_entry_id());
             state.ui.agent = crate::frontend::agent::AgentSession::from_project_snapshot(
                 snapshot.assistant.clone(),
+                state.config.assistant.default_selection.clone(),
+            );
+        } else {
+            state.ui.agent = crate::frontend::agent::AgentSession::with_selection(
+                state.config.assistant.default_selection.clone(),
             );
         }
         state.load_viewport_for_active_entry();

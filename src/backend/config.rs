@@ -21,7 +21,9 @@ pub use persist::{
     remember_recent_project, save_config, save_config_to, save_recent_projects, settings_path,
 };
 
-pub use crate::backend::assistant_config::{ApprovalMode, AssistantConfig};
+pub use crate::backend::assistant_config::{
+    ApprovalMode, AssistantConfig, AssistantModelSelection,
+};
 
 /// How the interface picks its light/dark appearance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -231,7 +233,7 @@ pub struct AppConfig {
     /// the whole parse and resetting every other setting.
     #[serde(default)]
     pub representation: RepresentationPrefs,
-    /// In-app LLM assistant selection (provider/model/effort). Never stores the
+    /// In-app LLM assistant defaults and provider options. Never stores the
     /// API key. `#[serde(default)]` so an older `settings.json` still parses.
     #[serde(default)]
     pub assistant: AssistantConfig,
@@ -503,8 +505,9 @@ mod tests {
             "default_project_dir": "/tmp/p",
             "last_project_path": null,
             "closed_to_scratch": false,
-            "assistant": { "enabled": true, "provider": "openai",
-                           "model": "gpt-5.1", "effort": "high", "base_url": null }
+            "assistant": { "enabled": true,
+                           "default_selection": { "provider": "openai", "model": "gpt-5.1" },
+                           "effort": "high", "base_urls": {} }
         }"#;
         let dir = std::env::temp_dir().join("silicolab-cfg-norepr");
         let _ = std::fs::remove_dir_all(&dir);
@@ -513,7 +516,7 @@ mod tests {
         std::fs::write(&path, json).expect("write");
 
         let config = load_config_from(&path).expect("parse despite missing representation");
-        assert_eq!(config.assistant.model, "gpt-5.1");
+        assert_eq!(config.assistant.default_selection.model, "gpt-5.1");
         assert_eq!(config.representation, super::RepresentationPrefs::default());
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -535,8 +538,9 @@ mod tests {
             "default_project_dir": "/tmp/p",
             "last_project_path": null,
             "closed_to_scratch": false,
-            "assistant": { "enabled": true, "provider": "openai",
-                           "model": "gpt-5.1", "effort": "high", "base_url": null }
+            "assistant": { "enabled": true,
+                           "default_selection": { "provider": "openai", "model": "gpt-5.1" },
+                           "effort": "high", "base_urls": {} }
         }"#;
         let parsed: AppConfig = serde_json::from_str(json).expect("legacy config should parse");
         assert_eq!(
@@ -579,8 +583,9 @@ mod tests {
             "default_project_dir": "/tmp/p",
             "last_project_path": null,
             "closed_to_scratch": false,
-            "assistant": { "enabled": true, "provider": "openai",
-                           "model": "gpt-5.1", "effort": "high", "base_url": null }
+            "assistant": { "enabled": true,
+                           "default_selection": { "provider": "openai", "model": "gpt-5.1" },
+                           "effort": "high", "base_urls": {} }
         }"#;
         let parsed: AppConfig = serde_json::from_str(json).expect("legacy config should parse");
         assert!(!parsed.show_utilization_bars);

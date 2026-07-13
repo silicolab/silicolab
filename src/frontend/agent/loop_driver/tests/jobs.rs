@@ -160,7 +160,7 @@ fn deleting_a_conversation_cancels_its_background_jobs() {
     let mut state = enabled_state();
     let ctx = egui::Context::default();
     let first = state.ui.agent.active_conversation;
-    state.ui.agent.start_new_conversation(); // a 2nd chat, so delete removes `first`
+    state.ui.agent.start_new_conversation(Default::default()); // a 2nd chat, so delete removes `first`
     let (_tx, rx) = std::sync::mpsc::channel();
     state.jobs.agent_jobs.push(fake_qm_job(1, first, rx));
 
@@ -192,7 +192,7 @@ fn job_finishing_in_inactive_conversation_routes_to_its_origin() {
     drop(tx);
     state.jobs.agent_jobs.push(fake_qm_job(5, origin, rx));
     // Make a different conversation active before the job completes.
-    state.ui.agent.start_new_conversation();
+    state.ui.agent.start_new_conversation(Default::default());
     let active = state.ui.agent.active_conversation;
     assert_ne!(origin, active);
 
@@ -217,7 +217,7 @@ fn switching_back_pumps_a_pending_jobdone() {
     let mut state = enabled_state();
     let ctx = egui::Context::default();
     let origin = state.ui.agent.active_conversation;
-    state.ui.agent.start_new_conversation(); // switch away from `origin`
+    state.ui.agent.start_new_conversation(Default::default()); // switch away from `origin`
     state
         .ui
         .agent
@@ -238,7 +238,7 @@ fn switching_back_pumps_a_pending_jobdone() {
 }
 
 #[test]
-fn switching_provider_strips_reasoning() {
+fn switching_conversation_model_strips_reasoning() {
     let mut state = AppState::scratch(Default::default(), Vec::new());
     state.ui.agent.history.push(ChatMessage {
         role: Role::Assistant,
@@ -247,7 +247,7 @@ fn switching_provider_strips_reasoning() {
             ContentBlock::Text("hi".to_string()),
         ],
     });
-    switch_provider_model(&mut state, "anthropic", "claude-opus-4-8");
+    switch_assistant_conversation_model(&mut state, "anthropic", "claude-opus-4-8");
     let still_has_reasoning = state.ui.agent.history.iter().any(|message| {
         message
             .content
@@ -255,7 +255,50 @@ fn switching_provider_strips_reasoning() {
             .any(|block| matches!(block, ContentBlock::OpaqueReasoning(_)))
     });
     assert!(!still_has_reasoning);
-    assert_eq!(state.config.assistant.model, "claude-opus-4-8");
+    assert_eq!(state.ui.agent.selection.model, "claude-opus-4-8");
+}
+
+#[test]
+fn model_defaults_seed_new_conversations_without_changing_existing_ones() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let first = state.ui.agent.active_conversation;
+    let first_selection = state.ui.agent.selection.clone();
+    state
+        .ui
+        .agent
+        .history
+        .push(ChatMessage::user_text("keep this model"));
+
+    switch_provider_model(&mut state, "openai", "gpt-5.5");
+
+    assert_eq!(state.ui.agent.selection, first_selection);
+    new_assistant_conversation(&mut state);
+    assert_eq!(state.ui.agent.selection.provider, "openai");
+    assert_eq!(state.ui.agent.selection.model, "gpt-5.5");
+    state.ui.agent.switch_conversation(first);
+    assert_eq!(state.ui.agent.selection, first_selection);
+}
+
+#[test]
+fn changing_defaults_updates_an_empty_first_conversation_for_onboarding() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+
+    switch_provider_model(&mut state, "openai", "gpt-5.5");
+
+    assert_eq!(state.ui.agent.selection.provider, "openai");
+    assert_eq!(state.ui.agent.selection.model, "gpt-5.5");
+}
+
+#[test]
+fn choosing_local_keeps_model_blank_until_discovery_or_manual_entry() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+
+    switch_provider_model(&mut state, "local", "");
+
+    assert_eq!(state.config.assistant.default_selection.provider, "local");
+    assert!(state.config.assistant.default_selection.model.is_empty());
+    assert_eq!(state.ui.agent.selection.provider, "local");
+    assert!(state.ui.agent.selection.model.is_empty());
 }
 
 #[test]
@@ -266,7 +309,12 @@ fn changing_base_url_clears_stale_model_fetch_error() {
     set_assistant_base_url(&mut state, "https://api.example.com/v1");
 
     assert_eq!(
-        state.config.assistant.base_url.as_deref(),
+        state
+            .config
+            .assistant
+            .base_urls
+            .get("anthropic")
+            .map(String::as_str),
         Some("https://api.example.com/v1")
     );
     assert_eq!(state.ui.agent.model_fetch, ModelFetchStatus::Idle);

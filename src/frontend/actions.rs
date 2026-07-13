@@ -341,6 +341,11 @@ pub enum AppAction {
     },
     /// Delete one in-memory assistant conversation.
     DeleteAssistantConversation(crate::frontend::agent::AssistantConversationId),
+    /// Change the provider/model used by the active assistant conversation.
+    SwitchAssistantConversationModel {
+        provider: String,
+        model: String,
+    },
     /// Cancel the in-flight assistant turn and any pending tool batch.
     CancelAgent,
     /// Approve the gated (compute/destructive) tool call with this id.
@@ -355,7 +360,7 @@ pub enum AppAction {
     SetApprovalMode(crate::backend::config::ApprovalMode),
     /// Drop the queued (type-ahead) assistant follow-up message at this index.
     RemoveQueuedAgentInput(usize),
-    /// Switch the active assistant provider + model and persist.
+    /// Change the provider/model defaults copied into new conversations.
     SwitchProviderModel {
         provider: String,
         model: String,

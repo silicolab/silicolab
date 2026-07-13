@@ -49,10 +49,11 @@ pub(crate) fn render_assistant_composer(
     pal: &Palette,
     running_jobs: &[crate::frontend::jobs::LiveJobSnapshot],
     queued: &[String],
-) {
+) -> bool {
     let busy = state.ui.agent.is_busy();
     let assistant_enabled = state.config.assistant.enabled;
     let key_present = state.ui.agent.key_available.unwrap_or(false);
+    let model_selected = !state.ui.agent.selection.model.trim().is_empty();
     let running_height = running_strip_height(running_jobs);
     let queued_height = queued_strip_height(queued);
 
@@ -115,22 +116,25 @@ pub(crate) fn render_assistant_composer(
     // The user can submit whenever the assistant is enabled and keyed. If a
     // turn/computation is in flight (or a call awaits approval) the message is
     // queued rather than sent now — `send_agent_message` makes that call.
-    let can_submit = assistant_enabled && key_present;
+    let can_submit = assistant_enabled && key_present && model_selected;
     let will_queue = busy || state.ui.agent.pending_approval().is_some();
     let hint = if !assistant_enabled {
         "Assistant disabled"
     } else if !key_present {
-        "Set the API key env var"
+        "Set up API access above"
+    } else if !model_selected {
+        "Choose a model below"
     } else if busy {
         "Working… (Enter queues a follow-up)"
     } else {
         "Ask the assistant anything"
     };
 
-    let composer_radius = radius::CARD;
-    let inner_radius = radius::concentric(composer_radius, 4);
+    let composer_radius = radius::LARGE;
+    let inner_radius = radius::concentric(composer_radius, 5);
     let mut composer_focused = false;
     let mut send = false;
+    let mut open_assistant_settings = false;
     let mut composer_rect = egui::Rect::NOTHING;
     assistant_inset_row(ui, ASSISTANT_COMPOSER_HEIGHT, |ui| {
         let content_width = ui.available_width().max(96.0);
@@ -142,39 +146,43 @@ pub(crate) fn render_assistant_composer(
             .inner_margin(Margin::symmetric(8, 8))
             .show(ui, |ui| {
                 ui.set_width(frame_inner_width);
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                    const BUTTON_SIZE: f32 = 26.0;
-                    // While busy the row carries both Stop and Send, so reserve
-                    // width for two buttons; otherwise just the Send button.
-                    let buttons_reserved = if busy {
-                        2.0 * BUTTON_SIZE + 6.0
-                    } else {
-                        BUTTON_SIZE
-                    };
-                    let text_width = (ui.available_width() - buttons_reserved - 6.0).max(48.0);
+                let response = ui.add_sized(
+                    [frame_inner_width, 42.0],
+                    egui::TextEdit::multiline(&mut state.ui.agent.input)
+                        .desired_width(frame_inner_width)
+                        .desired_rows(2)
+                        .font(assistant_body_font_id())
+                        .frame(Frame::NONE)
+                        .hint_text(hint),
+                );
+                composer_focused = response.has_focus();
+                if response.has_focus()
+                    && ui.input(|input| {
+                        input.key_pressed(egui::Key::Enter) && !input.modifiers.shift
+                    })
+                {
+                    send = true;
+                }
 
-                    let response = ui.add_sized(
-                        [text_width, 38.0],
-                        egui::TextEdit::multiline(&mut state.ui.agent.input)
-                            .desired_width(text_width)
-                            .desired_rows(2)
-                            .font(assistant_body_font_id())
-                            .frame(Frame::NONE)
-                            .hint_text(hint),
-                    );
-                    composer_focused = response.has_focus();
-                    if response.has_focus()
-                        && ui.input(|input| {
-                            input.key_pressed(egui::Key::Enter) && !input.modifiers.shift
-                        })
-                    {
-                        send = true;
-                    }
+                ui.add_space(6.0);
+                let (toolbar_rect, _) = ui
+                    .allocate_exact_size(egui::vec2(frame_inner_width, 28.0), egui::Sense::hover());
+                const BUTTON_SIZE: f32 = 28.0;
+                const CONTROL_GAP: f32 = 4.0;
+                const ACTION_GAP: f32 = 6.0;
 
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        // Primary send/queue button (rightmost). Enabled whenever
-                        // the assistant is keyed; it queues if a turn is in flight.
+                // Give actions explicit right-anchored rectangles. The controls
+                // are clipped to the remaining rectangle and therefore cannot
+                // paint over or displace Send, even at the 240px sidebar minimum.
+                let send_rect = egui::Rect::from_min_size(
+                    egui::pos2(toolbar_rect.right() - BUTTON_SIZE, toolbar_rect.top()),
+                    egui::vec2(BUTTON_SIZE, BUTTON_SIZE),
+                );
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(send_rect)
+                        .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
+                    |ui| {
                         let (fill, ink) = if can_submit {
                             (pal.accent, Color32::WHITE)
                         } else {
@@ -189,25 +197,83 @@ pub(crate) fn render_assistant_composer(
                         let send_resp = if will_queue {
                             send_resp.on_hover_text("Queue a follow-up")
                         } else {
-                            send_resp
+                            send_resp.on_hover_text("Send")
                         };
                         if send_resp.clicked() {
                             send = true;
                         }
-                        // While a turn/computation runs, a Stop button to its left.
-                        if busy {
+                    },
+                );
+
+                let mut controls_right = send_rect.left() - ACTION_GAP;
+                if busy {
+                    let stop_rect = egui::Rect::from_min_size(
+                        egui::pos2(controls_right - BUTTON_SIZE, toolbar_rect.top()),
+                        egui::vec2(BUTTON_SIZE, BUTTON_SIZE),
+                    );
+                    ui.scope_builder(
+                        egui::UiBuilder::new()
+                            .max_rect(stop_rect)
+                            .layout(Layout::centered_and_justified(egui::Direction::LeftToRight)),
+                        |ui| {
                             let stop = Button::new(
-                                RichText::new(egui_phosphor::regular::X).color(pal.text_primary),
+                                RichText::new(egui_phosphor::regular::STOP).color(pal.text_primary),
                             )
                             .fill(pal.neutral_overlay(20))
                             .corner_radius(CornerRadius::same(inner_radius))
                             .min_size(egui::vec2(BUTTON_SIZE, BUTTON_SIZE));
-                            if ui.add(stop).on_hover_text("Stop").clicked() {
+                            if ui.add(stop).on_hover_text("Stop current task").clicked() {
                                 actions.push(AppAction::CancelAgent);
                             }
+                        },
+                    );
+                    controls_right = stop_rect.left() - ACTION_GAP;
+                }
+
+                let controls_rect = egui::Rect::from_min_max(
+                    toolbar_rect.left_top(),
+                    egui::pos2(
+                        controls_right.max(toolbar_rect.left()),
+                        toolbar_rect.bottom(),
+                    ),
+                );
+                ui.scope_builder(
+                    egui::UiBuilder::new()
+                        .max_rect(controls_rect)
+                        .layout(Layout::left_to_right(Align::Center)),
+                    |ui| {
+                        ui.set_clip_rect(controls_rect);
+                        ui.spacing_mut().item_spacing.x = CONTROL_GAP;
+                        ui.spacing_mut().interact_size.y = BUTTON_SIZE;
+                        let controls_width = controls_rect.width();
+                        if controls_width <= 1.0 {
+                            return;
                         }
-                    });
-                });
+                        let mode_width = if controls_width >= 150.0 {
+                            72.0
+                        } else if controls_width >= 96.0 {
+                            56.0
+                        } else {
+                            (controls_width * 0.42).max(28.0)
+                        };
+                        let model_width =
+                            (controls_width - mode_width - CONTROL_GAP).clamp(28.0, 132.0);
+                        render_approval_mode_picker(state, ui, actions, mode_width);
+
+                        let selection = state.ui.agent.selection.clone();
+                        let provider =
+                            crate::frontend::agent::registry::provider_spec(&selection.provider)
+                                .unwrap_or(&crate::frontend::agent::registry::PROVIDERS[0]);
+                        open_assistant_settings |= render_assistant_model_picker(
+                            state,
+                            ui,
+                            actions,
+                            provider,
+                            &selection.model,
+                            model_width,
+                        );
+                    },
+                );
             });
         composer_rect = response.response.rect;
     });
@@ -227,5 +293,57 @@ pub(crate) fn render_assistant_composer(
             actions.push(AppAction::SendAgentMessage(message));
             state.ui.agent.input.clear();
         }
+    }
+    open_assistant_settings
+}
+
+/// Compact, point-of-action permission control inspired by agent-first IDEs.
+/// The persisted approval policy remains the single source of truth; this is a
+/// second presentation of the same dispatcher action used in Settings.
+fn render_approval_mode_picker(
+    state: &AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+    width: f32,
+) {
+    use crate::backend::config::ApprovalMode;
+
+    let current = state.config.assistant.approval_mode;
+    let selected = compact_approval_label(current);
+    let can_switch = state.ui.agent.can_manage_conversations();
+    let response = ui
+        .add_enabled_ui(can_switch, |ui| {
+            egui::ComboBox::from_id_salt("assistant.composer_approval_mode")
+                .selected_text(assistant_text(selected))
+                .width(width.max(34.0))
+                .truncate()
+                .show_ui(ui, |ui| {
+                    crate::frontend::theme::stabilize_selectable_rows(ui);
+                    ui.set_min_width(250.0);
+                    for mode in ApprovalMode::all() {
+                        if ui
+                            .selectable_label(mode == current, assistant_text(mode.label()))
+                            .clicked()
+                            && mode != current
+                        {
+                            actions.push(AppAction::SetApprovalMode(mode));
+                            ui.close();
+                        }
+                    }
+                })
+        })
+        .inner;
+    response
+        .response
+        .on_hover_text(format!("Agent permissions\n{}", current.label()));
+}
+
+fn compact_approval_label(mode: crate::backend::config::ApprovalMode) -> &'static str {
+    use crate::backend::config::ApprovalMode;
+    match mode {
+        ApprovalMode::Manual => "Manual",
+        ApprovalMode::AutoSafe => "Safe",
+        ApprovalMode::Auto => "Auto",
+        ApprovalMode::Plan => "Plan",
     }
 }
