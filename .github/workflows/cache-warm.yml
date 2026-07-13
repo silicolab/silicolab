@@ -1,0 +1,93 @@
+name: Cache warm
+
+# rust-cache excludes workspace crates and keys dependency artifacts from the
+# Cargo manifests/lock, toolchain, Cargo config, compiler environment, and job
+# id. Ordinary source merges therefore cannot improve the shared cache. Warm it
+# only when one of those inputs changes; workflow_dispatch provides recovery
+# after manual cache eviction without rerunning tests.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '**/Cargo.toml'
+      - '.cargo/**'
+      - 'rust-toolchain.toml'
+      - '.github/actions/setup-rust/**'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/cache-warm.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
+
+jobs:
+  # Keep these job ids aligned with ci.yml: rust-cache includes the job id in
+  # its automatic key, so the main writer and PR readers must use the same ids.
+  clippy:
+    name: Warm Clippy cache
+    runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v5
+      - id: rust
+        uses: ./.github/actions/setup-rust
+        with:
+          components: clippy
+          linux-deps: 'true'
+          cache: 'true'
+      - name: Compile default-feature Clippy targets
+        if: steps.rust.outputs.cache-hit != 'true'
+        run: cargo clippy --workspace --all-targets
+      - name: Compile all-feature Clippy targets
+        if: steps.rust.outputs.cache-hit != 'true'
+        run: cargo clippy --workspace --all-targets --all-features
+
+  worker-build:
+    name: Warm worker cache (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: rust
+        uses: ./.github/actions/setup-rust
+        with:
+          targets: x86_64-unknown-linux-musl
+          cache: 'true'
+      - name: Compile the development worker
+        if: steps.rust.outputs.cache-hit != 'true'
+        run: cargo xtask build-dev-worker
+
+  test:
+    name: Warm test cache (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - id: rust
+        uses: ./.github/actions/setup-rust
+        with:
+          linux-deps: 'true'
+          cache: 'true'
+      - name: Compile workspace tests without running them
+        if: steps.rust.outputs.cache-hit != 'true'
+        run: cargo test --workspace --all-features --no-run
+      - name: Compile production worker artifact tests without running them
+        if: steps.rust.outputs.cache-hit != 'true' && runner.os == 'Linux'
+        run: cargo test --package compute-core --lib --no-run

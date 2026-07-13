@@ -1,13 +1,10 @@
 name: CI
 
 # PRs are the merge gate: branch protection requires the `CI complete` job
-# (defined last), so the pull_request run tests the exact tree that lands on
-# main. The push-to-main run is NOT a gate — it only refreshes the shared build
-# cache that PRs restore from (rust-cache saves on main, PRs read-only), keeping
-# it under GitHub's 10 GB/repo cap so PRs start warm.
+# (defined last), so this tests the exact tree that lands on main. Main cache
+# population lives in cache-warm.yml and runs only when a cache-key input
+# changes; ordinary source merges do not create reusable rust-cache entries.
 on:
-  push:
-    branches: [main]
   pull_request:
     branches: [main]
 
@@ -47,12 +44,6 @@ jobs:
           PR: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
         run: |
-          # Push to main always builds — its job is to refresh the cache, so it
-          # is never gated on changed files.
-          if [ "$GITHUB_EVENT_NAME" = "push" ]; then
-            echo "code=true" | tee -a "$GITHUB_OUTPUT"
-            exit 0
-          fi
           files=$(gh api "repos/$REPO/pulls/$PR/files" --paginate -q '.[].filename') || files=""
           echo "Changed files:"
           printf '%s\n' "$files"
