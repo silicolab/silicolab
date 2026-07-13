@@ -6,7 +6,8 @@ use std::{
 };
 
 use super::{
-    Command, ViewKind, execute_console_line, expand_script_variables, parse_command, shell_words,
+    Command, ScriptContext, ViewKind, execute_console_line, execute_console_line_with_context,
+    expand_script_variables, parse_command, shell_words,
 };
 use crate::frontend::{
     LightPreset, SurfaceStyle, ViewportVisualState,
@@ -260,6 +261,31 @@ fn help_renders_and_unknown_command_errors() {
         execute_console_line(&mut state, "definitely-not-a-command").is_err(),
         "an unknown command must surface as an error, not exit"
     );
+}
+
+#[test]
+fn cli_context_rejects_image_export() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let mut context = ScriptContext {
+        gpu_image_export: false,
+        ..Default::default()
+    };
+    let error = execute_console_line_with_context(
+        &mut state,
+        "save image should-not-exist.png",
+        &mut context,
+    )
+    .expect_err("CLI image export must remain unavailable");
+    assert!(error.to_string().contains("unavailable in CLI mode"));
+}
+
+#[test]
+fn gui_context_queues_gpu_image_export() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let message = execute_console_line(&mut state, "save image queued.png")
+        .expect("GUI image export should queue");
+    assert!(message.contains("queued image export"));
+    assert_eq!(state.ui.pending_viewport_exports.len(), 1);
 }
 
 #[test]

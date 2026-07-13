@@ -12,7 +12,6 @@ use super::super::usable_biopolymer;
 
 /// Build the world-space cartoon mesh (position, normal, color triangle soup)
 /// for the GPU mesh pipeline. Camera-independent.
-#[cfg(test)]
 pub(crate) fn build_biopolymer_cartoon_world_mesh(
     structure: &Structure,
     visual_state: &ViewportVisualState,

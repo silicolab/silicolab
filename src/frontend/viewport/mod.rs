@@ -8,7 +8,6 @@ use crate::{
 };
 
 mod camera;
-mod composer;
 mod export;
 mod gpu;
 mod interaction;
@@ -17,15 +16,14 @@ mod visual_state;
 
 pub use camera::ViewCamera;
 pub(crate) use camera::view_center_and_radius;
-pub(crate) use export::{ViewportPngExport, export_viewport_png};
-pub(crate) use gpu::init as init_gpu_renderer;
+pub(crate) use export::PendingViewportPngExport;
+pub(crate) use gpu::{GpuExporter, init as init_gpu_renderer};
 pub use visual_state::{
     CartoonSectionStyle, LightPreset, SurfaceStyle, ViewportCartoonState, ViewportIonState,
     ViewportLightingState, ViewportSurfaceState, ViewportVisualState, software_default_style,
 };
 
 use camera::Projector;
-use composer::{RepresentationComposer, SecondaryStructureCacheContext, SurfaceCacheContext};
 use interaction::{InteractionSystem, ViewportInteraction};
 use render::*;
 
@@ -38,16 +36,9 @@ pub const HOVER_FRAME: Duration = Duration::from_millis(100);
 /// avoiding a full clone of the geometry every frame.
 #[derive(Default)]
 pub struct ViewportCache {
-    geometry: GeometryCache,
     surface: SurfaceCache,
     secondary: SecondaryStructureCache,
     gpu: GpuViewCache,
-}
-
-#[derive(Default)]
-pub(super) struct GeometryCache {
-    key: Option<ViewportCacheKey>,
-    geometry: Option<ViewportGeometry>,
 }
 
 #[derive(Default)]
@@ -89,7 +80,6 @@ pub(super) struct GpuViewCache {
 
 impl ViewportCache {
     pub fn clear(&mut self) {
-        self.geometry = GeometryCache::default();
         self.surface = SurfaceCache::default();
         self.secondary = SecondaryStructureCache::default();
         self.gpu = GpuViewCache::default();
@@ -185,6 +175,7 @@ fn hash_visual_state(visual_state: &ViewportVisualState) -> u64 {
         chain.hash(&mut hasher);
         color.to_array().hash(&mut hasher);
     }
+    visual_state.show_cell.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -203,7 +194,6 @@ struct ViewportCacheKey {
     rect_min: Pos2,
     rect_max: Pos2,
     camera: ViewCamera,
-    show_cell: bool,
 }
 
 #[derive(Clone, PartialEq)]
@@ -244,10 +234,6 @@ pub struct ViewportDrawArgs<'a> {
     pub previous_hovered_atom: Option<usize>,
     pub cache: &'a mut ViewportCache,
     pub empty_state_hint: Option<&'a str>,
-    /// Whether the GPU molecule renderer initialized successfully at startup.
-    /// When false (or for representations the GPU path doesn't cover), the CPU
-    /// rasterizer is used instead.
-    pub gpu_ready: bool,
     /// Fixed camera framing `(center, radius)` to use instead of deriving it
     /// from `structure`. Set during trajectory playback so the view does not
     /// drift/zoom as atoms move between frames; `None` recomputes per frame.
@@ -256,18 +242,6 @@ pub struct ViewportDrawArgs<'a> {
     /// to keep its inset surface rounded while the renderer still owns the
     /// scene background color.
     pub background_corner_radius: u8,
-}
-
-/// Whether the GPU path can render this scene. It covers spheres, stick bonds,
-/// cartoon ribbons, and filled per-chain molecular surfaces. The wireframe
-/// ("mesh") surface style still uses the CPU line rasterizer, and the
-/// representation-surface overlay is only wired through the CPU path, so those
-/// scenes fall back.
-fn gpu_path_supported(visual_state: &ViewportVisualState) -> bool {
-    let mesh_surface =
-        !visual_state.surface.chains.is_empty() && visual_state.surface.style == SurfaceStyle::Mesh;
-    let representation_surface = !visual_state.surface_overlay.is_empty();
-    !mesh_surface && !representation_surface
 }
 
 pub fn draw_viewport(ui: &mut egui::Ui, args: ViewportDrawArgs<'_>) -> ViewportInteraction {
@@ -281,7 +255,6 @@ pub fn draw_viewport(ui: &mut egui::Ui, args: ViewportDrawArgs<'_>) -> ViewportI
         previous_hovered_atom,
         cache,
         empty_state_hint,
-        gpu_ready,
         view_override,
         background_corner_radius,
     } = args;
@@ -331,36 +304,19 @@ pub fn draw_viewport(ui: &mut egui::Ui, args: ViewportDrawArgs<'_>) -> ViewportI
         rect_min: rect.min,
         rect_max: rect.max,
         camera: *camera,
-        show_cell: visual_state.show_cell,
     };
-    let pick_targets = if gpu_ready && gpu_path_supported(visual_state) {
-        render_molecules_gpu(
-            &painter,
-            rect,
-            &viewport,
-            cache_key,
-            structure,
-            structure_id,
-            structure_revision,
-            selection,
-            visual_state,
-            cache,
-        )
-    } else {
-        render_molecules_cpu(
-            &painter,
-            rect,
-            &viewport,
-            cache_key,
-            structure,
-            structure_id,
-            structure_revision,
-            selection,
-            visual_state,
-            cache,
-            pal,
-        )
-    };
+    let pick_targets = render_molecules_gpu(
+        &painter,
+        rect,
+        &viewport,
+        cache_key,
+        structure,
+        structure_id,
+        structure_revision,
+        selection,
+        visual_state,
+        cache,
+    );
 
     if visual_state.show_cell
         && let Some(cell) = &structure.cell
@@ -417,58 +373,9 @@ pub fn draw_viewport(ui: &mut egui::Ui, args: ViewportDrawArgs<'_>) -> ViewportI
     interaction
 }
 
-/// CPU rasterizer path: build the full scene (ball-and-stick, cartoon, surface,
-/// cell) and submit it to the egui painter. Returns the projected pick targets.
-#[allow(clippy::too_many_arguments)]
-fn render_molecules_cpu(
-    painter: &egui::Painter,
-    rect: egui::Rect,
-    viewport: &Projector,
-    cache_key: ViewportCacheKey,
-    structure: &Structure,
-    structure_id: u64,
-    structure_revision: u64,
-    selection: &AtomSelection,
-    visual_state: &ViewportVisualState,
-    cache: &mut ViewportCache,
-    pal: crate::frontend::theme::Palette,
-) -> Vec<PickTarget> {
-    let geometry = cached_geometry(&mut cache.geometry, cache_key, structure, viewport);
-    let scene_result = RepresentationComposer::for_viewport(
-        structure,
-        geometry,
-        viewport,
-        selection,
-        visual_state,
-        SurfaceCacheContext::new(&mut cache.surface, structure_id, structure_revision),
-        SecondaryStructureCacheContext::new(
-            &mut cache.secondary,
-            SecondaryStructureCacheKey::new(structure_id, structure_revision),
-        ),
-    )
-    .build();
-    let rendered_in_full =
-        submit_scene_to_painter_within_budget(painter, &scene_result.scene, MAX_RENDER_TRIANGLES);
-
-    if !rendered_in_full {
-        painter.text(
-            rect.center(),
-            Align2::CENTER_CENTER,
-            format!(
-                "Structure too large to render ({} atoms).\nThe view is simplified; reduce the system or hide water to see more.",
-                structure.atoms.len()
-            ),
-            FontId::proportional(16.0),
-            pal.status_red,
-        );
-    }
-
-    scene_result.pick_targets
-}
-
 /// GPU path: rebuild the (camera-independent) instance set only when styling or
-/// selection changed, then queue a single paint callback. The unit-cell box is
-/// still drawn through the painter. Returns projected atom centers for picking.
+/// selection changed, then queue a single paint callback. Returns projected atom
+/// centers for picking.
 #[allow(clippy::too_many_arguments)]
 fn render_molecules_gpu(
     painter: &egui::Painter,
@@ -482,16 +389,6 @@ fn render_molecules_gpu(
     visual_state: &ViewportVisualState,
     cache: &mut ViewportCache,
 ) -> Vec<PickTarget> {
-    if visual_state.show_cell
-        && let Some(cell) = &structure.cell
-    {
-        submit_scene_to_painter_within_budget(
-            painter,
-            &build_cell_scene(viewport, cell),
-            MAX_RENDER_TRIANGLES,
-        );
-    }
-
     let instance_key =
         GpuInstanceKey::new(structure_id, structure_revision, visual_state, selection);
     let upload = if cache.gpu.instance_key == Some(instance_key) {
@@ -509,6 +406,7 @@ fn render_molecules_gpu(
             SurfaceCacheKey::new(structure_id, structure_revision, structure, visual_state);
         scene.surface =
             build_surface_world_mesh(structure, &surface_key, visual_state, &mut cache.surface);
+        scene.surface_wireframe = visual_state.surface.style == SurfaceStyle::Mesh;
         Some(scene)
     };
     gpu::emit(painter, rect, viewport, upload);

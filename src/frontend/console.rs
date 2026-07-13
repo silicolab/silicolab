@@ -57,10 +57,21 @@ impl Default for CommandConsoleState {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ScriptContext {
     variables: BTreeMap<String, String>,
     stdout_lines: Vec<String>,
+    gpu_image_export: bool,
+}
+
+impl Default for ScriptContext {
+    fn default() -> Self {
+        Self {
+            variables: BTreeMap::new(),
+            stdout_lines: Vec::new(),
+            gpu_image_export: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -113,6 +124,7 @@ pub fn run_script_file_with_args(
 ) -> Result<ScriptRunResult> {
     let mut context = ScriptContext {
         variables,
+        gpu_image_export: false,
         ..ScriptContext::default()
     };
     run_script_path_with_context(state, &mut context, &script_path.display().to_string())?;

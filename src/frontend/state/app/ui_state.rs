@@ -123,9 +123,8 @@ pub struct UiState {
     pub sequence: SequenceViewerState,
     pub camera: ViewCamera,
     pub viewport_cache: ViewportCache,
-    /// Set once at startup when the GPU molecule renderer initializes
-    /// successfully; gates the GPU rendering path in the viewport.
-    pub gpu_ready: bool,
+    pub pending_viewport_exports:
+        std::collections::VecDeque<crate::frontend::viewport::PendingViewportPngExport>,
     /// Detected GPU adapter name (from the wgpu render state at startup). `None`
     /// when the renderer doesn't expose one. Display-only.
     pub gpu_name: Option<String>,
@@ -281,7 +280,7 @@ impl Default for UiState {
             sequence: SequenceViewerState::default(),
             camera: ViewCamera::default(),
             viewport_cache: ViewportCache::default(),
-            gpu_ready: false,
+            pending_viewport_exports: std::collections::VecDeque::new(),
             gpu_name: None,
             glass_active: false,
             glass_alpha: None,

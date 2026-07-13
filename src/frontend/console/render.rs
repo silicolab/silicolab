@@ -6,7 +6,7 @@ use eframe::egui::Color32;
 use crate::frontend::{
     ViewportVisualState,
     state::{AppState, AtomStyle},
-    viewport::{ViewportPngExport, export_viewport_png},
+    viewport::PendingViewportPngExport,
 };
 
 pub(crate) fn view_command(state: &mut AppState, args: ViewArgs) -> Result<String> {
@@ -204,19 +204,26 @@ pub(crate) fn save_command(
 ) -> Result<String> {
     match target {
         SaveTarget::Image { path } => {
+            if !context.gpu_image_export {
+                anyhow::bail!(
+                    "image export is unavailable in CLI mode; launch the GUI to use GPU export"
+                );
+            }
             let resolved_path = context.resolve_path(&path);
-            export_viewport_png(
-                state.structure(),
-                ViewportPngExport {
-                    camera: state.ui.camera,
-                    selection: &state.ui.selection,
-                    visual_state: &state.ui.viewport,
-                    width: state.ui.scripted_viewport_size[0],
-                    height: state.ui.scripted_viewport_size[1],
-                    output_path: &resolved_path,
-                },
-            )?;
-            Ok(format!("saved image to {}", resolved_path.display()))
+            let request = PendingViewportPngExport {
+                structure: state.structure().clone(),
+                camera: state.ui.camera,
+                selection: state.ui.selection.clone(),
+                visual_state: state.ui.viewport.clone(),
+                width: state.ui.scripted_viewport_size[0],
+                height: state.ui.scripted_viewport_size[1],
+                output_path: resolved_path.clone(),
+            };
+            state.ui.pending_viewport_exports.push_back(request);
+            Ok(format!(
+                "queued image export to {}",
+                resolved_path.display()
+            ))
         }
         SaveTarget::View { path } => {
             let resolved_path = context.resolve_path(&path);
