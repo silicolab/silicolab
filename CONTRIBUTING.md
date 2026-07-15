@@ -108,5 +108,5 @@ By contributing, you confirm that you have the right to make that grant.
 ## Code conventions
 
 - **Single-responsibility files.** Split into modules rather than letting a file
-  accumulate; see [`.rules`](.rules) for the current size budget. This is a
+  accumulate; see [`AGENTS.md`](AGENTS.md) for the current size budget. This is a
   modular Cargo workspace; lean on the module system.

@@ -1,1 +1,57 @@
-.rules
+# SilicoLab rules
+
+## Rust coding guidelines
+
+* Default to no comment. Comment only to state a fact the reader cannot infer from the code — a non-obvious invariant, edge case, footgun, or why a plausible alternative is wrong. Never comment to restate the code or narrate how it is organized ("extracted so…", "first because…").
+* Do not create shallow one-function modules just to look organized. Add a new file or module when it represents a real domain concept, layer boundary, or reusable component.
+* Keep source files under 800 physical lines (soft target ~500).
+* Avoid panics in production paths that handle user data, external files, subprocess output, or network responses. Return useful errors instead.
+* Do not silently discard fallible errors. Propagate them, handle them, or make the deliberate ignore visible.
+* Do not introduce global state for convenience unless the existing architecture already has an ownership point for that state.
+
+## Architecture invariants
+
+* Before adding a new command, action, engine setting, or persistence path, search for the existing pattern and extend it instead of creating a parallel path. `docs/adding-a-feature.md` maps each feature archetype to the module to mirror and the sites to touch.
+* A new structure IO format touches four sites: `io/structure_format.rs`, `io/structure_codec.rs`, `io/formats/mod.rs`, and `io/structure_paths.rs::READABLE_EXTENSIONS` — the last is a plain array, so the compiler will NOT flag it if you forget it.
+* The GUI and CLI share the `.sls` grammar in `src/frontend/console/grammar.rs`. Add or change a script command once there; do not create separate GUI-only and CLI-only implementations.
+* The compute stack lives in the `compute-core` crate; the GUI app (`silicolab`) and the headless worker both depend on it. Within `compute-core`, higher layers may depend on lower layers only. Layer order, lowest to highest:
+
+  ```text
+  compute-core:  domain/ <- io/ <- md/ <- engines/ <- workflows/
+  silicolab:     backend/ + frontend/    (the app crate; depends on compute-core)
+  ```
+
+  `md/` is the engine-neutral molecular-dynamics model (system building, topology, solvation, force fields, the stage/parameter model, recommendations) that both the MD engines and the MD workflow build on — so it sits below `engines/`. The engine-coupling step (translating that model into an engine stage chain) is the one MD piece that stays in `workflows/molecular_dynamics/protocol.rs`. Do not import `workflows/` from `engines/`; reach for `md/` instead.
+
+  `compute-core` also holds the remote-host descriptor (`hosts`), the serializable `payload` bridge, and the engine-job `wire` contract, and carries no GUI dependencies so the headless worker can link it alone.
+
+* Put code in the lowest layer that can own it. `domain/` must stay free of UI and IO. The app's persistence code currently serializes a small set of frontend-owned view DTOs; do not expand that seam, and put new shared DTOs below both users when practical.
+* Projects are directories of SQLite databases. Do not introduce a separate single-file project format without an ADR, issue, or documented design note.
+* Keep generated project data backward-compatible unless there is an explicit migration path.
+* Prefer structured parsing and serialization for project files and command definitions. Avoid ad hoc string parsing when an existing parser or data model owns the format.
+
+## GUI state
+
+The GUI uses an Elm-style flow.
+
+* Persisted application state changes should go through `AppAction` and `src/frontend/dispatcher/mod.rs::dispatch`.
+* UI rendering code under `src/frontend/ui/` should read state and emit actions, not mutate persisted workspace state directly.
+* Draft editor state may be mutated locally while an editor is open, but the committed result should enter the workspace through the normal action/history path.
+* Do not bypass the action/history system for changes that should be undoable or persisted.
+* Background workers should report results back through the established frontend/dispatcher flow; they should not directly mutate GUI state.
+
+## Engines and long-running work
+
+* Engine probing must be cheap and non-blocking. Slow version detection, subprocess work, network requests, and filesystem-heavy scans should run lazily, explicitly, or in background work with cached results.
+* Preserve the shared launch model where WSL-hosted engines use a `command_prefix` such as `["wsl.exe", "-e"]` and native engines use an empty prefix.
+* When changing engine launch behavior, test or reason separately about native Windows execution and WSL-prefixed execution.
+
+## Commit and PR hygiene
+
+* Use Conventional Commits for commit messages, matching the existing project style.
+* Before opening a PR, make CI's local Rust gates pass with `cargo pr-check`; update `xtask` when CI's local checks change.
+
+## Rules hygiene
+
+These rules are read by every agent session; keep the file small. Add a rule only for a non-obvious, repeated trap, and remove rules the architecture has outgrown — stale rules are worse than missing ones.
+Each fact has one owning document; reference it from elsewhere, never restate its value (a copied threshold or command drifts the moment the owner changes).
