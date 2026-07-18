@@ -151,7 +151,11 @@ pub(crate) fn render_assistant_settings(
         .map(|(_, label)| label.clone())
         .unwrap_or_else(|| {
             if current_model.trim().is_empty() {
-                "Choose model…".to_string()
+                if matches!(provider.kind, registry::ProviderKind::ExternalAgent(_)) {
+                    "CLI default".to_string()
+                } else {
+                    "Choose model…".to_string()
+                }
             } else {
                 current_model.clone()
             }
@@ -218,6 +222,27 @@ pub(crate) fn render_assistant_settings(
             .size(CAPTION_SIZE)
             .color(pal.text_tertiary),
     );
+
+    if matches!(provider.kind, registry::ProviderKind::ExternalAgent(_)) {
+        let executable = state
+            .config
+            .assistant
+            .external_agent_executables
+            .get(provider.id)
+            .cloned()
+            .unwrap_or_default();
+        if let Some(path) = committed_text_field(
+            ui,
+            "assistant.external_executable",
+            "Executable override",
+            &executable,
+            "auto-detect from PATH",
+        ) && path != executable
+        {
+            actions.push(AppAction::SetAssistantExecutable(path));
+        }
+        ui.label(RichText::new("Uses the installed CLI's own login and subscription. SilicoLab never stores an API key or installs it.").size(CAPTION_SIZE).color(pal.text_tertiary));
+    }
 
     // Free-text model id — model ids drift, and OpenRouter/local take arbitrary
     // ids, so let the user type one directly. Committed on Enter / focus loss.

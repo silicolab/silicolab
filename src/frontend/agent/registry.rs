@@ -4,6 +4,7 @@
 
 use crate::backend::config::{AssistantConfig, AssistantModelSelection};
 use crate::io::llm::anthropic::{AnthropicProvider, caps_for_model};
+use crate::io::llm::external::{ExternalAccess, ExternalAgent, ExternalAgentKind};
 use crate::io::llm::openai_compat::OpenAiCompatProvider;
 use crate::io::llm::provider::{LlmProvider, ProviderCaps};
 
@@ -13,6 +14,7 @@ use crate::io::llm::provider::{LlmProvider, ProviderCaps};
 pub enum ProviderKind {
     Native,
     OpenAiCompat,
+    ExternalAgent(ExternalAgentKind),
 }
 
 /// One selectable model within a provider.
@@ -74,6 +76,12 @@ impl ProviderSpec {
                     supports_streaming: false,
                 }
             }
+            ProviderKind::ExternalAgent(_) => ProviderCaps {
+                supports_effort: false,
+                supports_thinking: false,
+                supports_prompt_cache: false,
+                supports_streaming: true,
+            },
         }
     }
 }
@@ -82,6 +90,24 @@ impl ProviderSpec {
 /// adapter (base-URL swap). Model ids drift — they are editable as free text in
 /// the Assistant settings, and `base_url` is overridable per install.
 pub const PROVIDERS: &[ProviderSpec] = &[
+    ProviderSpec {
+        id: "codex_cli",
+        label: "Codex CLI",
+        kind: ProviderKind::ExternalAgent(ExternalAgentKind::Codex),
+        base_url: "",
+        key_env: "",
+        reasoning_replay: false,
+        models: &[],
+    },
+    ProviderSpec {
+        id: "claude_cli",
+        label: "Claude CLI",
+        kind: ProviderKind::ExternalAgent(ExternalAgentKind::Claude),
+        base_url: "",
+        key_env: "",
+        reasoning_replay: false,
+        models: &[],
+    },
     ProviderSpec {
         id: "anthropic",
         label: "Anthropic (Claude)",
@@ -399,11 +425,30 @@ pub fn build_provider(
 ) -> Result<Box<dyn LlmProvider>, String> {
     let spec = provider_spec(&selection.provider)
         .ok_or_else(|| format!("Unknown assistant provider `{}`.", selection.provider))?;
-    if selection.model.trim().is_empty() {
+    if selection.model.trim().is_empty() && !matches!(spec.kind, ProviderKind::ExternalAgent(_)) {
         return Err(format!(
             "Choose a model for {} before sending a message.",
             spec.label
         ));
+    }
+    if let ProviderKind::ExternalAgent(kind) = spec.kind {
+        let executable = config
+            .external_agent_executables
+            .get(spec.id)
+            .filter(|path| !path.trim().is_empty())
+            .cloned();
+        return Ok(Box::new(ExternalAgent::new(
+            kind,
+            executable,
+            match config.external_agent_access {
+                crate::backend::config::ExternalAgentAccess::Controlled => {
+                    ExternalAccess::Controlled
+                }
+                crate::backend::config::ExternalAgentAccess::Unrestricted => {
+                    ExternalAccess::Unrestricted
+                }
+            },
+        )));
     }
     let key = api_key_for(spec).ok_or_else(|| {
         format!(
@@ -425,6 +470,7 @@ pub fn build_provider(
             spec.reasoning_replay,
             spec.id,
         ))),
+        ProviderKind::ExternalAgent(_) => unreachable!("external agents returned above"),
     }
 }
 

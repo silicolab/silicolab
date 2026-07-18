@@ -9,6 +9,41 @@ pub struct AssistantModelSelection {
     pub model: String,
 }
 
+/// Sandbox posture handed to an external agent CLI. `Controlled` maps to the
+/// CLI's read-only/plan mode; `Unrestricted` opts into its approval- and
+/// sandbox-bypass flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ExternalAgentAccess {
+    #[default]
+    Controlled,
+    Unrestricted,
+}
+
+impl ExternalAgentAccess {
+    pub fn all() -> [ExternalAgentAccess; 2] {
+        [
+            ExternalAgentAccess::Controlled,
+            ExternalAgentAccess::Unrestricted,
+        ]
+    }
+
+    /// Full description for a menu row.
+    pub fn label(self) -> &'static str {
+        match self {
+            ExternalAgentAccess::Controlled => "Controlled — read-only / plan sandbox",
+            ExternalAgentAccess::Unrestricted => "Unrestricted — bypass CLI approvals & sandbox",
+        }
+    }
+
+    /// Compact label for the collapsed picker.
+    pub fn short_label(self) -> &'static str {
+        match self {
+            ExternalAgentAccess::Controlled => "Controlled",
+            ExternalAgentAccess::Unrestricted => "Unrestricted",
+        }
+    }
+}
+
 impl Default for AssistantModelSelection {
     fn default() -> Self {
         Self {
@@ -94,6 +129,10 @@ pub struct AssistantConfig {
     /// an older `settings.json` parses to the default (AutoSafe).
     #[serde(default)]
     pub approval_mode: ApprovalMode,
+    #[serde(default)]
+    pub external_agent_access: ExternalAgentAccess,
+    #[serde(default)]
+    pub external_agent_executables: std::collections::BTreeMap<String, String>,
 }
 
 impl Default for AssistantConfig {
@@ -105,6 +144,8 @@ impl Default for AssistantConfig {
             base_urls: Default::default(),
             model_effort_overrides: Default::default(),
             approval_mode: ApprovalMode::default(),
+            external_agent_access: ExternalAgentAccess::default(),
+            external_agent_executables: Default::default(),
         }
     }
 }

@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::ops::{Deref, DerefMut};
 
-use crate::backend::config::AssistantModelSelection;
+use crate::backend::config::{AssistantModelSelection, ExternalAgentAccess};
 use crate::frontend::console::RiskLevel;
 use crate::io::llm::types::{ChatMessage, ContentBlock, ToolCall, Usage};
 
@@ -109,6 +109,7 @@ pub struct AssistantConversation {
     pub id: AssistantConversationId,
     pub title: String,
     pub selection: AssistantModelSelection,
+    pub external_access: ExternalAgentAccess,
     /// Neutral conversation history replayed to the provider each turn (includes
     /// prior assistant turns with their opaque reasoning blobs). The system
     /// prompt is *not* stored here — it is rebuilt per turn into `LlmConfig`.
@@ -164,6 +165,7 @@ impl AssistantConversation {
             id,
             title,
             selection,
+            external_access: ExternalAgentAccess::Controlled,
             history: Vec::new(),
             transcript: Vec::new(),
             input: String::new(),

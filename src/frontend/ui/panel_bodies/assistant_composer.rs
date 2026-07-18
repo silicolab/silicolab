@@ -53,7 +53,15 @@ pub(crate) fn render_assistant_composer(
     let busy = state.ui.agent.is_busy();
     let assistant_enabled = state.config.assistant.enabled;
     let key_present = state.ui.agent.key_available.unwrap_or(false);
-    let model_selected = !state.ui.agent.selection.model.trim().is_empty();
+    let provider =
+        crate::frontend::agent::registry::provider_spec(&state.ui.agent.selection.provider);
+    let model_selected = !state.ui.agent.selection.model.trim().is_empty()
+        || provider.is_some_and(|provider| {
+            matches!(
+                provider.kind,
+                crate::frontend::agent::registry::ProviderKind::ExternalAgent(_)
+            )
+        });
     let running_height = running_strip_height(running_jobs);
     let queued_height = queued_strip_height(queued);
 
@@ -258,12 +266,22 @@ pub(crate) fn render_assistant_composer(
                         };
                         let model_width =
                             (controls_width - mode_width - CONTROL_GAP).clamp(28.0, 132.0);
-                        render_approval_mode_picker(state, ui, actions, mode_width);
 
                         let selection = state.ui.agent.selection.clone();
                         let provider =
                             crate::frontend::agent::registry::provider_spec(&selection.provider)
                                 .unwrap_or(&crate::frontend::agent::registry::PROVIDERS[0]);
+                        // External CLIs ignore SilicoLab's approval policy; their
+                        // own sandbox posture is the relevant control instead.
+                        if matches!(
+                            provider.kind,
+                            crate::frontend::agent::registry::ProviderKind::ExternalAgent(_)
+                        ) {
+                            render_external_access_picker(state, ui, actions, mode_width);
+                        } else {
+                            render_approval_mode_picker(state, ui, actions, mode_width);
+                        }
+
                         open_assistant_settings |= render_assistant_model_picker(
                             state,
                             ui,
@@ -336,6 +354,46 @@ fn render_approval_mode_picker(
     response
         .response
         .on_hover_text(format!("Agent permissions\n{}", current.label()));
+}
+
+/// Per-conversation sandbox posture for external CLI agents, shown in place of
+/// the approval picker (which those agents ignore). Persisted on the active
+/// conversation via the same dispatcher action used nowhere else.
+fn render_external_access_picker(
+    state: &AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+    width: f32,
+) {
+    use crate::backend::config::ExternalAgentAccess;
+
+    let current = state.ui.agent.external_access;
+    let can_switch = state.ui.agent.can_manage_conversations();
+    let response = ui
+        .add_enabled_ui(can_switch, |ui| {
+            egui::ComboBox::from_id_salt("assistant.composer_external_access")
+                .selected_text(assistant_text(current.short_label()))
+                .width(width.max(34.0))
+                .truncate()
+                .show_ui(ui, |ui| {
+                    crate::frontend::theme::stabilize_selectable_rows(ui);
+                    ui.set_min_width(250.0);
+                    for access in ExternalAgentAccess::all() {
+                        if ui
+                            .selectable_label(access == current, assistant_text(access.label()))
+                            .clicked()
+                            && access != current
+                        {
+                            actions.push(AppAction::SetAssistantExternalAccess(access));
+                            ui.close();
+                        }
+                    }
+                })
+        })
+        .inner;
+    response
+        .response
+        .on_hover_text(format!("External agent access\n{}", current.label()));
 }
 
 fn compact_approval_label(mode: crate::backend::config::ApprovalMode) -> &'static str {

@@ -53,6 +53,8 @@ pub struct PersistedAssistantConversation {
     pub provider: String,
     pub model: String,
     #[serde(default)]
+    pub external_access: crate::backend::assistant_config::ExternalAgentAccess,
+    #[serde(default)]
     pub history: Vec<PersistedChatMessage>,
     #[serde(default)]
     pub transcript: Vec<PersistedTranscriptEntry>,

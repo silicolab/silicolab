@@ -100,6 +100,7 @@ fn persist_conversation(conversation: &AssistantConversation) -> PersistedAssist
         title: conversation.title.clone(),
         provider: conversation.selection.provider.clone(),
         model: conversation.selection.model.clone(),
+        external_access: conversation.external_access,
         history: resumable.history.iter().map(persist_message).collect(),
         transcript,
         input: conversation.input.clone(),
@@ -117,6 +118,7 @@ fn restore_conversation(payload: PersistedAssistantConversation) -> AssistantCon
     };
     let mut conversation = AssistantConversation::new(id, title, selection);
     conversation.history = payload.history.into_iter().map(restore_message).collect();
+    conversation.external_access = payload.external_access;
     conversation.transcript = payload
         .transcript
         .into_iter()

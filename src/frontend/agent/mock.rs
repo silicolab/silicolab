@@ -84,6 +84,7 @@ mod tests {
 
     fn cfg() -> LlmConfig {
         LlmConfig {
+            working_dir: None,
             model: "mock".to_string(),
             effort: Effort::High,
             max_output_tokens: 1000,
