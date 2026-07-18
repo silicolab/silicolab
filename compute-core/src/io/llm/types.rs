@@ -129,6 +129,7 @@ pub struct LlmConfig {
     pub stream: bool,
     /// Persona + `.sls` catalog. Static across a session, so it caches.
     pub system: String,
+    pub working_dir: Option<std::path::PathBuf>,
 }
 
 /// A tool invocation the model emitted this turn.

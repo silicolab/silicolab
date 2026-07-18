@@ -2,7 +2,7 @@ use super::*;
 
 use eframe::egui;
 
-use crate::backend::config::ApprovalMode;
+use crate::backend::config::{ApprovalMode, ExternalAgentAccess};
 use crate::frontend::agent::registry;
 use crate::frontend::agent::session::{AssistantConversationId, ModelFetchStatus};
 use crate::frontend::jobs::spawn_model_fetch;
@@ -137,6 +137,31 @@ pub fn set_assistant_base_url(state: &mut AppState, base_url: &str) {
     persist(state);
 }
 
+pub fn set_assistant_executable(state: &mut AppState, path: &str) {
+    let provider = state.config.assistant.default_selection.provider.clone();
+    let path = path.trim();
+    if path.is_empty() {
+        state
+            .config
+            .assistant
+            .external_agent_executables
+            .remove(&provider);
+    } else {
+        state
+            .config
+            .assistant
+            .external_agent_executables
+            .insert(provider, path.to_string());
+    }
+    persist(state);
+}
+
+/// Set the active conversation's external-agent sandbox posture and persist.
+pub fn set_assistant_external_access(state: &mut AppState, access: ExternalAgentAccess) {
+    state.ui.agent.external_access = access;
+    persist(state);
+}
+
 /// Store the default provider's API key in the app key store (never in config).
 pub fn set_assistant_api_key(state: &mut AppState, key: &str) {
     let provider = registry::default_provider(&state.config.assistant);
@@ -185,6 +210,13 @@ pub fn fetch_models(state: &mut AppState, ctx: &egui::Context) {
         return;
     }
     let spec = registry::default_provider(&state.config.assistant);
+    if matches!(spec.kind, registry::ProviderKind::ExternalAgent(_)) {
+        state.ui.agent.model_fetch = ModelFetchStatus::Error(
+            "CLI agents use their own model selection; model enumeration is not requested.".into(),
+        );
+        ctx.request_repaint();
+        return;
+    }
     let Some(key) = registry::api_key_for(spec) else {
         state.ui.agent.model_fetch = ModelFetchStatus::Error(format!(
             "Add a key for {} first to list its models.",

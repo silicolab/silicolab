@@ -22,7 +22,7 @@ pub use persist::{
 };
 
 pub use crate::backend::assistant_config::{
-    ApprovalMode, AssistantConfig, AssistantModelSelection,
+    ApprovalMode, AssistantConfig, AssistantModelSelection, ExternalAgentAccess,
 };
 
 /// How the interface picks its light/dark appearance.

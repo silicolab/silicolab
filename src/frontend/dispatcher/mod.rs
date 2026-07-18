@@ -404,6 +404,12 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SetAssistantBaseUrl(url) => {
             crate::frontend::agent::set_assistant_base_url(state, &url)
         }
+        AppAction::SetAssistantExecutable(path) => {
+            crate::frontend::agent::set_assistant_executable(state, &path)
+        }
+        AppAction::SetAssistantExternalAccess(access) => {
+            crate::frontend::agent::set_assistant_external_access(state, access)
+        }
         AppAction::SetAssistantApiKey(key) => {
             crate::frontend::agent::set_assistant_api_key(state, &key)
         }

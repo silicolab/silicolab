@@ -116,6 +116,9 @@ fn fetch_model_ids(
             .header("x-api-key", api_key)
             .header("anthropic-version", "2023-06-01")
             .call(),
+        ProviderKind::ExternalAgent(_) => {
+            return Err("CLI agents do not expose an API model list; choose CLI default or enter a model id.".into());
+        }
     };
 
     let mut response = response.map_err(|error| error.to_string())?;

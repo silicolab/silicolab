@@ -375,6 +375,10 @@ pub enum AppAction {
     /// Set (blank clears) the base-URL override for an OpenAI-compatible
     /// assistant provider and persist.
     SetAssistantBaseUrl(String),
+    /// Set (blank clears) the installed external CLI executable override.
+    SetAssistantExecutable(String),
+    /// Set the active conversation's external-agent sandbox posture.
+    SetAssistantExternalAccess(crate::backend::config::ExternalAgentAccess),
     /// Store the entered API key for the active provider in the app key store.
     SetAssistantApiKey(String),
     /// Remove the stored key for the provider with this id (active "Clear" button

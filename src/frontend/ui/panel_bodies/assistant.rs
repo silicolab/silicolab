@@ -38,7 +38,8 @@ pub(crate) fn render_assistant_panel(
 
     let selection = state.ui.agent.selection.clone();
     let provider = registry::provider_spec(&selection.provider).unwrap_or(&registry::PROVIDERS[0]);
-    let model_selected = !selection.model.trim().is_empty();
+    let model_selected = !selection.model.trim().is_empty()
+        || matches!(provider.kind, registry::ProviderKind::ExternalAgent(_));
     // Cached (the live check reads env + the key store); refreshed off the hot path.
     let key_present = state.ui.agent.key_available.unwrap_or(false);
     // Cloned so the cards can render without holding a borrow on `state`.
@@ -567,117 +568,6 @@ pub(crate) fn assistant_inset_row<R>(
     )
 }
 
-pub(super) fn render_assistant_model_picker(
-    state: &AppState,
-    ui: &mut egui::Ui,
-    actions: &mut Vec<AppAction>,
-    provider: &crate::frontend::agent::registry::ProviderSpec,
-    current_model: &str,
-    width: f32,
-) -> bool {
-    use crate::frontend::agent::registry;
-
-    let can_switch = state.ui.agent.can_manage_conversations();
-    let selected_label = provider
-        .models
-        .iter()
-        .find(|model| model.id == current_model)
-        .map(|model| model.label)
-        .unwrap_or(current_model);
-    let selected_label = if selected_label.trim().is_empty() {
-        "Choose model…".to_string()
-    } else {
-        compact_model_label(selected_label, if width < 76.0 { 8 } else { 14 })
-    };
-    let mut open_settings = false;
-    let response = egui::ComboBox::from_id_salt("assistant.conversation_model")
-        .selected_text(assistant_text(selected_label))
-        .width(width.max(28.0))
-        .truncate()
-        .show_ui(ui, |ui| {
-            crate::frontend::theme::stabilize_selectable_rows(ui);
-            ui.set_min_width(220.0);
-            for spec in registry::PROVIDERS {
-                ui.label(RichText::new(spec.label).small().strong());
-                let available = registry::api_key_for(spec).is_some();
-                let fetched = state
-                    .ui
-                    .agent
-                    .fetched_models
-                    .get(spec.id)
-                    .map(Vec::as_slice)
-                    .unwrap_or_default();
-                let models = registry::merged_model_ids(spec, fetched);
-                if models.is_empty() {
-                    ui.label(
-                        RichText::new("Choose in Assistant settings")
-                            .small()
-                            .color(crate::frontend::theme::palette(ui).text_tertiary),
-                    );
-                }
-                for (model, label) in models {
-                    let selected = spec.id == provider.id && model == current_model;
-                    let response = ui.add_enabled(
-                        can_switch && available,
-                        egui::Button::selectable(selected, assistant_text(&label)),
-                    );
-                    let response = if available {
-                        response
-                    } else {
-                        response.on_hover_text("Add an API key for this provider first")
-                    };
-                    if response.clicked() && !selected {
-                        actions.push(AppAction::SwitchAssistantConversationModel {
-                            provider: spec.id.to_string(),
-                            model,
-                        });
-                        ui.close();
-                    }
-                }
-                if !available {
-                    ui.label(
-                        RichText::new("API key required")
-                            .small()
-                            .color(crate::frontend::theme::palette(ui).text_tertiary),
-                    );
-                }
-                ui.add_space(3.0);
-            }
-            ui.separator();
-            if ui.button("Manage providers and API keys…").clicked() {
-                open_settings = true;
-                ui.close();
-            }
-        });
-    let mut hover = format!("{} · {}", provider.label, current_model);
-    if let Some(usage) = &state.ui.agent.last_usage {
-        let session = &state.ui.agent.session_usage;
-        hover.push_str(&format!(
-            "\nLast: {} in / {} out\nSession: {} in / {} out",
-            compact(usage.input_total()),
-            compact(usage.output),
-            compact(session.input_total()),
-            compact(session.output),
-        ));
-    }
-    response.response.on_hover_text(hover);
-    open_settings
-}
-
-fn compact_model_label(label: &str, max_chars: usize) -> String {
-    let without_qualifier = label.split(" (").next().unwrap_or(label);
-    let short = ["Claude ", "Anthropic ", "OpenAI ", "Google "]
-        .iter()
-        .find_map(|prefix| without_qualifier.strip_prefix(prefix))
-        .unwrap_or(without_qualifier);
-    let count = short.chars().count();
-    if count <= max_chars {
-        return short.to_string();
-    }
-    let keep = max_chars.saturating_sub(1);
-    format!("{}…", short.chars().take(keep).collect::<String>())
-}
-
 /// First-run welcome shown when the transcript is empty: a centered prompt plus
 /// a missing-key callout when no credential is configured.
 fn render_assistant_empty_state(
@@ -780,13 +670,4 @@ fn render_assistant_empty_state(
 /// callout fills that stay readable on either theme.
 fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
     crate::frontend::theme::mix(a, b, t)
-}
-
-/// Compact token count, e.g. `1234` → `1.2k`.
-fn compact(value: u32) -> String {
-    if value < 1000 {
-        value.to_string()
-    } else {
-        format!("{:.1}k", value as f32 / 1000.0)
-    }
 }

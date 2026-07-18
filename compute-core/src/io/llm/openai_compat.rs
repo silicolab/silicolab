@@ -525,6 +525,7 @@ mod tests {
             "openai",
         );
         let cfg = LlmConfig {
+            working_dir: None,
             model: "o4".into(),
             effort: Effort::Medium,
             max_output_tokens: 1000,
@@ -555,6 +556,7 @@ mod tests {
             "local",
         );
         let cfg = LlmConfig {
+            working_dir: None,
             model: "m".into(),
             effort: Effort::High,
             max_output_tokens: 100,
@@ -591,6 +593,7 @@ mod tests {
             ],
         }];
         let cfg = LlmConfig {
+            working_dir: None,
             model: "m".into(),
             effort: Effort::Low,
             max_output_tokens: 100,

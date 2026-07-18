@@ -81,7 +81,9 @@ pub fn spawn_next_turn(state: &mut AppState, ctx: &egui::Context) {
     }
 
     let selection = state.ui.agent.selection.clone();
-    let provider = match registry::build_provider(&state.config.assistant, &selection) {
+    let mut assistant_config = state.config.assistant.clone();
+    assistant_config.external_agent_access = state.ui.agent.external_access;
+    let provider = match registry::build_provider(&assistant_config, &selection) {
         Ok(provider) => provider,
         Err(reason) => {
             notice(state, &reason);
@@ -103,13 +105,14 @@ pub fn spawn_next_turn(state: &mut AppState, ctx: &egui::Context) {
         .workspace
         .project()
         .map(|project| project.root.clone());
-    state.ui.agent.ensure_skills_loaded(project_root);
+    state.ui.agent.ensure_skills_loaded(project_root.clone());
     let cfg = LlmConfig {
         model: selection.model,
         effort: state.config.assistant.effort,
         max_output_tokens: MAX_OUTPUT_TOKENS,
         stream,
         system: system_prompt(&state.ui.agent.skills),
+        working_dir: project_root,
     };
     let tools = tools::tool_defs();
     let history = state.ui.agent.history.clone();

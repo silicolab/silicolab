@@ -22,6 +22,7 @@ fn sonnet_45_disables_effort() {
 fn haiku_request_omits_thinking_and_effort() {
     let provider = AnthropicProvider::new("k".into(), "claude-haiku-4-5".into());
     let cfg = LlmConfig {
+        working_dir: None,
         model: "claude-haiku-4-5".into(),
         effort: Effort::High,
         max_output_tokens: 1000,
@@ -39,6 +40,7 @@ fn haiku_request_omits_thinking_and_effort() {
 fn opus_request_sends_adaptive_thinking_and_effort() {
     let provider = AnthropicProvider::new("k".into(), "claude-opus-4-8".into());
     let cfg = LlmConfig {
+        working_dir: None,
         model: "claude-opus-4-8".into(),
         effort: Effort::XHigh,
         max_output_tokens: 1000,
@@ -147,6 +149,7 @@ fn parse_sse_reconstructs_turn_and_streams_text() {
 fn streaming_request_sets_stream_flag() {
     let provider = AnthropicProvider::new("k".into(), "claude-sonnet-4-6".into());
     let cfg = LlmConfig {
+        working_dir: None,
         model: "claude-sonnet-4-6".into(),
         effort: Effort::High,
         max_output_tokens: 1000,
