@@ -14,9 +14,9 @@ npm run dev
 ```
 
 Run `npm run build` before submitting changes. The build validates Starlight
-content and internal links. Cloudflare builds and deploys the site from this
-directory after changes reach `main`; `.github/workflows/docs.yml` performs the
-pull-request validation build.
+content and internal links. Cloudflare builds and deploys the public site at
+<https://docs.silicolab.nmrtist.space> from this directory after changes reach
+`main`; `.github/workflows/docs.yml` performs the pull-request validation build.
 
 ## Content and assets
 

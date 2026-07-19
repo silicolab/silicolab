@@ -10,13 +10,13 @@
 <p align="left"><em>Computational environment for chemistry, biology &amp; materials research.</em></p>
 
 <p align="left">
-  <a href="https://docs.silicolab.workers.dev/"><img alt="Documentation" src="https://img.shields.io/badge/docs-docs.silicolab.workers.dev-2563eb"></a>
+  <a href="https://docs.silicolab.nmrtist.space/"><img alt="Documentation" src="https://img.shields.io/badge/docs-docs.silicolab.nmrtist.space-2563eb"></a>
   <a href="https://github.com/silicolab/silicolab/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/silicolab/silicolab/actions/workflows/ci.yml/badge.svg?branch=main"></a>
   <a href="https://github.com/silicolab/silicolab/releases"><img alt="Release" src="https://img.shields.io/github/v/release/silicolab/silicolab?include_prereleases&sort=semver"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/badge/license-GPL--3.0--or--later%20OR%20commercial-blue"></a>
 </p>
 
-**Read the [user manual](https://docs.silicolab.workers.dev/) or download a
+**Read the [user manual](https://docs.silicolab.nmrtist.space/) or download a
 prebuilt executable from [GitHub Releases](https://github.com/silicolab/silicolab/releases).**
 
 ![SilicoLab screenshot](docs/images/main-window.png)
@@ -78,7 +78,7 @@ silicolab workflow.sls
 ```
 
 The same scripts also run interactively in the GUI console. The full user
-manual in English and Chinese lives at <https://docs.silicolab.workers.dev/>.
+manual in English and Chinese lives at <https://docs.silicolab.nmrtist.space/>.
 
 ## External tools
 
@@ -87,8 +87,8 @@ need them. Molecular dynamics requires GROMACS. Quantum chemistry uses the
 built-in Hartree engine by default, with ORCA available as an optional external
 engine when the user configures its executable path. See the manual for setup details:
 
-- [External tools](https://docs.silicolab.workers.dev/getting-started/external-tools/)
-- [Remote execution over SSH](https://docs.silicolab.workers.dev/getting-started/remote-execution/)
+- [External tools](https://docs.silicolab.nmrtist.space/getting-started/external-tools/)
+- [Remote execution over SSH](https://docs.silicolab.nmrtist.space/getting-started/remote-execution/)
 
 ## Development
 

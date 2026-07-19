@@ -3,7 +3,7 @@ import starlight from '@astrojs/starlight';
 import starlightLinksValidator from 'starlight-links-validator';
 
 export default defineConfig({
-  site: 'https://docs.silicolab.workers.dev',
+  site: 'https://docs.silicolab.nmrtist.space',
   integrations: [
     starlight({
       title: 'SilicoLab',
