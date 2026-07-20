@@ -32,6 +32,16 @@ export default defineConfig({
           translations: { 'zh-CN': '快速开始' },
           autogenerate: { directory: 'getting-started' },
         },
+        {
+          label: 'Projects & Structures',
+          translations: { 'zh-CN': '项目与结构' },
+          autogenerate: { directory: 'projects-structures' },
+        },
+        {
+          label: 'Build & Prepare',
+          translations: { 'zh-CN': '构建与准备' },
+          autogenerate: { directory: 'build-prepare' },
+        },
       ],
       logo: {
         light: './src/assets/wordmark-light.svg',

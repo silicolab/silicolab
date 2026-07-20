@@ -2,7 +2,7 @@
 title: External tools
 description: Configure external programs used by SilicoLab feature modules.
 sidebar:
-  order: 3
+  order: 5
 ---
 
 SilicoLab can launch without optional external tools. Install these programs
@@ -15,9 +15,10 @@ an optional alternative for molecular single-point energies, geometry
 optimizations, and vibrational frequencies. Transition-state and periodic QM
 calculations currently use Hartree.
 
-Install ORCA separately, then open **Settings > Compute targets**. In the ORCA
-row for **This machine**, enter the executable path and select **Verify**.
-SilicoLab deliberately does not search for ORCA or choose it automatically.
+Install ORCA separately, then open **Settings > Compute > Compute targets**. In
+the ORCA row for the relevant target, enter the executable path under
+**Program** and select **Verify**. SilicoLab deliberately does not search for
+ORCA.
 
 For ORCA inside WSL on Windows, set **Command prefix** to `wsl.exe -e` and set
 **Program** to the executable's Linux path, such as `/opt/orca/orca`. For a
@@ -48,8 +49,10 @@ systems.
 - **macOS:** Install with `brew install gromacs`. GPU acceleration is not
   supported on Apple hardware, so MD performance will be limited.
 
-After installation, open SilicoLab and let the engine settings detect the
-`gmx` executable before running MD.
+After installation, open **Settings > Compute > Compute targets** and expand the
+target you will run on. In its GROMACS row, enter the executable under
+**Program**, or leave **Program** empty so **Verify** searches that target, then
+select **Verify** before running MD.
 
 ## Remote hosts
 
@@ -57,4 +60,4 @@ Heavy calculations can also run on a remote Linux host over SSH. This is useful
 when your laptop has no GPU or when the required engine is available only on an
 HPC login node or workstation.
 
-See [Remote execution](./remote-execution/) for the SSH setup flow.
+See [Remote execution](../remote-execution/) for the SSH setup flow.

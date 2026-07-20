@@ -2,7 +2,7 @@
 title: Remote execution
 description: Run compute jobs on a remote Linux host through Direct SSH or Slurm.
 sidebar:
-  order: 4
+  order: 6
 ---
 
 Quantum chemistry, molecular docking, and MD/GROMACS jobs can run on a remote
@@ -13,11 +13,11 @@ later deployments — including to new hosts — work without network access.
 
 ## Set up SSH
 
-Open **Settings > Engines > Remote Hosts**, add the host's address, SSH user,
-port, and work directory, then select **Set up passwordless login**. SilicoLab
-creates a dedicated key under `~/.silicolab/keys` and keeps strict host-key
-verification enabled. Run the displayed authorization command once on the
-remote host, then select **Verify**.
+Open **Settings > Compute > Compute targets**, add or expand the remote target,
+and enter its host address, SSH user, port, and work directory. Then select
+**Set up passwordless login**. SilicoLab creates a dedicated key under
+`~/.silicolab/keys` and keeps strict host-key verification enabled. Run the
+displayed authorization command once on the remote host, then select **Verify**.
 
 The work directory defaults to `~/.silicolab`. It must be visible and writable
 on every node that may execute a job. On a cluster this normally means a shared
@@ -25,8 +25,8 @@ home, project, or scratch filesystem. Select **Test scheduler** after configurin
 Slurm; the test submits a real short job and verifies worker visibility from the
 allocated node.
 
-**Job environment commands** run inside the allocated job before the worker.
-Use them for commands such as `module load gromacs` or CUDA setup. **Scheduler
+**Setup commands** run inside the allocated job before the worker. Use them for
+commands such as `module load gromacs` or CUDA setup. **Scheduler
 setup commands** run on the login node before `sbatch`, `squeue`, `scontrol`, and
 `scancel`; use them only when Slurm commands are not already on the
 non-interactive SSH `PATH`.
@@ -69,22 +69,23 @@ indices and exposes the allocation to the job.
 ## Run and monitor jobs
 
 Choose the host under **Run on** in a task panel, then set CPU, memory, walltime,
-and GPU intent. The task monitor shows queued, running, completing, cancelling,
-and terminal states. For queued Slurm jobs it also shows scheduler reasons such
-as `Priority`, `Resources`, `InvalidAccount`, or `InvalidQOS`.
+and GPU intent. **Activity** shows each job's current status. For queued Slurm
+jobs it also shows scheduler reasons such as `Priority`, `Resources`,
+`InvalidAccount`, or `InvalidQOS`.
 
-Use **Refresh Remote** to retrieve the latest state and appended console output.
-Closing SilicoLab does not stop a remote job. Reopen the project and refresh to
-continue monitoring or retrieve its result. The scheduler and remote directory
-captured at submission remain authoritative even if the host settings are
-edited later.
+Use **Refresh Remote** to retrieve the latest state and new job logs. The newest
+lines appear in **Activity**; select **Open in Output** when you need the job's
+full log. Closing SilicoLab does not stop a remote job. Reopen the project and
+refresh to continue monitoring or retrieve its result. The scheduler and remote
+directory captured at submission remain authoritative even if the host settings
+are edited later.
 
-Select **Cancel** for a queued or running job. Slurm cancellation remains in
-**Cancelling** until the scheduler confirms `CANCELLED`; repeated requests are
-safe. Remote scratch can be removed only after a terminal state is confirmed.
+Select **Cancel** for a queued or running job. Activity continues to show
+cancellation in progress until Slurm confirms it; repeated requests are safe.
+Remote scratch can be removed only after a terminal state is confirmed.
 
 Login-node CPU and GPU utilization is not shown as cluster utilization for a
-Slurm target. Allocation state and pending reason belong in the task monitor.
+Slurm target. Allocation state and pending reason belong in **Activity**.
 
 ## Troubleshooting
 
@@ -98,9 +99,9 @@ Slurm target. Allocation state and pending reason belong in the task monitor.
 - **Typed GPU remains pending:** confirm the type spelling under **Refresh
   cluster** and check that the selected partition contains that GRES type.
 - **GROMACS is missing:** add the appropriate module or environment command to
-  **Job environment commands**, then use **Detect GROMACS**.
+  **Setup commands**, then verify GROMACS under that target's **Program** field.
 - **ORCA is not configured:** enter the ORCA executable path for that remote
-  host under **Compute targets**. ORCA is not auto-detected.
+  host under **Settings > Compute > Compute targets**, then select **Verify**.
 - **Worker download fails (offline, proxy, or GitHub rate limit):** the
   version-matched worker is fetched from GitHub the first time you deploy a given
   SilicoLab version, then cached under `~/.silicolab/workers` for reuse. To use
