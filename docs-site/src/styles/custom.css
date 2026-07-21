@@ -11,6 +11,13 @@
   --sl-color-accent-high: #34247a;
 }
 
+@media (min-width: 50rem) {
+  /* Starlight 0.36 keeps its 7fr/4fr hero grid even without an image. */
+  .hero:not(:has(> img, > .hero-html)) {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 /* Comfortable CJK reading: looser leading for dense Han glyphs. */
 [lang^='zh'] .sl-markdown-content {
   line-height: 1.8;

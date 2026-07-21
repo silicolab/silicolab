@@ -14,9 +14,9 @@ npm run dev
 ```
 
 Run `npm run build` before submitting changes. The build validates Starlight
-content and internal links. Cloudflare builds and deploys the site from this
-directory after changes reach `main`; `.github/workflows/docs.yml` performs the
-pull-request validation build.
+content and internal links. Cloudflare builds and deploys the public site at
+<https://docs.silicolab.nmrtist.space> from this directory after changes reach
+`main`; `.github/workflows/docs.yml` performs the pull-request validation build.
 
 ## Content and assets
 
@@ -26,7 +26,8 @@ pull-request validation build.
 - Link to canonical repository policies instead of copying them into the site.
 - Do not edit generated files under `src/assets/` or `public/`. The
   `predev`/`prebuild` hooks run `scripts/sync-assets.mjs`, which copies canonical
-  branding, screenshot, and icon assets from the repository root.
+  branding and icon assets, documentation samples from `manual/samples/`, and
+  the bundled UBL template from `../compute-core/assets/ubl/`.
 
 If a new document is primarily for people modifying or releasing SilicoLab,
 put it in `../docs/` or a named root policy file. If it helps users install,

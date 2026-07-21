@@ -3,7 +3,7 @@ import starlight from '@astrojs/starlight';
 import starlightLinksValidator from 'starlight-links-validator';
 
 export default defineConfig({
-  site: 'https://docs.silicolab.workers.dev',
+  site: 'https://docs.silicolab.nmrtist.space',
   integrations: [
     starlight({
       title: 'SilicoLab',
@@ -31,6 +31,16 @@ export default defineConfig({
           label: 'Getting Started',
           translations: { 'zh-CN': '快速开始' },
           autogenerate: { directory: 'getting-started' },
+        },
+        {
+          label: 'Projects & Structures',
+          translations: { 'zh-CN': '项目与结构' },
+          autogenerate: { directory: 'projects-structures' },
+        },
+        {
+          label: 'Build & Prepare',
+          translations: { 'zh-CN': '构建与准备' },
+          autogenerate: { directory: 'build-prepare' },
         },
       ],
       logo: {

@@ -35,6 +35,6 @@ geometry optimizations, and vibrational frequencies. Quantum chemistry uses
 the built-in Hartree engine by default; ORCA is never required or selected
 automatically.
 
-See [External tools](./external-tools/) for setup notes, including GPU
-acceleration. See [Remote execution](./remote-execution/) to run heavy jobs on
+See [External tools](../external-tools/) for setup notes, including GPU
+acceleration. See [Remote execution](../remote-execution/) to run heavy jobs on
 a remote Linux host over SSH.

@@ -14,8 +14,8 @@ on:
       - '.github/workflows/docs.yml'
       # canonical sources copied in by docs-site/scripts/sync-assets.mjs
       - 'branding/**'
-      - 'docs/images/main-window.png'
       - 'assets/icon/hicolor/256x256/apps/silicolab.png'
+      - 'compute-core/assets/ubl/ubiquitin.pdb'
 
 permissions:
   contents: read

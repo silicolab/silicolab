@@ -14,6 +14,8 @@ target/
 
 # Debug-info files from MSVC builds of rustc (Windows).
 *.pdb
+# Exception: documentation PDB samples are canonical source assets.
+!/docs-site/manual/samples/*.pdb
 #   Exception: Protein Data Bank (.pdb) test fixtures are source files and
 #   must be tracked, in any crate (e.g. compute-core/src/md/fixtures/).
 !**/fixtures/**/*.pdb

@@ -1,6 +1,9 @@
 # Normalize line endings: store everything as LF in the repository.
 * text=auto eol=lf
 
+# PDB records use fixed-width fields with intentional padding.
+docs-site/manual/samples/*.pdb -whitespace
+
 # Binary assets — never normalize or diff as text.
 *.png binary
 *.ico binary
