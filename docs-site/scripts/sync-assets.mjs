@@ -10,7 +10,6 @@ const repo = dirname(docsSite);
 const assets = [
   ['branding/wordmark-light.svg', 'src/assets/wordmark-light.svg'],
   ['branding/wordmark-dark.svg', 'src/assets/wordmark-dark.svg'],
-  ['docs/images/main-window.png', 'src/assets/main-window.png'],
   ['assets/icon/hicolor/256x256/apps/silicolab.png', 'public/favicon.png'],
   ['docs-site/manual/samples/6a5j-two-model-ui-fixture.pdb', 'public/samples/6a5j-two-model-ui-fixture.pdb'],
   ['docs-site/manual/samples/argon.xyz', 'public/samples/argon.xyz'],

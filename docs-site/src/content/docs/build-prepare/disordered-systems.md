@@ -56,7 +56,7 @@ not mean failure, and rerunning does not guarantee that the line will appear.
 | Atoms / stored bonds | 8 / 0 |
 | Stored graph | 8 connected components |
 | Cell | `16.000 x 16.000 x 16.000 Å`; `90.000 / 90.000 / 90.000°` |
-| Region volume | `16 x 16 x 16 = 4096 Å^3` |
+| Region volume | `16 x 16 x 16 = 4096 Å³` |
 
 These stored checks establish the output composition and cell. The 8 atoms follow from
 `1 atom per copy x 8 copies`, but neither atom count nor `Completed` proves full placement or a

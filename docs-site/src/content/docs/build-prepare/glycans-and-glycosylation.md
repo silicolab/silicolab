@@ -103,7 +103,7 @@ notation, counts, and formula confirm the generated composition, not an equilibr
 experimental structure.
 
 The documented attached structure contains a severe unrelaxed overlap: the shortest host-glycan
-separation is about `0.402 A`, between protein `A:Val17 CA` and glycan `B:NAG2 HN`. The same short
+separation is about `0.402 Å`, between protein `A:Val17 CA` and glycan `B:NAG2 HN`. The same short
 distance remains after excluding the direct `ND2-C1` junction and atom pairs separated by one, two, or
 three covalent bonds. This distance is not a force-field definition of a nonbonded contact, but it is
 enough to show that the generated attachment is not scientifically usable as-is.

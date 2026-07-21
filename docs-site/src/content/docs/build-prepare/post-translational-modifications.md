@@ -63,7 +63,7 @@ The 77 records are 76 host amino-acid residues plus one nonstandard `PO4` modifi
 chain records are the host chain and modifier fragment, not two protein subunits. A covalent `OG-P`
 junction connects Ser20 to the phosphate fragment and joins them into one connected component.
 
-The generated geometry also contains a short host-fragment contact of about `1.242 A`, between an
+The generated geometry also contains a short host-fragment contact of about `1.242 Å`, between an
 added hydrogen mapped to `A:Glu18` and modifier atom `PO4 O1P`. This distance remains after excluding
 host-fragment pairs separated by one, two, or three covalent bonds. It is not a force-field definition
 of a nonbonded contact and does not establish a clash-free structure; it signals unresolved overlap risk.

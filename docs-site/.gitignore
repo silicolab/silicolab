@@ -6,6 +6,5 @@ dist/
 # synced from canonical repo assets by scripts/sync-assets.mjs
 src/assets/wordmark-light.svg
 src/assets/wordmark-dark.svg
-src/assets/main-window.png
 public/favicon.png
 public/samples/
