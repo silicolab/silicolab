@@ -3,6 +3,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use crate::{
     domain::chemistry::{infer_bonds_with_cell, normalized_symbol},
     domain::{Atom, PdbAtomAnnotation, Structure, UnitCell, build_biopolymer},
+    io::formats::{cif_crystal::parse_classic_cif, cif_syntax::tokenize_cif},
 };
 
 pub fn parse_cif(input: &str) -> Result<Structure> {
@@ -12,31 +13,7 @@ pub fn parse_cif(input: &str) -> Result<Structure> {
         return Ok(structure);
     }
 
-    let tokens = tokenize_cif(input);
-    let title = tokens
-        .iter()
-        .find(|token| token.starts_with("data_"))
-        .map(|token| token.trim_start_matches("data_").to_string())
-        .unwrap_or_else(|| "CIF structure".to_string());
-
-    let a = read_number_tag(&tokens, "_cell_length_a")?;
-    let b = read_number_tag(&tokens, "_cell_length_b")?;
-    let c = read_number_tag(&tokens, "_cell_length_c")?;
-    let alpha = read_number_tag(&tokens, "_cell_angle_alpha")?;
-    let beta = read_number_tag(&tokens, "_cell_angle_beta")?;
-    let gamma = read_number_tag(&tokens, "_cell_angle_gamma")?;
-    let cell = UnitCell::from_parameters(a, b, c, alpha, beta, gamma);
-    let atoms = read_atom_sites(&tokens, &cell)?;
-
-    let space_group = read_string_tag(&tokens, "_symmetry_space_group_name_H-M")
-        .unwrap_or_else(|_| "P 1".to_string());
-    let _tables_number = read_number_tag(&tokens, "_symmetry_Int_Tables_number").unwrap_or(1.0);
-
-    if !space_group.trim().eq_ignore_ascii_case("P 1") {
-        bail!("non-P1 space groups are not yet supported");
-    }
-
-    Ok(Structure::with_cell(title, atoms, cell))
+    parse_classic_cif(&tokenize_cif(input)?)
 }
 
 /// Serialize a structure as a minimal mmCIF document with Cartesian
@@ -85,7 +62,7 @@ pub fn to_cif(structure: &Structure) -> Result<String> {
 /// falling back) when the document is not mmCIF, e.g. classic CIF with
 /// fractional coordinates, so callers can dispatch on the result.
 fn parse_mmcif(input: &str) -> Result<Structure> {
-    let tokens = tokenize_cif(input);
+    let tokens = tokenize_cif(input)?;
 
     let title = tokens
         .iter()
@@ -273,100 +250,13 @@ fn sanitize_identifier(value: &str) -> String {
     }
 }
 
-fn read_number_tag(tokens: &[String], tag: &str) -> Result<f32> {
-    let value = tokens
-        .windows(2)
-        .find(|pair| pair[0].eq_ignore_ascii_case(tag))
-        .map(|pair| pair[1].as_str())
-        .ok_or_else(|| anyhow!("missing required CIF tag {tag}"))?;
-
-    parse_cif_number(value).with_context(|| format!("invalid value for {tag}"))
-}
-
-fn read_string_tag(tokens: &[String], tag: &str) -> Result<String> {
-    let value = tokens
-        .windows(2)
-        .find(|pair| pair[0].eq_ignore_ascii_case(tag))
-        .map(|pair| pair[1].as_str())
-        .ok_or_else(|| anyhow!("missing required CIF tag {tag}"))?;
-
-    Ok(value.trim_matches('\'').trim_matches('"').to_string())
-}
-
-fn read_atom_sites(tokens: &[String], cell: &UnitCell) -> Result<Vec<Atom>> {
-    let mut index = 0;
-
-    while index < tokens.len() {
-        if !tokens[index].eq_ignore_ascii_case("loop_") {
-            index += 1;
-            continue;
-        }
-
-        index += 1;
-        let header_start = index;
-
-        while index < tokens.len() && tokens[index].starts_with('_') {
-            index += 1;
-        }
-
-        let headers = &tokens[header_start..index];
-        if !headers
-            .iter()
-            .any(|header| header.eq_ignore_ascii_case("_atom_site_fract_x"))
-        {
-            continue;
-        }
-
-        let element_index = find_header(headers, "_atom_site_type_symbol")
-            .or_else(|| find_header(headers, "_atom_site_label"))
-            .ok_or_else(|| anyhow!("atom site loop lacks type symbol or label"))?;
-        let x_index = find_header(headers, "_atom_site_fract_x")
-            .ok_or_else(|| anyhow!("atom site loop lacks fract_x"))?;
-        let y_index = find_header(headers, "_atom_site_fract_y")
-            .ok_or_else(|| anyhow!("atom site loop lacks fract_y"))?;
-        let z_index = find_header(headers, "_atom_site_fract_z")
-            .ok_or_else(|| anyhow!("atom site loop lacks fract_z"))?;
-
-        let width = headers.len();
-        let mut atoms = Vec::new();
-
-        while index + width <= tokens.len() {
-            if tokens[index].eq_ignore_ascii_case("loop_") || tokens[index].starts_with('_') {
-                break;
-            }
-
-            let row = &tokens[index..index + width];
-            let element = element_from_atom_site(&row[element_index]);
-            let x = parse_cif_number(&row[x_index]).context("invalid atom fract_x")?;
-            let y = parse_cif_number(&row[y_index]).context("invalid atom fract_y")?;
-            let z = parse_cif_number(&row[z_index]).context("invalid atom fract_z")?;
-
-            atoms.push(Atom {
-                element,
-                position: cell.fractional_to_cartesian(x, y, z),
-                charge: 0.0,
-            });
-
-            index += width;
-        }
-
-        if atoms.is_empty() {
-            bail!("atom site loop did not contain any atoms");
-        }
-
-        return Ok(atoms);
-    }
-
-    bail!("missing CIF atom site loop with fractional coordinates")
-}
-
-fn find_header(headers: &[String], name: &str) -> Option<usize> {
+pub(super) fn find_header(headers: &[String], name: &str) -> Option<usize> {
     headers
         .iter()
         .position(|header| header.eq_ignore_ascii_case(name))
 }
 
-fn element_from_atom_site(value: &str) -> String {
+pub(super) fn element_from_atom_site(value: &str) -> String {
     let letters = value
         .trim()
         .chars()
@@ -376,7 +266,7 @@ fn element_from_atom_site(value: &str) -> String {
     normalized_symbol(&letters)
 }
 
-fn parse_cif_number(value: &str) -> Result<f32> {
+pub(super) fn parse_cif_number(value: &str) -> Result<f32> {
     let trimmed = value.trim();
     let without_uncertainty = trimmed
         .split_once('(')
@@ -386,40 +276,6 @@ fn parse_cif_number(value: &str) -> Result<f32> {
     without_uncertainty
         .parse::<f32>()
         .with_context(|| format!("expected a number, got {value}"))
-}
-
-fn tokenize_cif(input: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
-
-    for line in input.lines() {
-        let without_comment = line.split_once('#').map(|(head, _)| head).unwrap_or(line);
-        let mut current = String::new();
-        let mut quote = None;
-
-        for ch in without_comment.chars() {
-            match quote {
-                Some(active) if ch == active => {
-                    quote = None;
-                }
-                Some(_) => current.push(ch),
-                None if ch == '\'' || ch == '"' => {
-                    quote = Some(ch);
-                }
-                None if ch.is_whitespace() => {
-                    if !current.is_empty() {
-                        tokens.push(std::mem::take(&mut current));
-                    }
-                }
-                None => current.push(ch),
-            }
-        }
-
-        if !current.is_empty() {
-            tokens.push(current);
-        }
-    }
-
-    tokens
 }
 
 #[cfg(test)]
@@ -612,5 +468,146 @@ H1 0.0 0.0 0.0
         );
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn expands_non_p1_symmetry_and_deduplicates_special_positions() {
+        let structure = parse_cif(
+            "\
+data_inversion
+_cell_length_a 10
+_cell_length_b 10
+_cell_length_c 10
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+_space_group_name_H-M_alt 'P -1'
+loop_
+_space_group_symop_operation_xyz
+'x,y,z'
+'-x,-y,-z'
+loop_
+_atom_site_label
+_atom_site_type_symbol
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+C1 C 0.1 0.2 0.3
+O1 O 0 0 0
+",
+        )
+        .unwrap();
+
+        assert_eq!(structure.atoms.len(), 3);
+        assert_eq!(
+            structure
+                .atoms
+                .iter()
+                .filter(|atom| atom.element == "O")
+                .count(),
+            1
+        );
+        assert!(structure.atoms.iter().any(|atom| {
+            atom.element == "C"
+                && (atom.position.x - 9.0).abs() < 1.0e-4
+                && (atom.position.y - 8.0).abs() < 1.0e-4
+        }));
+    }
+
+    #[test]
+    fn supports_legacy_symmetry_tag_and_fractional_translation() {
+        let structure = parse_cif(
+            "\
+data_legacy
+_cell_length_a 8
+_cell_length_b 8
+_cell_length_c 8
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+_symmetry_space_group_name_H-M 'P 2'
+loop_
+_symmetry_equiv_pos_as_xyz
+'x,y,z'
+'-x,y+1/2,-z'
+loop_
+_atom_site_label
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+N1 0.25 0.1 0.2
+",
+        )
+        .unwrap();
+
+        assert_eq!(structure.atoms.len(), 2);
+        assert!(
+            structure
+                .atoms
+                .iter()
+                .any(|atom| (atom.position.y - 4.8).abs() < 1.0e-4)
+        );
+    }
+
+    #[test]
+    fn rejects_partial_occupancy_and_disorder_groups() {
+        let base = "\
+data_bad
+_cell_length_a 5
+_cell_length_b 5
+_cell_length_c 5
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+loop_\n";
+        let partial = format!(
+            "{base}_atom_site_label\n_atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z\n_atom_site_occupancy\nC1 0 0 0 0.5\n"
+        );
+        assert!(
+            parse_cif(&partial)
+                .unwrap_err()
+                .to_string()
+                .contains("partial")
+        );
+
+        let disorder = format!(
+            "{base}_atom_site_label\n_atom_site_fract_x\n_atom_site_fract_y\n_atom_site_fract_z\n_atom_site_disorder_group\nC1 0 0 0 1\n"
+        );
+        assert!(
+            parse_cif(&disorder)
+                .unwrap_err()
+                .to_string()
+                .contains("disordered")
+        );
+    }
+
+    #[test]
+    fn structured_parser_handles_quotes_multiline_text_and_uncertainties() {
+        let structure = parse_cif(
+            "\
+data_metadata
+_chemical_name_common 'quoted crystal name'
+_publ_section_title
+;First line
+second line
+;
+_cell_length_a 5.0(2)
+_cell_length_b 5.0(2)
+_cell_length_c 5.0(2)
+_cell_angle_alpha 90
+_cell_angle_beta 90
+_cell_angle_gamma 90
+loop_
+_atom_site_label
+_atom_site_fract_x
+_atom_site_fract_y
+_atom_site_fract_z
+C1 0.25(1) 0.5 0.75
+",
+        )
+        .unwrap();
+
+        assert_eq!(structure.atoms.len(), 1);
+        assert!((structure.atoms[0].position.x - 1.25).abs() < 1.0e-4);
     }
 }
