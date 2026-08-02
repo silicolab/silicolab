@@ -4,7 +4,11 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
 
-use crate::{frontend::state::AppState, io::pdb_fetch};
+use crate::{
+    backend::entries::EntryOrigin,
+    frontend::state::AppState,
+    io::{online_structures, pdb_fetch},
+};
 
 pub(crate) fn open_command(
     state: &mut AppState,
@@ -79,7 +83,48 @@ pub(crate) fn fetch_command(
     id: &str,
     db: Option<&str>,
     dir: Option<PathBuf>,
+    revision: Option<&str>,
 ) -> Result<String> {
+    if let Some(cod_id) = id.strip_prefix("cod:") {
+        let mut candidate = online_structures::lookup_cod_candidate(cod_id, revision)?;
+        if let Some(revision) = revision {
+            candidate.revision = Some(revision.to_string());
+        }
+        let target_dir = dir.unwrap_or_else(|| state.structures_dir());
+        let fetched = match db {
+            Some(base_url) => {
+                online_structures::fetch_cod_with_base_url(id, &candidate, &target_dir, base_url)?
+            }
+            None => online_structures::fetch_cod(id, &candidate, &target_dir)?,
+        };
+        let atom_count = fetched.structure.atoms.len();
+        let save_path = crate::io::structure_io::default_structure_save_path(
+            &fetched.structure,
+            Some(&fetched.path),
+        );
+        let entry_id =
+            state
+                .entries
+                .add_entry(fetched.structure, Some(fetched.path.clone()), save_path);
+        state.entries.set_entry_origin(
+            entry_id,
+            EntryOrigin::Online {
+                source: Box::new(fetched.source),
+            },
+        );
+        state.show_entry(entry_id);
+        let verb = if fetched.downloaded {
+            "fetched"
+        } else {
+            "loaded cached"
+        };
+        return Ok(format!(
+            "{verb} COD {cod_id} as entry #{entry_id} ({atom_count} atoms); inspect the crystal before starting a calculation"
+        ));
+    }
+    if revision.is_some() {
+        bail!("--revision is only valid with a cod:<id>");
+    }
     let base_url = db.unwrap_or(pdb_fetch::RCSB_DEFAULT_BASE_URL);
     let target_dir = dir.unwrap_or_else(|| state.structures_dir());
     let fetched = pdb_fetch::fetch_pdb(id, base_url, &target_dir)?;
@@ -90,6 +135,73 @@ pub(crate) fn fetch_command(
         "loaded cached"
     };
     Ok(format!("{verb} {}", fetched.path.display()))
+}
+
+pub(crate) fn find_command(
+    _state: &mut AppState,
+    text: &str,
+    kind: online_structures::QueryKind,
+    include_disorder: bool,
+    limit: usize,
+) -> Result<String> {
+    let mut query = online_structures::StructureQuery::new(text, kind);
+    query.include_disorder = include_disorder;
+    query.limit = limit;
+    let result = online_structures::search_structures(&query)?;
+    Ok(format_structure_search_result(&result))
+}
+
+pub(crate) fn format_structure_search_result(
+    result: &online_structures::StructureSearchResult,
+) -> String {
+    let mut lines = Vec::new();
+    if result.crystals.is_empty() {
+        lines.push("No compatible experimental COD crystals found.".to_string());
+    } else {
+        lines.push(format!(
+            "COD candidates for `{}` (use `fetch cod:<id>` only after choosing one):",
+            result.query
+        ));
+        for candidate in &result.crystals {
+            let temperature = candidate
+                .temperature_k
+                .map(|value| format!("{value:.0} K"))
+                .unwrap_or_else(|| "T unknown".to_string());
+            let space_group = candidate.space_group.as_deref().unwrap_or("SG unknown");
+            let r_factor = candidate
+                .r_factor
+                .map(|value| format!("R={value:.4}"))
+                .unwrap_or_else(|| "R unknown".to_string());
+            let warning = if candidate.warnings.is_empty() {
+                String::new()
+            } else {
+                format!("; {}", candidate.warnings.join("; "))
+            };
+            lines.push(format!(
+                "- cod:{} | {} | {} | {} | {} | {}{}",
+                candidate.cod_id,
+                candidate.name,
+                candidate.formula,
+                temperature,
+                space_group,
+                r_factor,
+                warning
+            ));
+        }
+    }
+    if let Some(compound) = result.resolved.as_ref() {
+        lines.push(format!(
+            "Non-periodic fallback (PubChem CID {}): {} | {} | SMILES `{}`. This is not an experimental crystal; ask before building it.",
+            compound.cid, compound.title, compound.formula, compound.smiles
+        ));
+    }
+    lines.extend(
+        result
+            .warnings
+            .iter()
+            .map(|warning| format!("Warning: {warning}")),
+    );
+    lines.join("\n")
 }
 
 /// Load a structure file at `path` into a new active entry, resetting the

@@ -22,7 +22,8 @@ pub(crate) fn create_project_schema(db: &Connection) -> Result<()> {
             save_path text not null,
             revision integer not null default 0,
             origin_kind text not null default 'user',
-            origin_trajectory text
+            origin_trajectory text,
+            origin_metadata text
         );
         create table if not exists tabs (
             position integer primary key,
@@ -216,6 +217,10 @@ fn ensure_entry_columns(db: &Connection) -> Result<()> {
     add_column(
         "origin_trajectory",
         "alter table entries add column origin_trajectory text",
+    )?;
+    add_column(
+        "origin_metadata",
+        "alter table entries add column origin_metadata text",
     )?;
     Ok(())
 }

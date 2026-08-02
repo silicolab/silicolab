@@ -11,7 +11,7 @@ use crate::{
         storage::{
             ASSISTANT_STATE_FORMAT, PersistedAssistantConversation, PersistedChatMessage,
             PersistedContentBlock, PersistedRole, PersistedTranscriptEntry, PersistedUsage,
-            ProjectAssistantSnapshot, ProjectSnapshot, ProjectViewSettings,
+            ProjectAssistantSnapshot, ProjectSnapshot, ProjectViewSettings, create_project_schema,
             initialize_project_databases, load_project_snapshot, load_structure_for_compound,
             save_project_snapshot,
         },
@@ -19,6 +19,7 @@ use crate::{
     },
     domain::{Atom, AtomCategory, Bond, BondType, Structure, UnitCell},
     frontend::{AtomStyle, SurfaceStyle, ViewportSurfaceState, ViewportVisualState},
+    io::online_structures::{OnlineProvider, OnlineStructureSource},
 };
 
 #[test]
@@ -93,6 +94,33 @@ fn entry_origin_roundtrips_through_project_databases() {
             trajectory: Some(trajectory.clone()),
         },
     );
+    let online_id = entries.add_entry(
+        Structure::new("halite", Vec::new()),
+        Some(PathBuf::from("structures/cod/1234567@42.cif")),
+        PathBuf::from("halite.cif"),
+    );
+    let online_source = OnlineStructureSource {
+        provider: OnlineProvider::Cod,
+        record_id: "1234567".to_string(),
+        query: "sodium chloride".to_string(),
+        revision: Some("42".to_string()),
+        source_url: "https://www.crystallography.net/cod/1234567.cif@42".to_string(),
+        cid: Some(5234),
+        smiles: Some("[Na+].[Cl-]".to_string()),
+        formula: Some("NaCl".to_string()),
+        temperature_k: Some("295".to_string()),
+        space_group: Some("F m -3 m".to_string()),
+        r_factor: Some("0.021".to_string()),
+        doi: Some("10.1/example".to_string()),
+        flags: vec!["reviewed".to_string()],
+        retrieved_at_ms: 123,
+    };
+    entries.set_entry_origin(
+        online_id,
+        EntryOrigin::Online {
+            source: Box::new(online_source.clone()),
+        },
+    );
     let snapshot = ProjectSnapshot {
         name: "Origin".to_string(),
         project_id: String::new(),
@@ -116,6 +144,74 @@ fn entry_origin_roundtrips_through_project_databases() {
         }
     );
     assert!(entry.origin.is_md_run());
+    assert_eq!(
+        loaded.entries.records[1].origin,
+        EntryOrigin::Online {
+            source: Box::new(online_source)
+        }
+    );
+}
+
+#[test]
+fn corrupt_online_origin_metadata_fails_project_load() {
+    let root = PathBuf::from("target/test-project-corrupt-online-origin");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(root.join(".silicolab")).unwrap();
+    let session = ProjectSession::from_root(root, "Corrupt origin".to_string());
+    initialize_project_databases(&session).unwrap();
+    let mut entries = EntryStore::new_empty();
+    entries.add_entry(
+        Structure::new("broken", Vec::new()),
+        None,
+        PathBuf::from("broken.xyz"),
+    );
+    let snapshot = ProjectSnapshot {
+        name: "Corrupt origin".to_string(),
+        project_id: String::new(),
+        entries,
+        tasks: TaskManager::default(),
+        materializations: Default::default(),
+        view: ProjectViewSettings::default(),
+        history: History::default(),
+        assistant: ProjectAssistantSnapshot::default(),
+        warnings: Vec::new(),
+    };
+    save_project_snapshot(&session, &snapshot, true).unwrap();
+    let db = Connection::open(&session.project_db).unwrap();
+    db.execute(
+        "update entries set origin_kind = 'online', origin_metadata = '{broken' where id = 1",
+        [],
+    )
+    .unwrap();
+
+    let error = load_project_snapshot(&session).unwrap_err().to_string();
+    assert!(error.contains("deserialize online structure provenance"));
+}
+
+#[test]
+fn legacy_entries_schema_adds_origin_metadata_column() {
+    let db = Connection::open_in_memory().unwrap();
+    db.execute_batch(
+        "create table entries (
+            id integer primary key,
+            name text not null,
+            group_id text not null,
+            compound_id integer not null,
+            source_path text,
+            save_path text not null,
+            revision integer not null default 0
+        );",
+    )
+    .unwrap();
+    create_project_schema(&db).unwrap();
+    let columns = db
+        .prepare("pragma table_info(entries)")
+        .unwrap()
+        .query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .unwrap();
+    assert!(columns.iter().any(|column| column == "origin_metadata"));
 }
 
 #[test]

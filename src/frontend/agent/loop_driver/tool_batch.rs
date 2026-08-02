@@ -94,6 +94,9 @@ fn propose_in_plan_mode(state: &mut AppState, ctx: &egui::Context) {
 /// computation runs off-thread, reporting back later through the queue.
 pub fn dispatch_call(state: &mut AppState, call: &ToolCall, ctx: &egui::Context) {
     push_tool_call_entry(state, call);
+    if spawn_agent_online_structure_search(state, call, ctx) {
+        return;
+    }
     if let Some(kind) = heavy_kind_of(call) {
         spawn_heavy(state, call, kind, ctx);
         return;

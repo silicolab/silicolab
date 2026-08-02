@@ -197,6 +197,12 @@ impl MacMenu {
                     accel(Modifiers::META | Modifiers::SHIFT, Code::KeyO),
                 ),
                 &MenuItem::with_id("file.fetch_pdb", "Fetch from PDB ID…", true, None),
+                &MenuItem::with_id(
+                    "file.find_online_structure",
+                    "Find Online Structure…",
+                    true,
+                    None,
+                ),
                 &PredefinedMenuItem::separator(),
                 &export,
             ])
@@ -379,6 +385,9 @@ impl MacMenu {
             "file.sketch_molecule" => MenuCommand::Action(AppAction::SketchMolecule),
             "file.open_file" => MenuCommand::Action(AppAction::OpenFile),
             "file.fetch_pdb" => MenuCommand::Action(AppAction::OpenPdbFetchDialog),
+            "file.find_online_structure" => {
+                MenuCommand::Action(AppAction::OpenOnlineStructureSearch)
+            }
             "file.export" => MenuCommand::Action(AppAction::OpenExportDialog { entry_id: None }),
             "edit.undo" => MenuCommand::Action(AppAction::Undo),
             "edit.redo" => MenuCommand::Action(AppAction::Redo),

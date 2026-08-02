@@ -146,6 +146,10 @@ pub(crate) fn render_title_bar(
                         actions.push(AppAction::OpenPdbFetchDialog);
                         ui.close();
                     }
+                    if ui.button("Find Online Structure...").clicked() {
+                        actions.push(AppAction::OpenOnlineStructureSearch);
+                        ui.close();
+                    }
                     ui.separator();
                     if ui
                         .button(crate::frontend::shortcuts::menu_text(

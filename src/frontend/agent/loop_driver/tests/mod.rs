@@ -573,4 +573,13 @@ fn remove_queued_drops_the_indexed_item() {
     ));
 }
 
+#[test]
+fn crystal_rules_require_selection_and_post_import_confirmation() {
+    let prompt = system_prompt(&[]);
+    assert!(prompt.contains("Never invent or guess a COD id"));
+    assert!(prompt.contains("After `fetch cod:<id>` succeeds, stop"));
+    assert!(prompt.contains("do not start QM, MD, or another calculation"));
+    assert!(prompt.contains("generated non-periodic molecule"));
+}
+
 mod jobs;

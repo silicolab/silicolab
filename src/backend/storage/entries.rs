@@ -18,11 +18,20 @@ pub(crate) fn load_entries(
     store.groups = load_groups(project_db)?;
     store.records.clear();
     let mut statement = project_db.prepare(
-        "select id, name, group_id, compound_id, source_path, save_path, revision, origin_kind, origin_trajectory from entries order by id",
+        "select id, name, group_id, compound_id, source_path, save_path, revision, origin_kind, origin_trajectory, origin_metadata from entries order by id",
     )?;
     let rows = statement.query_map([], |row| {
         let origin_kind = row.get::<_, Option<String>>(7)?;
         let origin_trajectory = row.get::<_, Option<String>>(8)?.map(PathBuf::from);
+        let origin_metadata = row.get::<_, Option<String>>(9)?;
+        let origin = EntryOrigin::from_storage(
+            origin_kind.as_deref(),
+            origin_trajectory,
+            origin_metadata.as_deref(),
+        )
+        .map_err(|error| {
+            rusqlite::Error::FromSqlConversionFailure(9, rusqlite::types::Type::Text, error.into())
+        })?;
         Ok(EntryRow {
             id: row.get::<_, i64>(0)? as u64,
             name: row.get(1)?,
@@ -31,7 +40,7 @@ pub(crate) fn load_entries(
             source_path: row.get::<_, Option<String>>(4)?.map(PathBuf::from),
             save_path: PathBuf::from(row.get::<_, String>(5)?),
             revision: row.get::<_, i64>(6)? as u64,
-            origin: EntryOrigin::from_storage(origin_kind.as_deref(), origin_trajectory),
+            origin,
         })
     })?;
     let entry_rows = rows.collect::<rusqlite::Result<Vec<_>>>()?;

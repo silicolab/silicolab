@@ -16,6 +16,43 @@ use crate::frontend::{
 
 use super::monitor::{MonitorHistory, RemoteGpuLive};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OnlineStructurePhase {
+    #[default]
+    Idle,
+    Searching,
+    Importing,
+}
+
+#[derive(Debug, Clone)]
+pub struct OnlineStructureSearchState {
+    pub query: String,
+    pub kind: crate::io::online_structures::QueryKind,
+    pub include_disorder: bool,
+    pub limit: usize,
+    pub generation: u64,
+    pub phase: OnlineStructurePhase,
+    pub result: Option<crate::io::online_structures::StructureSearchResult>,
+    pub error: Option<String>,
+    pub selected: Option<usize>,
+}
+
+impl Default for OnlineStructureSearchState {
+    fn default() -> Self {
+        Self {
+            query: String::new(),
+            kind: crate::io::online_structures::QueryKind::Auto,
+            include_disorder: false,
+            limit: 20,
+            generation: 0,
+            phase: OnlineStructurePhase::Idle,
+            result: None,
+            error: None,
+            selected: None,
+        }
+    }
+}
+
 /// State backing the Settings primary view. The engine registry is a cheap,
 /// cached resolve of what is *configured*; what actually runs is only ever
 /// established by an explicit Verify, tracked in `engine_probe`.
@@ -162,6 +199,7 @@ pub struct UiState {
     pub pending_docking: Option<DockingPrompt>,
     pub pending_ptm: Option<PendingPtm>,
     pub pending_pdb_fetch: Option<String>,
+    pub online_structure_search: Option<OnlineStructureSearchState>,
     /// The open Export dialog's draft, or `None` when it is closed.
     pub pending_export: Option<crate::frontend::state::ExportPrompt>,
     /// Modal confirmation shown before leaving when the current workspace has
@@ -308,6 +346,7 @@ impl Default for UiState {
             pending_docking: None,
             pending_ptm: None,
             pending_pdb_fetch: None,
+            online_structure_search: None,
             pending_export: None,
             leave_confirmation: None,
             allow_window_close: false,

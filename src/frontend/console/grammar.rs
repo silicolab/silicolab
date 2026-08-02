@@ -31,8 +31,11 @@ use crate::frontend::{
     state::{AppState, AtomStyle},
 };
 
+mod online_args;
 mod ptm_args;
 
+use online_args::parse_find_limit;
+pub(crate) use online_args::{FindQueryKind, parse_find_query};
 pub(crate) use ptm_args::{
     AcetylateArgs, LipidateArgs, MethylateArgs, PhosphorylateArgs, UbiquitinateArgs,
 };
@@ -77,9 +80,20 @@ pub(crate) enum Command {
         name: Option<String>,
     },
 
-    /// Download a structure by PDB id.
+    /// Search COD crystals by a name, formula, or SMILES resolved through PubChem.
+    Find {
+        query: String,
+        #[arg(long = "as", value_enum, default_value_t = FindQueryKind::Auto)]
+        kind: FindQueryKind,
+        #[arg(long)]
+        include_disorder: bool,
+        #[arg(long, default_value_t = 20, value_parser = parse_find_limit)]
+        limit: usize,
+    },
+
+    /// Download a structure by PDB id, or by `cod:<id>`.
     Fetch {
-        /// PDB id, e.g. `4hhb`.
+        /// PDB id (`4hhb`) or COD id (`cod:1000000`).
         id: String,
         /// Override the RCSB base URL.
         #[arg(long)]
@@ -87,6 +101,9 @@ pub(crate) enum Command {
         /// Directory to download into.
         #[arg(long)]
         dir: Option<PathBuf>,
+        /// Pin a COD revision. Only valid with `cod:<id>`.
+        #[arg(long)]
+        revision: Option<String>,
     },
 
     /// Run a `.sls` script file.
@@ -520,6 +537,7 @@ impl Command {
             Command::Open { .. }
             | Command::Activate { .. }
             | Command::Sketch { .. }
+            | Command::Find { .. }
             | Command::Fetch { .. }
             | Command::View(_)
             | Command::Cartoon(_)
@@ -578,7 +596,18 @@ impl Command {
             Command::Sketch { smiles, name } => {
                 super::sketch_command(state, &smiles, name.as_deref())
             }
-            Command::Fetch { id, db, dir } => super::fetch_command(state, &id, db.as_deref(), dir),
+            Command::Find {
+                query,
+                kind,
+                include_disorder,
+                limit,
+            } => super::find_command(state, &query, kind.into(), include_disorder, limit),
+            Command::Fetch {
+                id,
+                db,
+                dir,
+                revision,
+            } => super::fetch_command(state, &id, db.as_deref(), dir, revision.as_deref()),
             Command::Source { path } => {
                 super::run_script_path_with_context(state, context, &path.display().to_string())?;
                 Ok(String::new())

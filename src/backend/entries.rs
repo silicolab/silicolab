@@ -1,6 +1,9 @@
 use std::path::{Path, PathBuf};
 
+use anyhow::{Context, Result};
+
 use crate::domain::Structure;
+use crate::io::online_structures::OnlineStructureSource;
 
 #[derive(Debug, Clone)]
 pub struct EntryGroup {
@@ -29,14 +32,21 @@ pub enum EntryOrigin {
     /// is the run's trajectory file *relative to the project root*; it stays in
     /// the task run directory (never copied into the project database) and is
     /// read on demand for playback.
-    MdRun { trajectory: Option<PathBuf> },
+    MdRun {
+        trajectory: Option<PathBuf>,
+    },
     /// Produced by a quantum-mechanics calculation (an optimization or a
     /// transition-state search — the runs that yield a new geometry).
     QmRun,
     /// One pose of a molecular docking run. `poses`, when present, is the run's
     /// saved multi-pose `.pdbqt` artifact (e.g. `runs/dock-ligand-1/poses.pdbqt`)
     /// *relative to the project root*; clicking the entry's "Dock" badge opens it.
-    DockRun { poses: Option<PathBuf> },
+    DockRun {
+        poses: Option<PathBuf>,
+    },
+    Online {
+        source: Box<OnlineStructureSource>,
+    },
 }
 
 impl EntryOrigin {
@@ -47,6 +57,7 @@ impl EntryOrigin {
             Self::MdRun { .. } => "md",
             Self::QmRun => "qm",
             Self::DockRun { .. } => "dock",
+            Self::Online { .. } => "online",
         }
     }
 
@@ -72,7 +83,7 @@ impl EntryOrigin {
         match self {
             Self::MdRun { trajectory } => trajectory.as_deref(),
             Self::DockRun { poses } => poses.as_deref(),
-            Self::QmRun | Self::User => None,
+            Self::QmRun | Self::Online { .. } | Self::User => None,
         }
     }
 
@@ -93,17 +104,45 @@ impl EntryOrigin {
         matches!(self, Self::DockRun { .. })
     }
 
+    pub fn online_source(&self) -> Option<&OnlineStructureSource> {
+        match self {
+            Self::Online { source } => Some(source.as_ref()),
+            _ => None,
+        }
+    }
+
+    pub fn metadata_json(&self) -> Result<Option<String>> {
+        match self {
+            Self::Online { source } => serde_json::to_string(source)
+                .map(Some)
+                .context("serialize online structure provenance"),
+            _ => Ok(None),
+        }
+    }
+
     /// Rebuild an origin from its persisted `(origin_kind, origin_trajectory)`
     /// columns (the path column holds the trajectory for MD runs and the poses
     /// file for docking runs). A `qm` row written before the report path moved
     /// into the task run directory still carries one; it is ignored.
-    pub fn from_storage(kind: Option<&str>, path: Option<PathBuf>) -> Self {
-        match kind {
+    pub fn from_storage(
+        kind: Option<&str>,
+        path: Option<PathBuf>,
+        metadata: Option<&str>,
+    ) -> Result<Self> {
+        Ok(match kind {
             Some("md") => Self::MdRun { trajectory: path },
             Some("qm") => Self::QmRun,
             Some("dock") => Self::DockRun { poses: path },
+            Some("online") => Self::Online {
+                source: Box::new(
+                    serde_json::from_str(
+                        metadata.context("online entry is missing origin metadata")?,
+                    )
+                    .context("deserialize online structure provenance")?,
+                ),
+            },
             _ => Self::User,
-        }
+        })
     }
 }
 
@@ -490,7 +529,9 @@ mod tests {
             let restored = EntryOrigin::from_storage(
                 Some(origin.kind_token()),
                 origin.stored_path().map(Path::to_path_buf),
-            );
+                origin.metadata_json().unwrap().as_deref(),
+            )
+            .unwrap();
             assert_eq!(restored, origin);
         }
     }
@@ -504,7 +545,9 @@ mod tests {
         let restored = EntryOrigin::from_storage(
             Some("qm"),
             Some(PathBuf::from("runs/qm-optimize-1/output.txt")),
-        );
+            None,
+        )
+        .unwrap();
         assert_eq!(restored, EntryOrigin::QmRun);
         assert_eq!(restored.stored_path(), None);
     }
