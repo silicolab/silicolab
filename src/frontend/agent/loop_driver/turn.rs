@@ -251,12 +251,19 @@ pub fn handle_turn_result(
 /// backlog turn handed its work off to one.
 fn conversation_job_count(state: &AppState) -> usize {
     let active = state.ui.agent.active_conversation;
-    state
+    let compute = state
         .jobs
         .agent_jobs
         .iter()
         .filter(|job| job.conversation == active)
-        .count()
+        .count();
+    compute
+        + state
+            .jobs
+            .agent_online_structures
+            .iter()
+            .filter(|job| job.conversation == active)
+            .count()
 }
 
 /// Dispatch the next queued follow-up when the agent is at rest. One at a time:
@@ -318,7 +325,7 @@ fn begin_job_followup(
 fn job_followup_text(label: &str, summary: &str, is_error: bool) -> String {
     let verb = if is_error { "failed" } else { "finished" };
     format!(
-        "[Background job] The `{label}` computation {verb}. Result:\n{summary}\n\n\
+        "[Background job] The `{label}` task {verb}. Result:\n{summary}\n\n\
          Continue the task: report this to the user concisely, then take the next step \
          if there is one — otherwise stop."
     )

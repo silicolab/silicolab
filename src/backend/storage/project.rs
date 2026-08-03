@@ -203,8 +203,9 @@ fn write_project_snapshot_tx(
                 &entry.structure,
             )?;
         }
+        let origin_metadata = entry.origin.metadata_json()?;
         tx.execute(
-            "insert into entries (id, name, group_id, compound_id, source_path, save_path, revision, origin_kind, origin_trajectory) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            "insert into entries (id, name, group_id, compound_id, source_path, save_path, revision, origin_kind, origin_trajectory, origin_metadata) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 entry.id as i64,
                 entry.name,
@@ -215,6 +216,7 @@ fn write_project_snapshot_tx(
                 entry.revision as i64,
                 entry.origin.kind_token(),
                 entry.origin.stored_path().map(path_to_string),
+                origin_metadata,
             ],
         )?;
     }

@@ -59,6 +59,47 @@ pub fn heavy_kind_of(call: &ToolCall) -> Option<HeavyKind> {
     }
 }
 
+pub fn spawn_agent_online_structure_search(
+    state: &mut AppState,
+    call: &ToolCall,
+    ctx: &egui::Context,
+) -> bool {
+    if call.name != "run_command" {
+        return false;
+    }
+    let Some(command) = call.input.get("command").and_then(|value| value.as_str()) else {
+        return false;
+    };
+    let parsed = match crate::frontend::console::parse_find_query(command) {
+        Ok(Some(query)) => query,
+        Ok(None) => return false,
+        Err(error) => {
+            record_result(state, call, error.to_string(), true);
+            return true;
+        }
+    };
+    let id = state.jobs.next_agent_job_id;
+    state.jobs.next_agent_job_id += 1;
+    let running = crate::frontend::jobs::spawn_online_structure_search(parsed, id);
+    state.jobs.agent_online_structures.push(
+        crate::frontend::jobs::TrackedAgentOnlineStructureJob {
+            id,
+            conversation: state.ui.agent.active_conversation,
+            running,
+        },
+    );
+    record_result(
+        state,
+        call,
+        format!(
+            "Started background online-structure lookup #{id}. The candidate list will be returned when it finishes."
+        ),
+        false,
+    );
+    ctx.request_repaint_after(AGENT_POLL);
+    true
+}
+
 /// A short cost/impact hint for an approval card, or `None` when the call has no
 /// special cost (only heavy commands, which run off-thread one at a time, have one).
 pub fn impact_hint(call: &ToolCall) -> Option<String> {
@@ -226,6 +267,7 @@ pub fn spawn_heavy(state: &mut AppState, call: &ToolCall, kind: HeavyKind, ctx: 
 /// enqueues a `JobDone` to wake the model; survivors keep polling. After a
 /// completion the queue is pumped, so an idle agent auto-continues the workflow.
 pub fn poll_agent_jobs(state: &mut AppState, ctx: &egui::Context) {
+    poll_agent_online_structure_jobs(state, ctx);
     if state.jobs.agent_jobs.is_empty() {
         return;
     }
@@ -259,6 +301,61 @@ pub fn poll_agent_jobs(state: &mut AppState, ctx: &egui::Context) {
     }
 }
 
+fn poll_agent_online_structure_jobs(state: &mut AppState, ctx: &egui::Context) {
+    if state.jobs.agent_online_structures.is_empty() {
+        return;
+    }
+    let jobs = std::mem::take(&mut state.jobs.agent_online_structures);
+    let mut survivors = Vec::with_capacity(jobs.len());
+    let mut completed = false;
+    for tracked in jobs {
+        match tracked.running.receiver.try_recv() {
+            Ok(crate::frontend::jobs::OnlineStructureJobOutcome::Search(result)) => {
+                let (summary, is_error) = match result {
+                    Ok(result) => (
+                        crate::frontend::console::format_structure_search_result(&result),
+                        false,
+                    ),
+                    Err(error) => (format!("online structure lookup failed: {error}"), true),
+                };
+                if let Some(conversation) = state.ui.agent.conversation_mut(tracked.conversation) {
+                    conversation
+                        .transcript
+                        .push(TranscriptEntry::Notice(format!(
+                            "Background online-structure lookup #{} finished.",
+                            tracked.id
+                        )));
+                    conversation.queued.push_back(PendingTurn::JobDone {
+                        label: "find online structure".to_string(),
+                        summary,
+                        is_error,
+                    });
+                }
+                completed = true;
+            }
+            Ok(crate::frontend::jobs::OnlineStructureJobOutcome::Fetch(_)) => {}
+            Err(std::sync::mpsc::TryRecvError::Empty) => survivors.push(tracked),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                if let Some(conversation) = state.ui.agent.conversation_mut(tracked.conversation) {
+                    conversation.queued.push_back(PendingTurn::JobDone {
+                        label: "find online structure".to_string(),
+                        summary: "online structure worker stopped unexpectedly".to_string(),
+                        is_error: true,
+                    });
+                }
+                completed = true;
+            }
+        }
+    }
+    state.jobs.agent_online_structures = survivors;
+    if !state.jobs.agent_online_structures.is_empty() {
+        ctx.request_repaint_after(AGENT_POLL);
+    }
+    if completed {
+        pump_queue(state, ctx);
+    }
+}
+
 /// Cancel and remove every background job belonging to `conversation`, returning
 /// how many were stopped. Used when the user Stops the agent or deletes a chat, so
 /// detached workers and their orphaned results don't linger.
@@ -276,6 +373,11 @@ pub fn cancel_conversation_jobs(
             true
         }
     });
+    let before = state.jobs.agent_online_structures.len();
+    state
+        .jobs
+        .agent_online_structures
+        .retain(|job| job.conversation != conversation);
     for job_id in &cancelled_jobs {
         crate::frontend::dispatcher::complete_local_job(
             state,
@@ -283,7 +385,7 @@ pub fn cancel_conversation_jobs(
             TaskStatus::Cancelled,
         );
     }
-    cancelled_jobs.len()
+    cancelled_jobs.len() + before - state.jobs.agent_online_structures.len()
 }
 
 /// Route a finished job to the conversation that launched it: a transcript

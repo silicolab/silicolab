@@ -131,6 +131,14 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::OpenPdbFetchDialog => open_pdb_fetch_dialog(state),
         AppAction::FetchPdb => fetch_pdb(state),
         AppAction::CancelPdbFetch => state.ui.pending_pdb_fetch = None,
+        AppAction::OpenOnlineStructureSearch => open_online_structure_search(state),
+        AppAction::StartOnlineStructureSearch => start_online_structure_search(state),
+        AppAction::ImportOnlineCrystal(index) => import_online_crystal(state, index),
+        AppAction::BuildResolvedOnlineMolecule => build_resolved_online_molecule(state),
+        AppAction::CloseOnlineStructureSearch => close_online_structure_search(state),
+        AppAction::ShowOnlineStructureSource(entry_id) => {
+            show_online_structure_source(state, entry_id)
+        }
         AppAction::OpenExportDialog { entry_id } => open_export_dialog(state, entry_id),
         AppAction::RunExport => run_export(state),
         AppAction::CancelExport => cancel_export(state),

@@ -14,6 +14,12 @@ pub enum AppAction {
     OpenPdbFetchDialog,
     FetchPdb,
     CancelPdbFetch,
+    OpenOnlineStructureSearch,
+    StartOnlineStructureSearch,
+    ImportOnlineCrystal(usize),
+    BuildResolvedOnlineMolecule,
+    CloseOnlineStructureSearch,
+    ShowOnlineStructureSource(u64),
     /// Open the Export dialog, which defaults to the entries selected in the
     /// sidebar. `entry_id` is set when the action comes from an entry's context
     /// menu: right-clicking outside the current selection exports just that

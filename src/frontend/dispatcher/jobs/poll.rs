@@ -210,6 +210,7 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     }
     poll_compute_jobs(state, ctx);
     poll_trajectory_jobs(state, ctx);
+    poll_online_structure_job(state, ctx);
     poll_update_check(state, ctx);
     poll_self_update(state, ctx);
     poll_metrics(state, ctx);
@@ -223,7 +224,9 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     poll_remote_cancel(state, ctx);
     poll_remote_cleanup(state, ctx);
     let assistant_before = (state.workspace.is_project()
-        && (state.jobs.agent.is_some() || !state.jobs.agent_jobs.is_empty()))
+        && (state.jobs.agent.is_some()
+            || !state.jobs.agent_jobs.is_empty()
+            || !state.jobs.agent_online_structures.is_empty()))
     .then(|| state.assistant_fingerprint());
     crate::frontend::agent::poll_agent_turn(state, ctx);
     crate::frontend::agent::poll_agent_jobs(state, ctx);

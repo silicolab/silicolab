@@ -2,6 +2,8 @@ pub mod formats;
 #[cfg(feature = "network")]
 pub mod llm;
 #[cfg(feature = "network")]
+pub mod online_structures;
+#[cfg(feature = "network")]
 pub mod pdb_fetch;
 pub mod sdfrust_bridge;
 #[cfg(feature = "network")]

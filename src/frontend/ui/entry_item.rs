@@ -83,6 +83,11 @@ pub(crate) fn render_entry_list_item(
                     Some("MD")
                 } else if entry.origin.is_dock_run() {
                     Some("Dock")
+                } else if let Some(source) = entry.origin.online_source() {
+                    Some(match source.provider {
+                        crate::io::online_structures::OnlineProvider::Cod => "COD",
+                        crate::io::online_structures::OnlineProvider::Pubchem => "PubChem",
+                    })
                 } else {
                     None
                 }
@@ -99,6 +104,11 @@ pub(crate) fn render_entry_list_item(
                 "dock-poses-chip",
                 "View docking poses",
                 AppAction::ShowDockPoses(entry_id),
+            )),
+            Some("COD" | "PubChem") => Some((
+                "online-source-chip",
+                "View online structure source",
+                AppAction::ShowOnlineStructureSource(entry_id),
             )),
             _ => None,
         };

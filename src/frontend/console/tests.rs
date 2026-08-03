@@ -225,10 +225,16 @@ fn fetch_command_args_support_db_and_dir_flags() {
     let words =
         shell_words("fetch 4hhb --db https://example.org/pdb --dir tmp/structures").unwrap();
     match parse_command(&words).unwrap() {
-        Command::Fetch { id, db, dir } => {
+        Command::Fetch {
+            id,
+            db,
+            dir,
+            revision,
+        } => {
             assert_eq!(id, "4hhb");
             assert_eq!(db.as_deref(), Some("https://example.org/pdb"));
             assert_eq!(dir.unwrap(), PathBuf::from("tmp/structures"));
+            assert_eq!(revision, None);
         }
         other => panic!("expected fetch, got {other:?}"),
     }
@@ -241,6 +247,43 @@ fn fetch_command_args_reject_unknown_flags() {
         parse_command(&words).is_err(),
         "an unknown flag should fail to parse"
     );
+}
+
+#[test]
+fn find_and_cod_fetch_commands_parse_without_changing_pdb_fetch() {
+    match parse_command(
+        &shell_words("find biphenyl --as name --include-disorder --limit 7").unwrap(),
+    )
+    .unwrap()
+    {
+        Command::Find {
+            query,
+            include_disorder,
+            limit,
+            ..
+        } => {
+            assert_eq!(query, "biphenyl");
+            assert!(include_disorder);
+            assert_eq!(limit, 7);
+        }
+        other => panic!("expected find, got {other:?}"),
+    }
+    match parse_command(&shell_words("fetch cod:1234567 --revision 42").unwrap()).unwrap() {
+        Command::Fetch { id, revision, .. } => {
+            assert_eq!(id, "cod:1234567");
+            assert_eq!(revision.as_deref(), Some("42"));
+        }
+        other => panic!("expected fetch, got {other:?}"),
+    }
+    match parse_command(&shell_words("fetch 4hhb").unwrap()).unwrap() {
+        Command::Fetch { id, revision, .. } => {
+            assert_eq!(id, "4hhb");
+            assert!(revision.is_none());
+        }
+        other => panic!("expected fetch, got {other:?}"),
+    }
+    assert!(parse_command(&shell_words("find C12H10 --limit 0").unwrap()).is_err());
+    assert!(parse_command(&shell_words("find C12H10 --limit 21").unwrap()).is_err());
 }
 
 /// `help` is now clap-rendered, and an unknown command still comes back through

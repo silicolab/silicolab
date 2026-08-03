@@ -13,6 +13,7 @@ use super::docking::RunningDockingJob;
 use super::engine::RunningEngineJob;
 use super::engine_verify::RunningEngineVerify;
 use super::metrics::RunningMetricsSampler;
+use super::online_structures::{RunningOnlineStructureJob, TrackedAgentOnlineStructureJob};
 use super::optimization::RunningOptimization;
 use super::qm::RunningQmJob;
 use super::remote::{RunningRemoteGpuMonitor, RunningRemoteHardwareFetch, RunningRemoteProbe};
@@ -21,6 +22,7 @@ use super::update::{RunningModelFetch, RunningSelfUpdate, RunningUpdateCheck};
 #[derive(Default)]
 pub struct JobManager {
     pub optimizer: Option<RunningOptimization>,
+    pub online_structure: Option<RunningOnlineStructureJob>,
     /// In-flight Build Disordered System (packing) job.
     pub disorder: Option<RunningDisorderJob>,
     pub qm: Option<RunningQmJob>,
@@ -48,6 +50,7 @@ pub struct JobManager {
     /// does not block on them; `poll_agent_jobs` drains completions and wakes the
     /// model through the queue.
     pub agent_jobs: Vec<TrackedAgentJob>,
+    pub agent_online_structures: Vec<TrackedAgentOnlineStructureJob>,
     /// Monotonic id source for `agent_jobs`.
     pub next_agent_job_id: u64,
     /// In-flight live model-list fetch for the active provider's `/models`
