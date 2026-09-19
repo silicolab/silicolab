@@ -82,12 +82,23 @@ Entries 侧栏中的条目和分组高亮不会影响 Style 范围。若要修�
 即使只选择了部分原子，以下控件仍作用于当前条目的整个视口：
 
 - **Background**、**Unit cell** 和 **Atom labels**；
-- **Light**、**Silhouettes** 和轮廓宽度；
+- **Light**、**Silhouettes**（Auto / On / Off）、轮廓宽度和颜色；
+- **Adaptive element contrast**（自适应元素对比度）；
 - Cartoon 的截面和平滑设置；
 - Surface 的填充或网格外观与透明度。
 
 Surface 开关决定哪些原子参与该叠加层；Surface 外观控件决定当前条目的表面如何绘制。
 每个条目可以保留自己的视图状态，因此切换条目后应重新检查。
+
+轮廓默认为 **Auto**：浅色背景下开启，原子和键在远景中很小时逐渐淡出。
+轮廓颜色默认根据背景选择，也可以自定义。自适应元素对比度提高浅色原子和键的可读性，
+不修改元素色表；关闭此选项即可禁用颜色调整。这些设置同样用于 PNG 导出。
+
+```text
+view silhouette auto --width 2 --color #222222
+view silhouette on --color auto
+view contrast off
+```
 
 ## 不要从显示样式推断化学性质
 

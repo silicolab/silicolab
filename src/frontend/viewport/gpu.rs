@@ -16,6 +16,7 @@ use nalgebra::Vector3;
 use super::camera::Projector;
 
 mod export;
+mod pipelines;
 
 pub(super) use export::export_png;
 
@@ -104,6 +105,8 @@ struct CameraUniform {
     params: [f32; 4],
     /// local_center.x, local_center.y, rect_width, rect_height.
     screen: [f32; 4],
+    outline: [f32; 4],
+    backdrop: [f32; 4],
 }
 
 #[repr(C)]
@@ -140,6 +143,24 @@ fn camera_uniform(projector: &Projector) -> CameraUniform {
         ],
         params: [projector.camera_distance, near_plane, projector.scale, 0.0],
         screen: [local_center_x, local_center_y, rect.width(), rect.height()],
+        outline: [0.0; 4],
+        backdrop: [0.0; 4],
+    }
+}
+
+impl CameraUniform {
+    fn with_lighting(
+        mut self,
+        lighting: super::ViewportLightingState,
+        background: egui::Color32,
+        width_scale: f32,
+    ) -> Self {
+        let outline = lighting.resolve_outline(background);
+        self.outline = outline.color.to_normalized_gamma_f32();
+        self.outline[3] = outline.width * width_scale;
+        self.backdrop = background.to_normalized_gamma_f32();
+        self.backdrop[3] = if lighting.adaptive_contrast { 1.0 } else { 0.0 };
+        self
     }
 }
 
@@ -224,6 +245,8 @@ fn unit_capsule_vertices() -> Vec<CylinderVertex> {
 pub(crate) struct MoleculeRenderer {
     sphere_pipeline: wgpu::RenderPipeline,
     cylinder_pipeline: wgpu::RenderPipeline,
+    cylinder_outline_pipeline: wgpu::RenderPipeline,
+    outline_enabled: bool,
     mesh_opaque_pipeline: wgpu::RenderPipeline,
     mesh_transparent_pipeline: wgpu::RenderPipeline,
     mesh_wire_pipeline: wgpu::RenderPipeline,
@@ -289,200 +312,14 @@ impl MoleculeRenderer {
             }],
         });
 
-        const SPHERE_ATTRS: [wgpu::VertexAttribute; 2] =
-            wgpu::vertex_attr_array![0 => Float32x4, 1 => Float32x4];
-        let sphere_layout = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<SphereInstance>() as u64,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &SPHERE_ATTRS,
-        };
-
-        const CYL_VERT_ATTRS: [wgpu::VertexAttribute; 1] = wgpu::vertex_attr_array![0 => Float32x4];
-        let cyl_vertex_layout = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<CylinderVertex>() as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &CYL_VERT_ATTRS,
-        };
-        const CYL_INSTANCE_ATTRS: [wgpu::VertexAttribute; 6] = wgpu::vertex_attr_array![
-            1 => Float32x4, 2 => Float32x4, 3 => Float32x4, 4 => Float32x4, 5 => Float32x4, 6 => Float32x4
-        ];
-        let cyl_instance_layout = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<CylinderInstance>() as u64,
-            step_mode: wgpu::VertexStepMode::Instance,
-            attributes: &CYL_INSTANCE_ATTRS,
-        };
-
-        let depth_stencil = Some(wgpu::DepthStencilState {
-            format: DEPTH_FORMAT,
-            depth_write_enabled: Some(true),
-            depth_compare: Some(wgpu::CompareFunction::LessEqual),
-            stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
-        });
-        let color_target = wgpu::ColorTargetState {
-            format: target_format,
-            blend: Some(wgpu::BlendState::REPLACE),
-            write_mask: wgpu::ColorWrites::ALL,
-        };
-        let primitive = wgpu::PrimitiveState {
-            topology: wgpu::PrimitiveTopology::TriangleList,
-            cull_mode: None,
-            ..Default::default()
-        };
-
-        let sphere_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("molecule_sphere_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("sphere_vs"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[sphere_layout],
-            },
-            primitive,
-            depth_stencil: depth_stencil.clone(),
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("sphere_fs"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(color_target.clone())],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        let cylinder_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("molecule_cylinder_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("cylinder_vs"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[cyl_vertex_layout, cyl_instance_layout],
-            },
-            primitive,
-            depth_stencil,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("cylinder_fs"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(color_target)],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        const MESH_ATTRS: [wgpu::VertexAttribute; 3] =
-            wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4];
-        let mesh_layout = wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<MeshVertex>() as u64,
-            step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &MESH_ATTRS,
-        };
-
-        // Cartoon ribbons: opaque, depth-writing.
-        let mesh_opaque_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("molecule_mesh_opaque_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("mesh_vs"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: std::slice::from_ref(&mesh_layout),
-            },
-            primitive,
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(true),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("mesh_fs"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
-
-        // Molecular surface: translucent, depth-tested but not depth-writing.
-        let mesh_transparent_pipeline =
-            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-                label: Some("molecule_mesh_transparent_pipeline"),
-                layout: Some(&pipeline_layout),
-                vertex: wgpu::VertexState {
-                    module: &shader,
-                    entry_point: Some("mesh_vs"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    buffers: std::slice::from_ref(&mesh_layout),
-                },
-                primitive,
-                depth_stencil: Some(wgpu::DepthStencilState {
-                    format: DEPTH_FORMAT,
-                    depth_write_enabled: Some(false),
-                    depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                    stencil: wgpu::StencilState::default(),
-                    bias: wgpu::DepthBiasState::default(),
-                }),
-                multisample: wgpu::MultisampleState::default(),
-                fragment: Some(wgpu::FragmentState {
-                    module: &shader,
-                    entry_point: Some("mesh_fs"),
-                    compilation_options: wgpu::PipelineCompilationOptions::default(),
-                    targets: &[Some(wgpu::ColorTargetState {
-                        format: target_format,
-                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                        write_mask: wgpu::ColorWrites::ALL,
-                    })],
-                }),
-                multiview_mask: None,
-                cache: None,
-            });
-
-        let mesh_wire_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("molecule_mesh_wire_pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("mesh_vs"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: std::slice::from_ref(&mesh_layout),
-            },
-            primitive: wgpu::PrimitiveState {
-                cull_mode: Some(wgpu::Face::Back),
-                ..primitive
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH_FORMAT,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::LessEqual),
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("mesh_wire_fs"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: target_format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipelines::Pipelines {
+            sphere_pipeline,
+            cylinder_pipeline,
+            cylinder_outline_pipeline,
+            mesh_opaque_pipeline,
+            mesh_transparent_pipeline,
+            mesh_wire_pipeline,
+        } = pipelines::create(device, target_format, &pipeline_layout, &shader);
 
         let unit_capsule = unit_capsule_vertices();
         let cylinder_vertices = create_static_buffer(
@@ -500,6 +337,8 @@ impl MoleculeRenderer {
         Self {
             sphere_pipeline,
             cylinder_pipeline,
+            cylinder_outline_pipeline,
+            outline_enabled: false,
             mesh_opaque_pipeline,
             mesh_transparent_pipeline,
             mesh_wire_pipeline,
@@ -524,7 +363,8 @@ impl MoleculeRenderer {
         }
     }
 
-    fn write_camera(&self, queue: &wgpu::Queue, mut uniform: CameraUniform) {
+    fn write_camera(&mut self, queue: &wgpu::Queue, mut uniform: CameraUniform) {
+        self.outline_enabled = uniform.outline[3] > 0.0;
         uniform.params[3] = if self.srgb_framebuffer { 1.0 } else { 0.0 };
         queue.write_buffer(&self.camera_buffer, 0, bytemuck::bytes_of(&uniform));
     }
@@ -598,6 +438,10 @@ impl MoleculeRenderer {
             render_pass.set_vertex_buffer(0, self.cylinder_vertices.slice(..));
             render_pass.set_vertex_buffer(1, self.cylinders.slice(..));
             render_pass.draw(0..self.cylinder_vertex_count, 0..self.cylinder_count);
+            if self.outline_enabled {
+                render_pass.set_pipeline(&self.cylinder_outline_pipeline);
+                render_pass.draw(0..self.cylinder_vertex_count, 0..self.cylinder_count);
+            }
         }
         if self.sphere_count > 0 {
             render_pass.set_pipeline(&self.sphere_pipeline);
@@ -706,9 +550,11 @@ pub(super) fn emit(
     rect: egui::Rect,
     projector: &Projector,
     upload: Option<MoleculeInstances>,
+    lighting: super::ViewportLightingState,
+    background: egui::Color32,
 ) {
     let callback = MoleculeCallback {
-        camera: camera_uniform(projector),
+        camera: camera_uniform(projector).with_lighting(lighting, background, 1.0),
         upload,
     };
     painter.add(egui_wgpu::Callback::new_paint_callback(rect, callback));

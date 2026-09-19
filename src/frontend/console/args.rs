@@ -11,9 +11,25 @@
 use eframe::egui::Color32;
 
 use crate::frontend::{
-    LightPreset, SurfaceStyle, ViewportVisualState,
+    LightPreset, SilhouetteMode, SurfaceStyle, ViewportVisualState,
     state::{AppState, AtomStyle},
 };
+
+pub(crate) fn parse_silhouette_mode(value: &str) -> Result<SilhouetteMode, String> {
+    SilhouetteMode::from_token(&value.to_ascii_lowercase())
+        .ok_or_else(|| format!("unknown silhouette mode `{value}`; expected auto, on or off"))
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct OutlineColor(pub Option<Color32>);
+
+pub(crate) fn parse_outline_color(value: &str) -> Result<OutlineColor, String> {
+    if value.eq_ignore_ascii_case("auto") {
+        Ok(OutlineColor(None))
+    } else {
+        parse_color_value(value).map(|color| OutlineColor(Some(color)))
+    }
+}
 
 /// Parse a color token: a named color or `#rrggbb`. Used both as a clap
 /// `value_parser` (via [`parse_color_value`]) and by the view-script exporter.

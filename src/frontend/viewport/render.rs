@@ -327,6 +327,11 @@ fn darken(color: Color32, factor: f32) -> Color32 {
     mix_color(color, Color32::BLACK, factor)
 }
 
+pub(super) fn gamma_luminance(color: Color32) -> f32 {
+    (0.299 * f32::from(color.r()) + 0.587 * f32::from(color.g()) + 0.114 * f32::from(color.b()))
+        / 255.0
+}
+
 fn mix_color(base: Color32, target: Color32, factor: f32) -> Color32 {
     let clamped = factor.clamp(0.0, 1.0);
     let mix = |start: u8, end: u8| -> u8 {

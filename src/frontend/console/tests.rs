@@ -397,6 +397,8 @@ fn view_script_export_roundtrips() {
         "view background #102030",
         "view cell off",
         "view light studio",
+        "view silhouette auto --width 2 --color #222222",
+        "view contrast off",
         "cartoon helix --width 3 --thickness 0.4",
         "color chain A #ff8800",
         "surface style mesh",
@@ -432,6 +434,16 @@ fn view_script_export_roundtrips() {
     );
     assert!(!viewport.show_cell);
     assert_eq!(viewport.lighting.preset, LightPreset::Studio);
+    assert_eq!(
+        viewport.lighting.silhouette,
+        crate::frontend::viewport::SilhouetteMode::Auto
+    );
+    assert_eq!(viewport.lighting.silhouette_width, 2.0);
+    assert_eq!(
+        viewport.lighting.silhouette_color,
+        Some(Color32::from_rgb(34, 34, 34))
+    );
+    assert!(!viewport.lighting.adaptive_contrast);
     assert!((viewport.cartoon.helix.width - 3.0).abs() < 1e-4);
     assert!((viewport.cartoon.helix.thickness - 0.4).abs() < 1e-4);
     assert_eq!(
@@ -442,6 +454,17 @@ fn view_script_export_roundtrips() {
     assert!((viewport.surface.transparency - 0.5).abs() < 1e-4);
     assert!(viewport.surface.chains.contains(&'A'));
     assert_eq!(viewport.ions.show_within, Some(4.0));
+    execute_console_line(&mut state, "view silhouette on --color auto").unwrap();
+    assert!(state.ui.viewport.lighting.silhouette_color.is_none());
+    assert_eq!(
+        state.ui.viewport.lighting.silhouette,
+        crate::frontend::viewport::SilhouetteMode::On
+    );
+    execute_console_line(&mut state, "view silhouette off").unwrap();
+    assert_eq!(
+        state.ui.viewport.lighting.silhouette,
+        crate::frontend::viewport::SilhouetteMode::Off
+    );
 }
 
 #[test]

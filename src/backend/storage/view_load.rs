@@ -86,7 +86,25 @@ fn apply_view_override(viewport: &mut ViewportVisualState, row: &RenderOverrideR
             }
         }
         "silhouettes" => {
-            set_bool_from_integer(row.value_integer, &mut viewport.lighting.silhouettes)
+            if row.value_integer == Some(1) {
+                viewport.lighting.silhouette = crate::frontend::SilhouetteMode::On;
+            }
+        }
+        "silhouette_mode" => {
+            if let Some(mode) = row
+                .value_text
+                .as_deref()
+                .and_then(crate::frontend::SilhouetteMode::from_token)
+            {
+                viewport.lighting.silhouette = mode;
+            }
+        }
+        "silhouette_color" => {
+            viewport.lighting.silhouette_color =
+                row.json_value()?.as_ref().and_then(parse_color_json);
+        }
+        "adaptive_contrast" => {
+            set_bool_from_integer(row.value_integer, &mut viewport.lighting.adaptive_contrast);
         }
         "silhouette_width" => {
             set_f32_from_real(row.value_real, &mut viewport.lighting.silhouette_width)

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use eframe::egui::{self, Align2, FontId, Pos2, Sense, Vec2};
+use eframe::egui::{self, Align2, Color32, FontId, Pos2, Sense, Vec2};
 
 use crate::{
     domain::{SecondaryStructureSpan, Structure},
@@ -19,8 +19,9 @@ pub(crate) use camera::view_center_and_radius;
 pub(crate) use export::PendingViewportPngExport;
 pub(crate) use gpu::{GpuExporter, init as init_gpu_renderer};
 pub use visual_state::{
-    CartoonSectionStyle, LightPreset, SurfaceStyle, ViewportCartoonState, ViewportIonState,
-    ViewportLightingState, ViewportSurfaceState, ViewportVisualState, software_default_style,
+    CartoonSectionStyle, LightPreset, SilhouetteMode, SurfaceStyle, ViewportCartoonState,
+    ViewportIonState, ViewportLightingState, ViewportSurfaceState, ViewportVisualState,
+    software_default_style,
 };
 
 use camera::Projector;
@@ -315,6 +316,7 @@ pub fn draw_viewport(ui: &mut egui::Ui, args: ViewportDrawArgs<'_>) -> ViewportI
         structure_revision,
         selection,
         visual_state,
+        background,
         cache,
     );
 
@@ -387,6 +389,7 @@ fn render_molecules_gpu(
     structure_revision: u64,
     selection: &AtomSelection,
     visual_state: &ViewportVisualState,
+    background: Color32,
     cache: &mut ViewportCache,
 ) -> Vec<PickTarget> {
     let instance_key =
@@ -409,7 +412,14 @@ fn render_molecules_gpu(
         scene.surface_wireframe = visual_state.surface.style == SurfaceStyle::Mesh;
         Some(scene)
     };
-    gpu::emit(painter, rect, viewport, upload);
+    gpu::emit(
+        painter,
+        rect,
+        viewport,
+        upload,
+        visual_state.lighting,
+        background,
+    );
 
     if cache.gpu.pick_key.as_ref() != Some(&cache_key) {
         cache.gpu.pick_targets = project_pick_targets(structure, viewport);

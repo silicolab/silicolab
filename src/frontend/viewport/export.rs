@@ -83,6 +83,7 @@ pub(crate) fn export_viewport_png(
             width,
             height,
             visual_state.background_color,
+            visual_state.lighting,
             output_path,
         );
     }
@@ -114,6 +115,7 @@ pub(crate) fn export_viewport_png(
         width,
         height,
         visual_state.background_color,
+        visual_state.lighting,
         output_path,
     )
 }

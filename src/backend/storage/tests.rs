@@ -335,6 +335,10 @@ fn project_view_settings_roundtrip_surface_overrides() {
         .chain_colors
         .insert('A', eframe::egui::Color32::from_rgb(100, 149, 237));
     viewport.ions.show_within = Some(3.5);
+    viewport.lighting.silhouette = crate::frontend::SilhouetteMode::Off;
+    viewport.lighting.silhouette_color = Some(eframe::egui::Color32::RED);
+    viewport.lighting.adaptive_contrast = false;
+    viewport.lighting.silhouette_width = 2.0;
     // A non-default view-level flag (default is true).
     viewport.show_cell = false;
     // Project-level category style override.
@@ -380,6 +384,16 @@ fn project_view_settings_roundtrip_surface_overrides() {
     );
     assert_eq!(loaded.view.viewport.ions.show_within, Some(3.5));
     assert!(!loaded.view.viewport.show_cell);
+    assert_eq!(
+        loaded.view.viewport.lighting.silhouette,
+        crate::frontend::SilhouetteMode::Off
+    );
+    assert_eq!(
+        loaded.view.viewport.lighting.silhouette_color,
+        Some(eframe::egui::Color32::RED)
+    );
+    assert!(!loaded.view.viewport.lighting.adaptive_contrast);
+    assert_eq!(loaded.view.viewport.lighting.silhouette_width, 2.0);
 
     let db = rusqlite::Connection::open(&session.project_db).unwrap();
     let chain_override_count: i64 = db
@@ -399,6 +413,21 @@ fn project_view_settings_roundtrip_surface_overrides() {
 
     assert!(chain_override_count >= 2);
     assert!(view_override_count >= 2);
+    assert_eq!(
+        db.query_row(
+            "select count(*) from render_overrides where property = 'silhouettes'",
+            [],
+            |row| row.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+    db.execute("update render_overrides set property = 'silhouettes', value_type = 'integer', value_integer = 1, value_text = null where property = 'silhouette_mode'", []).unwrap();
+    let legacy = load_project_snapshot(&session).unwrap();
+    assert_eq!(
+        legacy.view.viewport.lighting.silhouette,
+        crate::frontend::SilhouetteMode::On
+    );
 }
 
 #[test]

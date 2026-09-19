@@ -95,10 +95,44 @@ impl Default for ViewportCartoonState {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SilhouetteMode {
+    Auto,
+    On,
+    Off,
+}
+
+impl SilhouetteMode {
+    pub fn token(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::On => "on",
+            Self::Off => "off",
+        }
+    }
+
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token {
+            "auto" => Some(Self::Auto),
+            "on" => Some(Self::On),
+            "off" => Some(Self::Off),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct OutlineParams {
+    pub color: Color32,
+    pub width: f32,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct ViewportLightingState {
     pub preset: LightPreset,
-    pub silhouettes: bool,
+    pub silhouette: SilhouetteMode,
+    pub silhouette_color: Option<Color32>,
+    pub adaptive_contrast: bool,
     pub silhouette_width: f32,
 }
 
@@ -106,9 +140,63 @@ impl Default for ViewportLightingState {
     fn default() -> Self {
         Self {
             preset: LightPreset::Soft,
-            silhouettes: false,
-            silhouette_width: 1.0,
+            silhouette: SilhouetteMode::Auto,
+            silhouette_color: None,
+            adaptive_contrast: true,
+            silhouette_width: 1.25,
         }
+    }
+}
+
+impl ViewportLightingState {
+    pub fn resolve_outline(&self, effective_background: Color32) -> OutlineParams {
+        let light = super::render::gamma_luminance(effective_background) > 0.6;
+        let enabled = match self.silhouette {
+            SilhouetteMode::Auto => light,
+            SilhouetteMode::On => true,
+            SilhouetteMode::Off => false,
+        };
+        OutlineParams {
+            color: self.silhouette_color.unwrap_or_else(|| {
+                if light {
+                    Color32::from_rgb(48, 52, 58)
+                } else {
+                    Color32::from_rgb(216, 220, 226)
+                }
+            }),
+            width: if enabled && self.silhouette_width.is_finite() {
+                self.silhouette_width.clamp(0.0, 6.0)
+            } else {
+                0.0
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod lighting_tests {
+    use super::*;
+
+    #[test]
+    fn outline_resolves_mode_background_and_custom_color() {
+        let mut lighting = ViewportLightingState::default();
+        assert_eq!(lighting.resolve_outline(Color32::WHITE).width, 1.25);
+        assert_eq!(lighting.resolve_outline(Color32::BLACK).width, 0.0);
+        assert_eq!(
+            lighting.resolve_outline(Color32::WHITE).color,
+            Color32::from_rgb(48, 52, 58)
+        );
+        lighting.silhouette = SilhouetteMode::On;
+        assert_eq!(lighting.resolve_outline(Color32::BLACK).width, 1.25);
+        assert_eq!(
+            lighting.resolve_outline(Color32::BLACK).color,
+            Color32::from_rgb(216, 220, 226)
+        );
+        lighting.silhouette_color = Some(Color32::RED);
+        assert_eq!(lighting.resolve_outline(Color32::WHITE).color, Color32::RED);
+        lighting.silhouette = SilhouetteMode::Off;
+        assert_eq!(lighting.resolve_outline(Color32::WHITE).width, 0.0);
+        assert_eq!(lighting.resolve_outline(Color32::BLACK).width, 0.0);
     }
 }
 

@@ -13,6 +13,8 @@ struct Camera {
     center: vec4<f32>, // world-space view center (xyz)
     params: vec4<f32>, // camera_distance, near_plane, scale, srgb_framebuffer flag
     screen: vec4<f32>, // local_center.x, local_center.y, rect_width, rect_height
+    outline: vec4<f32>,
+    backdrop: vec4<f32>,
 };
 
 @group(0) @binding(0) var<uniform> camera: Camera;
@@ -51,6 +53,23 @@ const HALF_DIR = vec3<f32>(-0.157322, 0.202274, 0.966588);
 
 fn luminance(c: vec3<f32>) -> f32 {
     return c.r * 0.299 + c.g * 0.587 + c.b * 0.114;
+}
+
+fn contrast_floor(base: vec3<f32>) -> vec3<f32> {
+    let lum = luminance(base);
+    let bg = luminance(camera.backdrop.rgb);
+    let threshold = select(0.12, 0.06, camera.outline.w > 0.0);
+    if camera.backdrop.w < 0.5 || abs(lum - bg) >= threshold {
+        return base;
+    }
+    if bg > 0.6 {
+        return base * max(bg - threshold, 0.0) / max(lum, 0.0001);
+    }
+    return mix(base, vec3<f32>(1.0), clamp((bg + threshold - lum) / max(1.0 - lum, 0.0001), 0.0, 1.0));
+}
+
+fn outline_width(radius_px: f32) -> f32 {
+    return camera.outline.w * smoothstep(1.5, 4.0, radius_px);
 }
 
 fn mix3(a: vec3<f32>, b: vec3<f32>, t: f32) -> vec3<f32> {
@@ -118,6 +137,7 @@ struct SphereOut {
     @location(1) color: vec3<f32>,
     @location(2) center_view_z: f32,
     @location(3) radius: f32,
+    @location(4) extent: f32,
 };
 
 @vertex
@@ -132,7 +152,8 @@ fn sphere_vs(in: SphereIn, @builtin(vertex_index) vi: u32) -> SphereOut {
     let persp = perspective_factor(view.z);
     let ndc_center = view_to_ndc(view);
     let radius_px = radius * camera.params.z * persp;
-    let off = corners[vi];
+    let extent = 1.0 + outline_width(radius_px) / max(radius_px, 0.0001);
+    let off = corners[vi] * extent;
     let ndc = vec2<f32>(
         ndc_center.x + off.x * radius_px / camera.screen.z * 2.0,
         ndc_center.y - off.y * radius_px / camera.screen.w * 2.0,
@@ -144,21 +165,28 @@ fn sphere_vs(in: SphereIn, @builtin(vertex_index) vi: u32) -> SphereOut {
     out.color = in.color.rgb;
     out.center_view_z = view.z;
     out.radius = radius;
+    out.extent = extent;
     return out;
 }
 
 @fragment
 fn sphere_fs(in: SphereOut) -> FragOut {
     let d2 = dot(in.offset, in.offset);
-    if d2 > 1.0 {
+    if d2 > in.extent * in.extent {
         discard;
+    }
+    if d2 > 1.0 {
+        var outline: FragOut;
+        outline.color = frame_color(camera.outline.rgb);
+        outline.depth = depth_ndc(in.center_view_z);
+        return outline;
     }
     let nz = sqrt(1.0 - d2);
     let normal = vec3<f32>(in.offset.x, in.offset.y, nz);
     let surface_view_z = in.center_view_z + nz * in.radius;
 
     var out: FragOut;
-    out.color = frame_color(shade(in.color, normal));
+    out.color = frame_color(shade(contrast_floor(in.color), normal));
     out.depth = depth_ndc(surface_view_z);
     return out;
 }
@@ -182,10 +210,10 @@ struct CylinderOut {
     @location(1) color_a: vec3<f32>,
     @location(2) color_b: vec3<f32>,
     @location(3) axial_fraction: f32,
+    @location(4) outline_width: f32,
 };
 
-@vertex
-fn cylinder_vs(in: CylinderIn) -> CylinderOut {
+fn cylinder_vertex(in: CylinderIn) -> CylinderOut {
     let radial_normal = in.side_u.xyz * in.local.x + in.side_v.xyz * in.local.y;
     let axial = in.start_len.w * in.local.z + in.axis_radius.w * in.local.w;
     let world = in.start_len.xyz + in.axis_radius.xyz * axial
@@ -199,13 +227,39 @@ fn cylinder_vs(in: CylinderIn) -> CylinderOut {
     out.color_a = in.color_a.rgb;
     out.color_b = in.color_b.rgb;
     out.axial_fraction = in.local.z;
+    out.outline_width = 0.0;
     return out;
+}
+
+@vertex
+fn cylinder_vs(in: CylinderIn) -> CylinderOut {
+    return cylinder_vertex(in);
 }
 
 @fragment
 fn cylinder_fs(in: CylinderOut) -> @location(0) vec4<f32> {
     let color = select(in.color_a, in.color_b, in.axial_fraction >= 0.5);
-    return frame_color(shade(color, in.normal_view));
+    return frame_color(shade(contrast_floor(color), in.normal_view));
+}
+
+@vertex
+fn cylinder_outline_vs(in: CylinderIn) -> CylinderOut {
+    var out = cylinder_vertex(in);
+    let axis_point = to_view(in.start_len.xyz + in.axis_radius.xyz * in.start_len.w * in.local.z);
+    let radius_px = in.axis_radius.w * camera.params.z * perspective_factor(axis_point.z);
+    let normal_xy = out.normal_view.xy;
+    let direction = normal_xy / max(length(normal_xy), 0.0001);
+    out.outline_width = outline_width(radius_px);
+    out.clip = vec4<f32>(out.clip.xy + direction * out.outline_width * 2.0 / camera.screen.zw, out.clip.zw);
+    return out;
+}
+
+@fragment
+fn outline_fs(in: CylinderOut) -> @location(0) vec4<f32> {
+    if in.outline_width <= 0.0 {
+        discard;
+    }
+    return frame_color(camera.outline.rgb);
 }
 
 // ---------------------------------------------------------------------------
