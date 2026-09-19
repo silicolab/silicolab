@@ -294,7 +294,9 @@ fn gpu_renders_benzene_to_png() {
         (background[2] * 255.0) as u8,
     ];
     let drawn = pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .filter(|p| {
             p[0].abs_diff(bg[0]) > 8 || p[1].abs_diff(bg[1]) > 8 || p[2].abs_diff(bg[2]) > 8
         })
@@ -534,7 +536,7 @@ fn gpu_renders_surface_to_png() {
         (background[2] * 255.0) as u8,
     ];
     assert!(
-        pixels.chunks_exact(4).any(|pixel| {
+        pixels.as_chunks::<4>().0.iter().any(|pixel| {
             pixel[0].abs_diff(background_bytes[0]) > 8
                 || pixel[1].abs_diff(background_bytes[1]) > 8
                 || pixel[2].abs_diff(background_bytes[2]) > 8
