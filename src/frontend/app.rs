@@ -26,6 +26,8 @@ use crate::{
 };
 
 pub fn run(structure: Structure, source_path: Option<PathBuf>) -> Result<()> {
+    #[cfg(target_os = "macos")]
+    let mut retained_macos_view = None;
     let options = eframe::NativeOptions {
         // Keep the GUI paced for tooling workloads instead of chasing high-refresh displays.
         vsync: true,
@@ -40,16 +42,38 @@ pub fn run(structure: Structure, source_path: Option<PathBuf>) -> Result<()> {
         ..Default::default()
     };
 
-    eframe::run_native(
+    let result = eframe::run_native(
         "SilicoLab",
         options,
         Box::new(|cc| {
+            #[cfg(target_os = "macos")]
+            {
+                use raw_window_handle::HasWindowHandle;
+                let raw_window_handle::RawWindowHandle::AppKit(handle) =
+                    cc.window_handle()?.as_raw()
+                else {
+                    return Err("expected an AppKit window handle".into());
+                };
+                // Touch Bar cleanup can outlive eframe's window teardown. The
+                // observed view must survive until the native event loop returns.
+                // SAFETY: the creation context supplies a live NSView on the main
+                // thread; this retain is released on the same thread after run_native.
+                retained_macos_view = unsafe {
+                    objc2::rc::Retained::<objc2::runtime::AnyObject>::retain(
+                        handle.ns_view.as_ptr().cast(),
+                    )
+                };
+            }
             let mut fonts = egui::FontDefinitions::default();
             egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
             install_system_fonts(&mut fonts);
             cc.egui_ctx.set_fonts(fonts);
             crate::frontend::theme::apply(&cc.egui_ctx);
             let mut app = SilicoLabApp::new(structure, source_path);
+            #[cfg(target_os = "macos")]
+            {
+                app.macos_view = retained_macos_view.clone();
+            }
             // Kick off the once-per-launch release check (a single background
             // HTTP request); `poll_jobs` drains the result. Honors the
             // "Check for updates" setting, on by default.
@@ -116,8 +140,10 @@ pub fn run(structure: Structure, source_path: Option<PathBuf>) -> Result<()> {
             }
             Ok(Box::new(app))
         }),
-    )
-    .map_err(|error| anyhow::anyhow!(error.to_string()))
+    );
+    #[cfg(target_os = "macos")]
+    drop(retained_macos_view);
+    result.map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
 /// Build the main window's viewport.
@@ -209,6 +235,8 @@ pub struct SilicoLabApp {
     /// the in-window egui menus instead.
     #[cfg(target_os = "macos")]
     macos_menu: Option<crate::frontend::menu_macos::MacMenu>,
+    #[cfg(target_os = "macos")]
+    macos_view: Option<objc2::rc::Retained<objc2::runtime::AnyObject>>,
 }
 
 impl SilicoLabApp {
@@ -252,6 +280,8 @@ impl SilicoLabApp {
                             gpu_exporter: None,
                             #[cfg(target_os = "macos")]
                             macos_menu: None,
+                            #[cfg(target_os = "macos")]
+                            macos_view: None,
                         };
                     }
                     Err(error) => {
@@ -278,6 +308,8 @@ impl SilicoLabApp {
             gpu_exporter: None,
             #[cfg(target_os = "macos")]
             macos_menu: None,
+            #[cfg(target_os = "macos")]
+            macos_view: None,
         }
     }
 
@@ -331,6 +363,34 @@ impl SilicoLabApp {
 }
 
 impl eframe::App for SilicoLabApp {
+    #[cfg(target_os = "macos")]
+    fn on_exit(&mut self) {
+        use objc2::runtime::AnyObject;
+        let Some(view) = self.macos_view.as_ref() else {
+            return;
+        };
+        // AccessKit restores the view's original class when its adapter drops,
+        // which strips any NSKVONotifying subclass. Let AppKit detach its Touch
+        // Bar observers while that subclass and the adapter are still intact.
+        // SAFETY: eframe calls on_exit on the main thread before destroying the
+        // window. The retained view remains valid throughout these AppKit calls.
+        unsafe {
+            let window: *mut AnyObject = objc2::msg_send![&**view, window];
+            if window.is_null() {
+                return;
+            }
+            let resigned: bool =
+                objc2::msg_send![window, makeFirstResponder: core::ptr::null::<AnyObject>()];
+            if !resigned {
+                eprintln!(
+                    "SilicoLab: macOS window refused to clear its first responder during shutdown"
+                );
+            }
+            let _: () = objc2::msg_send![window, orderOut: core::ptr::null::<AnyObject>()];
+            let _: () = objc2::msg_send![objc2::class!(CATransaction), flush];
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         let viewport_title = format!(
@@ -470,13 +530,8 @@ impl eframe::App for SilicoLabApp {
         }
     }
 
-    /// Persist only the window geometry, not egui's transient widget memory.
-    ///
-    /// The `eframe` "persistence" feature (enabled for window size/position recall)
-    /// otherwise also serializes the entire egui `Memory` typemap — collapsing-header
-    /// open/closed state, scroll offsets, text-edit undo buffers, focus, etc. — which
-    /// we don't want surviving restarts. Window geometry is saved separately (gated on
-    /// `persist_window`, default true), so it is unaffected by returning false here.
+    /// Keep transient widget state from surviving restarts. Window geometry is
+    /// persisted separately according to `NativeOptions::persist_window`.
     fn persist_egui_memory(&self) -> bool {
         false
     }
