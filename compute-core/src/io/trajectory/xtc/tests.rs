@@ -172,15 +172,14 @@ fn encode_frame(
         sizeint[c] = (maxint[c] as i64 - minint[c] as i64 + 1) as u32;
     }
     let mut bitsizeint = [0i32; 3];
-    let bitsize;
-    if (sizeint[0] | sizeint[1] | sizeint[2]) > 0xffffff {
+    let bitsize = if (sizeint[0] | sizeint[1] | sizeint[2]) > 0xffffff {
         bitsizeint[0] = sizeofint(sizeint[0]);
         bitsizeint[1] = sizeofint(sizeint[1]);
         bitsizeint[2] = sizeofint(sizeint[2]);
-        bitsize = 0;
+        0
     } else {
-        bitsize = sizeofints(&sizeint);
-    }
+        sizeofints(&sizeint)
+    };
 
     let mut smallidx = FIRSTIDX;
     while smallidx < LASTIDX && MAGICINTS[smallidx as usize] < mindiff {

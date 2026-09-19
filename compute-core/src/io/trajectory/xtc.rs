@@ -215,15 +215,14 @@ fn decode_coords<R: Read + Seek>(
     // When a span is too large to multiply together, each component is packed
     // with its own bit width; otherwise the three pack into one integer.
     let mut bitsizeint = [0i32; 3];
-    let bitsize;
-    if (sizeint[0] | sizeint[1] | sizeint[2]) > 0xffffff {
+    let bitsize = if (sizeint[0] | sizeint[1] | sizeint[2]) > 0xffffff {
         bitsizeint[0] = sizeofint(sizeint[0]);
         bitsizeint[1] = sizeofint(sizeint[1]);
         bitsizeint[2] = sizeofint(sizeint[2]);
-        bitsize = 0;
+        0
     } else {
-        bitsize = sizeofints(&sizeint);
-    }
+        sizeofints(&sizeint)
+    };
 
     let mut smallidx = read_i32(reader)?;
     if !(FIRSTIDX..LASTIDX).contains(&smallidx) {
