@@ -86,12 +86,28 @@ fn save_viewport_settings(
             light_preset_token(viewport.lighting.preset),
         )?;
     }
-    if viewport.lighting.silhouettes != default_viewport.lighting.silhouettes {
+    if viewport.lighting.silhouette != default_viewport.lighting.silhouette {
+        set_render_override_text(
+            db,
+            RenderTarget::view(scope),
+            "silhouette_mode",
+            viewport.lighting.silhouette.token(),
+        )?;
+    }
+    if let Some(color) = viewport.lighting.silhouette_color {
+        set_render_override_json(
+            db,
+            RenderTarget::view(scope),
+            "silhouette_color",
+            color_json(color),
+        )?;
+    }
+    if viewport.lighting.adaptive_contrast != default_viewport.lighting.adaptive_contrast {
         set_render_override_bool(
             db,
             RenderTarget::view(scope),
-            "silhouettes",
-            viewport.lighting.silhouettes,
+            "adaptive_contrast",
+            viewport.lighting.adaptive_contrast,
         )?;
     }
     if viewport.lighting.silhouette_width != default_viewport.lighting.silhouette_width {

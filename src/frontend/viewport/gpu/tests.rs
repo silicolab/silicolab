@@ -136,6 +136,24 @@ fn render_offscreen(
     height: u32,
     background: [f32; 4],
 ) -> Vec<u8> {
+    render_offscreen_lit(
+        instances,
+        projector,
+        width,
+        height,
+        background,
+        super::super::ViewportLightingState::default(),
+    )
+}
+
+fn render_offscreen_lit(
+    instances: &MoleculeInstances,
+    projector: &Projector,
+    width: u32,
+    height: u32,
+    background: [f32; 4],
+    lighting: super::super::ViewportLightingState,
+) -> Vec<u8> {
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
     let adapter =
         pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default()))
@@ -145,7 +163,15 @@ fn render_offscreen(
             .expect("request device");
 
     let mut renderer = MoleculeRenderer::new(&device, wgpu::TextureFormat::Rgba8Unorm);
-    renderer.write_camera(&queue, camera_uniform(projector));
+    let background_color = egui::Color32::from_rgb(
+        (background[0] * 255.0).round() as u8,
+        (background[1] * 255.0).round() as u8,
+        (background[2] * 255.0).round() as u8,
+    );
+    renderer.write_camera(
+        &queue,
+        camera_uniform(projector).with_lighting(lighting, background_color, 1.0),
+    );
     renderer.upload(&device, &queue, instances);
 
     let extent = wgpu::Extent3d {
@@ -250,6 +276,117 @@ fn render_offscreen(
     pixels
 }
 
+#[test]
+#[ignore = "needs a GPU adapter"]
+fn gpu_hydrogen_outline_and_contrast() {
+    use super::super::{SilhouetteMode, ViewportLightingState};
+    let instances = MoleculeInstances {
+        spheres: vec![SphereInstance {
+            pos_radius: [0.0, 0.0, 0.0, 1.0],
+            color: [0.95, 0.95, 0.95, 1.0],
+        }],
+        ..Default::default()
+    };
+    let projector = Projector::new(
+        Rect::from_min_size(Pos2::ZERO, Vec2::splat(128.0)),
+        Point3::origin(),
+        30.0,
+        10.0,
+        0.0,
+        0.0,
+        Vec2::ZERO,
+    );
+    let background = ViewportVisualState::DEFAULT_BACKGROUND.to_normalized_gamma_f32();
+    let mut lighting = ViewportLightingState {
+        silhouette: SilhouetteMode::On,
+        silhouette_width: 2.0,
+        adaptive_contrast: false,
+        ..Default::default()
+    };
+    let outlined = render_offscreen_lit(&instances, &projector, 128, 128, background, lighting);
+    let lum = |p: &[u8]| {
+        (0.299 * f32::from(p[0]) + 0.587 * f32::from(p[1]) + 0.114 * f32::from(p[2])) / 255.0
+    };
+    let ring_dark = outlined
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .enumerate()
+        .filter(|(i, p)| {
+            let r2 =
+                ((*i % 128) as f32 + 0.5 - 64.0).powi(2) + ((*i / 128) as f32 + 0.5 - 64.0).powi(2);
+            r2 > 900.0 && r2 < 1024.0 && lum(*p) < 0.4
+        })
+        .count();
+    assert!(ring_dark > 100, "expected outline ring, got {ring_dark}");
+    lighting.silhouette = SilhouetteMode::Off;
+    let plain = render_offscreen_lit(&instances, &projector, 128, 128, background, lighting);
+    assert!(!plain.as_chunks::<4>().0.iter().any(|p| lum(p) < 0.4));
+    lighting.adaptive_contrast = true;
+    let contrasted = render_offscreen_lit(&instances, &projector, 128, 128, background, lighting);
+    let center = (64 * 128 + 64) * 4;
+    let bg_lum = super::super::render::gamma_luminance(ViewportVisualState::DEFAULT_BACKGROUND);
+    assert!(bg_lum - lum(&contrasted[center..center + 4]) >= 0.08);
+    assert!(lum(&contrasted[center..center + 4]) < lum(&plain[center..center + 4]));
+    lighting.silhouette = SilhouetteMode::On;
+    let tiny = Projector::new(
+        projector.rect,
+        Point3::origin(),
+        1.4,
+        10.0,
+        0.0,
+        0.0,
+        Vec2::ZERO,
+    );
+    let faded = render_offscreen_lit(&instances, &tiny, 128, 128, background, lighting);
+    assert!(!faded.as_chunks::<4>().0.iter().any(|p| lum(p) < 0.4));
+}
+
+#[test]
+#[ignore = "needs a GPU adapter"]
+fn gpu_capsule_outline_preserves_interior() {
+    use super::super::{SilhouetteMode, ViewportLightingState};
+    let instances = MoleculeInstances {
+        cylinders: vec![CylinderInstance {
+            start_len: [-1.0, 0.0, 0.0, 2.0],
+            axis_radius: [1.0, 0.0, 0.0, 0.3],
+            side_u: [0.0, 1.0, 0.0, 0.0],
+            side_v: [0.0, 0.0, 1.0, 0.0],
+            color_a: [0.95; 4],
+            color_b: [0.95; 4],
+        }],
+        ..Default::default()
+    };
+    let projector = Projector::new(
+        Rect::from_min_size(Pos2::ZERO, Vec2::splat(128.0)),
+        Point3::origin(),
+        30.0,
+        10.0,
+        0.0,
+        0.0,
+        Vec2::ZERO,
+    );
+    let lighting = ViewportLightingState {
+        silhouette: SilhouetteMode::On,
+        silhouette_width: 2.0,
+        ..Default::default()
+    };
+    let pixels = render_offscreen_lit(&instances, &projector, 128, 128, [1.0; 4], lighting);
+    assert!(
+        pixels
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .filter(|p| p[0] < 100)
+            .count()
+            > 100
+    );
+    assert!(
+        pixels[(64 * 128 + 64) * 4] > 180,
+        "front faces must hide the inverted hull"
+    );
+}
+
 /// GPU smoke test: render benzene and save a PNG for visual inspection.
 /// Ignored by default because it needs a usable GPU adapter; run with
 /// `cargo test --release -- --ignored gpu_renders_benzene`.
@@ -345,10 +482,36 @@ fn gpu_export_api_writes_png() {
         width,
         height,
         visual.background_color,
+        visual.lighting,
         &path,
     )
     .expect("GPU export");
     let decoded = image::open(&path).expect("decode exported PNG");
+    assert_eq!((decoded.width(), decoded.height()), (width, height));
+
+    let (width, height) = (3840, 2160);
+    let projector = Projector::new(
+        Rect::from_min_size(Pos2::ZERO, Vec2::new(width as f32, height as f32)),
+        center,
+        height as f32 * 0.35 / radius,
+        radius * 3.2,
+        0.6,
+        0.45,
+        Vec2::ZERO,
+    );
+    let path = std::path::Path::new("target").join("gpu_export_4k.png");
+    export_png(
+        &exporter,
+        &instances,
+        &projector,
+        width,
+        height,
+        visual.background_color,
+        visual.lighting,
+        &path,
+    )
+    .expect("4K GPU export");
+    let decoded = image::open(&path).expect("decode 4K PNG");
     assert_eq!((decoded.width(), decoded.height()), (width, height));
 }
 

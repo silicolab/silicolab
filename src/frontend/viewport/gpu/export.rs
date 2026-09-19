@@ -10,6 +10,7 @@ use eframe::{egui, wgpu};
 use super::super::camera::Projector;
 use super::{DEPTH_FORMAT, GpuExporter, MoleculeInstances, MoleculeRenderer, camera_uniform};
 
+#[allow(clippy::too_many_arguments)]
 pub(in crate::frontend::viewport) fn export_png(
     exporter: &GpuExporter,
     instances: &MoleculeInstances,
@@ -17,6 +18,7 @@ pub(in crate::frontend::viewport) fn export_png(
     width: u32,
     height: u32,
     background: egui::Color32,
+    lighting: crate::frontend::viewport::ViewportLightingState,
     output_path: &Path,
 ) -> Result<()> {
     if width == 0 || height == 0 {
@@ -33,7 +35,11 @@ pub(in crate::frontend::viewport) fn export_png(
     let queue = &exporter.queue;
     let format = wgpu::TextureFormat::Rgba8Unorm;
     let mut renderer = MoleculeRenderer::new(device, format);
-    renderer.write_camera(queue, camera_uniform(projector));
+    let width_scale = (width.min(height) as f32 / 900.0).max(1.0);
+    renderer.write_camera(
+        queue,
+        camera_uniform(projector).with_lighting(lighting, background, width_scale),
+    );
     renderer.upload(device, queue, instances);
 
     let extent = wgpu::Extent3d {

@@ -74,6 +74,7 @@ pub(super) fn render_style_panel(
                     "atom labels",
                     "light",
                     "silhouette",
+                    "contrast",
                 ],
                 false,
                 |ui| {
@@ -83,7 +84,7 @@ pub(super) fn render_style_panel(
                     ui.add_space(6.0);
                     scene_section(state, ui, &pal);
                     ui.add_space(6.0);
-                    scene_advanced_section(state, ui, &pal);
+                    scene_advanced_section(state, ui, actions, &pal);
                 },
             );
         });
@@ -283,21 +284,71 @@ fn surface_section(state: &mut AppState, ui: &mut egui::Ui, pal: &crate::fronten
 fn scene_advanced_section(
     state: &mut AppState,
     ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
     pal: &crate::frontend::theme::Palette,
 ) {
     style_group_label(ui, "Silhouettes", pal);
+    let previous = state.ui.viewport.lighting;
+    let mut lighting = previous;
+    let background = if state.ui.viewport.background_follows_theme() {
+        pal.viewport_bg
+    } else {
+        state.ui.viewport.background_color
+    };
     ui.horizontal(|ui| {
-        toggle_switch(
-            ui,
-            &mut state.ui.viewport.lighting.silhouettes,
-            "Silhouettes",
-            pal,
-        );
+        use crate::frontend::viewport::SilhouetteMode;
+        for (mode, label) in [
+            (SilhouetteMode::Auto, "Auto"),
+            (SilhouetteMode::On, "On"),
+            (SilhouetteMode::Off, "Off"),
+        ] {
+            ui.selectable_value(&mut lighting.silhouette, mode, label);
+        }
     });
-    ui.add(
-        egui::Slider::new(&mut state.ui.viewport.lighting.silhouette_width, 0.0..=6.0)
-            .text("Silhouette width"),
-    );
+    ui.add(egui::Slider::new(&mut lighting.silhouette_width, 0.0..=6.0).text("Silhouette width"));
+    ui.horizontal(|ui| {
+        let mut auto = lighting.silhouette_color.is_none();
+        if ui.checkbox(&mut auto, "Auto color").changed() {
+            lighting.silhouette_color = if auto {
+                None
+            } else {
+                Some(lighting.resolve_outline(background).color)
+            };
+        }
+        if let Some(color) = &mut lighting.silhouette_color {
+            egui::color_picker::color_edit_button_srgba(
+                ui,
+                color,
+                egui::color_picker::Alpha::Opaque,
+            );
+        }
+    });
+    ui.checkbox(&mut lighting.adaptive_contrast, "Adaptive element contrast");
+    if previous.silhouette != lighting.silhouette
+        || previous.silhouette_width != lighting.silhouette_width
+        || previous.silhouette_color != lighting.silhouette_color
+    {
+        let color = lighting
+            .silhouette_color
+            .map(|c| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b()))
+            .unwrap_or_else(|| "auto".to_string());
+        actions.push(AppAction::RunConsoleCommand(format!(
+            "view silhouette {} --width {} --color {}",
+            lighting.silhouette.token(),
+            lighting.silhouette_width,
+            color
+        )));
+    }
+    if previous.adaptive_contrast != lighting.adaptive_contrast {
+        actions.push(AppAction::RunConsoleCommand(format!(
+            "view contrast {}",
+            if lighting.adaptive_contrast {
+                "on"
+            } else {
+                "off"
+            }
+        )));
+    }
 }
 
 fn style_section(

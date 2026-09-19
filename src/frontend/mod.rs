@@ -51,8 +51,8 @@ pub use sketcher::SketcherState;
 pub use state::AtomStyle;
 pub use structure_editor::StructureEditor;
 pub use viewport::{
-    CartoonSectionStyle, LightPreset, SurfaceStyle, ViewCamera, ViewportCartoonState,
-    ViewportDrawArgs, ViewportIonState, ViewportLightingState, ViewportSurfaceState,
-    ViewportVisualState, draw_viewport,
+    CartoonSectionStyle, LightPreset, SilhouetteMode, SurfaceStyle, ViewCamera,
+    ViewportCartoonState, ViewportDrawArgs, ViewportIonState, ViewportLightingState,
+    ViewportSurfaceState, ViewportVisualState, draw_viewport,
 };
 pub use widgets::{bond_geometry_summary, status_text};

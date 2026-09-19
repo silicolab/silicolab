@@ -94,7 +94,8 @@ These controls apply to the current entry's entire viewport even when only some
 atoms are selected:
 
 - **Background**, **Unit cell**, and **Atom labels**;
-- **Light**, **Silhouettes**, and silhouette width;
+- **Light**, **Silhouettes** (Auto / On / Off), outline width and color;
+- **Adaptive element contrast**;
 - Cartoon cross-section and smoothing;
 - Surface fill or mesh appearance and transparency.
 
@@ -102,6 +103,18 @@ The Surface switch selects which atoms participate in that overlay; the Surface
 appearance controls change how the current entry's surface is drawn. Recheck
 viewport state after switching entries because each entry can retain its own
 view settings.
+
+Silhouettes default to **Auto**: outlines appear on light backgrounds and fade
+out for very small atoms and bonds. Outline colors follow the background unless
+you choose a custom color. Adaptive element contrast improves pale atom and bond
+visibility without changing the element color table; turn it off to disable the
+adjustment. These settings also apply to PNG exports.
+
+```text
+view silhouette auto --width 2 --color #222222
+view silhouette on --color auto
+view contrast off
+```
 
 ## Do not infer chemistry from display styling
 

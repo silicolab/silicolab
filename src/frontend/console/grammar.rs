@@ -23,11 +23,13 @@ use clap::{Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use eframe::egui::Color32;
 
 use super::{
-    ScriptContext, parse_atom_style, parse_chain, parse_color_value, parse_light_preset,
-    parse_onoff, parse_surface_style,
+    ScriptContext,
+    args::{parse_outline_color, parse_silhouette_mode},
+    parse_atom_style, parse_chain, parse_color_value, parse_light_preset, parse_onoff,
+    parse_surface_style,
 };
 use crate::frontend::{
-    LightPreset, SurfaceStyle,
+    LightPreset, SilhouetteMode, SurfaceStyle,
     state::{AppState, AtomStyle},
 };
 
@@ -319,10 +321,17 @@ pub(crate) enum ViewKind {
     /// Silhouette outlines.
     #[command(visible_alias = "silhouettes")]
     Silhouette {
-        #[arg(value_parser = parse_onoff, action = clap::ArgAction::Set)]
-        on: bool,
+        #[arg(value_parser = parse_silhouette_mode)]
+        mode: SilhouetteMode,
         #[arg(long)]
         width: Option<f32>,
+        #[arg(long, value_parser = parse_outline_color)]
+        color: Option<super::args::OutlineColor>,
+    },
+    /// Adaptive element contrast against the background.
+    Contrast {
+        #[arg(value_parser = parse_onoff, action = clap::ArgAction::Set)]
+        on: bool,
     },
 }
 

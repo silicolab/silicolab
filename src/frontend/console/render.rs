@@ -50,10 +50,22 @@ pub(crate) fn view_command(state: &mut AppState, args: ViewArgs) -> Result<Strin
             });
             Ok(format!("set light {}", preset.label().to_ascii_lowercase()))
         }
-        ViewKind::Silhouette { on, width } => {
+        ViewKind::Contrast { on } => {
+            update_viewport(state, global, |viewport| {
+                viewport.lighting.adaptive_contrast = on
+            });
+            Ok("updated adaptive element contrast".to_string())
+        }
+        ViewKind::Silhouette { mode, width, color } => {
+            if width.is_some_and(|width| !width.is_finite()) {
+                anyhow::bail!("silhouette width must be finite");
+            }
             let width = width.map(|width| width.clamp(0.0, 6.0));
             update_viewport(state, global, |viewport| {
-                viewport.lighting.silhouettes = on;
+                viewport.lighting.silhouette = mode;
+                if let Some(color) = color {
+                    viewport.lighting.silhouette_color = color.0;
+                }
                 if let Some(width) = width {
                     viewport.lighting.silhouette_width = width;
                 }
@@ -265,17 +277,29 @@ fn view_state_to_script(viewport: &ViewportVisualState) -> String {
             viewport.lighting.preset.label().to_ascii_lowercase()
         ));
     }
-    if viewport.lighting.silhouettes != default.lighting.silhouettes
+    if viewport.lighting.silhouette != default.lighting.silhouette
+        || viewport.lighting.silhouette_color != default.lighting.silhouette_color
         || viewport.lighting.silhouette_width != default.lighting.silhouette_width
     {
         lines.push(format!(
-            "view silhouette {} --width {}",
-            if viewport.lighting.silhouettes {
+            "view silhouette {} --width {} --color {}",
+            viewport.lighting.silhouette.token(),
+            trim_float(viewport.lighting.silhouette_width),
+            viewport
+                .lighting
+                .silhouette_color
+                .map(color_to_hex)
+                .unwrap_or_else(|| "auto".to_string())
+        ));
+    }
+    if viewport.lighting.adaptive_contrast != default.lighting.adaptive_contrast {
+        lines.push(format!(
+            "view contrast {}",
+            if viewport.lighting.adaptive_contrast {
                 "on"
             } else {
                 "off"
-            },
-            trim_float(viewport.lighting.silhouette_width)
+            }
         ));
     }
 
