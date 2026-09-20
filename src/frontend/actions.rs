@@ -30,6 +30,10 @@ pub enum AppAction {
     /// Write the export the open dialog describes, then close it.
     RunExport,
     CancelExport,
+    OpenImageExportDialog,
+    ChooseImageExportPath,
+    RunImageExport,
+    CancelImageExport,
     Undo,
     Redo,
     EditStructure,

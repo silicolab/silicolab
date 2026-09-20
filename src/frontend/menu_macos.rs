@@ -157,6 +157,7 @@ impl MacMenu {
         // --- File ---
         let recent_submenu = Submenu::new("Recent Projects", false);
         let close_project = MenuItem::with_id("file.close_project", "Close Project", true, None);
+        let export_image = MenuItem::with_id("file.export_image", "Export Image…", true, None);
         let export = MenuItem::with_id(
             "file.export",
             "Export…",
@@ -205,6 +206,7 @@ impl MacMenu {
                 ),
                 &PredefinedMenuItem::separator(),
                 &export,
+                &export_image,
             ])
             .expect("build file menu");
 
@@ -388,6 +390,7 @@ impl MacMenu {
             "file.find_online_structure" => {
                 MenuCommand::Action(AppAction::OpenOnlineStructureSearch)
             }
+            "file.export_image" => MenuCommand::Action(AppAction::OpenImageExportDialog),
             "file.export" => MenuCommand::Action(AppAction::OpenExportDialog { entry_id: None }),
             "edit.undo" => MenuCommand::Action(AppAction::Undo),
             "edit.redo" => MenuCommand::Action(AppAction::Redo),

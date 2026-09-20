@@ -116,6 +116,26 @@ cell, charges, and the metadata the next workflow requires.
 > checked in SilicoLab, choose **One file per structure** and open the files
 > separately.
 
+## Export a PNG image
+
+Choose **File > Export Image…** to open the separate **Export Image** window.
+Enter a `.png` output path or use **Browse…**, then set positive integer width
+and height in pixels. Initial dimensions come from the scripted viewport size;
+editing or canceling this dialog does not change that size or the viewport.
+
+Choose **Viewport** to use the captured viewport background (a theme-following
+background resolves when the queued image is rendered), **White**, **Transparent**,
+or **Custom** for an opaque RGB color. Transparent backgrounds are intended for
+white-page layouts.
+
+**Export** captures the current active structure, camera, selection, and style,
+including an empty viewport. Later view changes do not alter the queued image.
+Existing target files require confirmation at Export, including paths chosen
+with Browse; the native chooser may also ask before selecting an existing file.
+Canceling either chooser or overwrite confirmation preserves the draft.
+GPU size limits and write failures appear in the usual status notification;
+success reports the saved image path. Structure files still use **File > Export...**.
+
 ## Related pages
 
 - [Orient and style structures](../view-and-style/)

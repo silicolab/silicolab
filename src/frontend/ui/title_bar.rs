@@ -161,6 +161,10 @@ pub(crate) fn render_title_bar(
                         actions.push(AppAction::OpenExportDialog { entry_id: None });
                         ui.close();
                     }
+                    if ui.button("Export Image…").clicked() {
+                        actions.push(AppAction::OpenImageExportDialog);
+                        ui.close();
+                    }
                     ui.separator();
                     if ui
                         .button(crate::frontend::shortcuts::menu_text(
