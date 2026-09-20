@@ -97,6 +97,7 @@ pub(crate) fn start_remote_engine(
     );
     state.jobs.remote_submit = Some(handle);
     mark_task_status(state, task_run_id, TaskStatus::Running);
+    dismiss_submitted_compute_prompt(state);
     state.status_neutral(format!(
         "Deploying & submitting {engine_name} to {} (use Refresh Remote to track it)…",
         host.label
@@ -520,6 +521,13 @@ fn apply_remote_qm_outcome(
     let belongs_here = outcome_belongs_to_current_workspace(state, row);
     let already = outcome_already_materialized(state, &row.job_id);
     let task_id = state.tasks.runs.task_run_id_for_job(&row.job_id);
+    if belongs_here && !task_id.is_some_and(|id| state.tasks.task_run(id).is_some()) {
+        state.report_unscoped_remote_error(format!(
+            "Cannot import remote result {}: missing task identity",
+            row.job_id
+        ));
+        return;
+    }
 
     if belongs_here && !already {
         match outcome.optimized_structure {
@@ -608,7 +616,15 @@ pub(crate) fn import_completed_remote_jobs(state: &mut AppState, rows: Vec<regis
         match read_local_outcome(&row.local_run_dir) {
             Some(outcome) => {
                 apply_remote_outcome(state, &row, outcome);
-                recovered += 1;
+                if outcome_already_materialized(state, &row.job_id) {
+                    recovered += 1;
+                } else {
+                    pending += 1;
+                    state.tasks.runs.set_import_state(
+                        &row.job_id,
+                        crate::backend::run_attempt::ResultImport::PendingRecovery,
+                    );
+                }
             }
             None => {
                 pending += 1;

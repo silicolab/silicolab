@@ -1,7 +1,6 @@
 use super::super::*;
 use crate::engines::qm::{MemoryVerdict, QmScfBackend, memory_verdict};
 use crate::frontend::actions::{Notification, NotificationButton, NotificationSeverity};
-use crate::frontend::state::SystemSubsystem;
 
 /// Resolve the product structure for a two-endpoint transition-state search from
 /// the prompt's chosen entry, loading it on demand. `None` for any other route or
@@ -111,15 +110,33 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
         };
         local_launches.insert(crate::engines::registry::EngineId::ORCA, resolved.launch);
     }
+    let prepared = (|| -> anyhow::Result<()> {
+        let mut inputs = vec![crate::frontend::entry_ref::primary_input(state)?];
+        if prompt.kind == crate::engines::qm::QmKind::TransitionState
+            && prompt.ts.route == crate::frontend::state::TsRouteKind::TwoEndpoint
+        {
+            let id = prompt
+                .ts
+                .product_entry
+                .ok_or_else(|| anyhow!("missing product input"))?;
+            inputs.push(crate::frontend::entry_ref::input_reference(
+                state, "product", id,
+            )?);
+        }
+        prepare_compute_run(state, TaskPanelKind::QmPrompt, inputs, None)?;
+        Ok(())
+    })();
+    if let Err(error) = prepared {
+        state.status_error(format!("could not prepare QM run: {error}"));
+        return;
+    }
     state.set_source_path(None);
     state.ui.editor = None;
-    state.ui.pending_qm = None;
     match remote_host {
         // A configured remote target: deploy + submit detached, tracked via the
         // job registry and the opt-in refresh — not the in-process worker.
         Some(host) => start_remote_qm(state, job, host, prompt.prefs.job_resources()),
         None => {
-            reserve_qm_run_dir(state);
             let running = crate::frontend::jobs::spawn_qm_job_with_launches(
                 job,
                 Some(qm_thread_count(state, &prompt.prefs)),
@@ -128,6 +145,9 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
             let running = match running {
                 Ok(running) => running,
                 Err(error) => {
+                    if let Some(id) = state.active_task_run {
+                        mark_task_status(state, id, TaskStatus::Failed);
+                    }
                     state.status_error(format!("could not bind the QM engine launch: {error}"));
                     return;
                 }
@@ -135,32 +155,11 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
             state.jobs.set_qm(running);
             if let Some(task_run_id) = state.active_task_run {
                 begin_local_job(state, crate::frontend::jobs::LocalJobSlot::Qm, task_run_id);
-                state.tasks.mark_status(task_run_id, TaskStatus::Running);
+                mark_task_status(state, task_run_id, TaskStatus::Running);
             }
+            dismiss_submitted_compute_prompt(state);
             state.status_neutral("QM calculation running; press Esc to stop".to_string());
         }
-    }
-}
-
-/// Create the active QM task's run directory up front, which also records the
-/// entry the run was launched from. A single-point energy surfaces its report on
-/// that entry, so the anchor must be taken now: resolving it when the run
-/// finishes would attach the report to whatever entry the user had activated by
-/// then. The remote path gets this for free — it stages into the run directory
-/// before submitting. Failures are logged, not fatal; the calculation still runs.
-fn reserve_qm_run_dir(state: &mut AppState) {
-    let kind = state
-        .active_task_run
-        .and_then(|task_run_id| state.tasks.task_run(task_run_id))
-        .map(|task| task.kind);
-    let Some(kind) = kind.filter(|kind| kind.is_qm()) else {
-        return;
-    };
-    if let Err(error) = ensure_active_task_run_dir(state, kind, None) {
-        state.report_system_error(
-            SystemSubsystem::Storage,
-            format!("failed to create QM run directory: {error}"),
-        );
     }
 }
 

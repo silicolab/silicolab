@@ -46,11 +46,11 @@ fn heavy_launch_is_refused_while_one_is_running() {
 
     // No second job spawned â€” serialized to one.
     assert_eq!(state.jobs.agent_jobs.len(), 1);
-    // The model is told to wait, not handed an error.
+    // A refused launch is a failed tool call.
     let told_to_wait = state.ui.agent.transcript.iter().any(|entry| {
         matches!(
             entry,
-            TranscriptEntry::Tool { result: Some(text), is_error: false, .. }
+            TranscriptEntry::Tool { result: Some(text), is_error: true, .. }
             if text.contains("already running")
         )
     });

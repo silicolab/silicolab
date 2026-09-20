@@ -7,27 +7,23 @@ use crate::frontend::jobs::{
 use crate::frontend::state::{LogLevel, SystemSubsystem};
 use crate::job::CancelSignal;
 
-/// Persist a locally-run QM calculation's artifacts into the active task's run
-/// directory, creating it on demand. A no-op when there is no active QM task run
-/// to anchor them to.
-pub(crate) fn save_qm_run_artifacts(state: &mut AppState, outcome: &crate::engines::qm::QmOutcome) {
-    let Some(task_run_id) = state.active_task_run else {
-        return;
-    };
-    let Some(kind) = state.tasks.task_run(task_run_id).map(|task| task.kind) else {
-        return;
-    };
-    if !kind.is_qm() {
-        return;
-    }
-    match ensure_active_task_run_dir(state, kind, None) {
-        Ok(run_dir) => save_qm_artifacts(state, &run_dir, outcome),
-        Err(error) => state.report_system_error(
+pub(crate) fn save_qm_run_artifacts(
+    state: &mut AppState,
+    task_id: Option<u64>,
+    outcome: &crate::engines::qm::QmOutcome,
+) {
+    let run = task_id
+        .and_then(|id| state.tasks.task_run(id))
+        .and_then(|task| task.run_dir.clone().map(|dir| (task.id, dir)));
+    let Some((task_id, run_dir)) = run else {
+        state.report_system_error(
             SystemSubsystem::Storage,
-            format!("failed to create QM run directory: {error}"),
-        ),
-    }
-    state.ui.task_chart_thumbnails.remove(&task_run_id);
+            "missing QM run identity or directory".to_string(),
+        );
+        return;
+    };
+    save_qm_artifacts(state, &run_dir, outcome);
+    state.ui.task_chart_thumbnails.remove(&task_id);
 }
 
 pub(crate) fn poll_engine_job(state: &mut AppState, ctx: &egui::Context) {
@@ -92,7 +88,16 @@ impl JobRuntime for RunningEngineJob {
 
 /// Apply a finished engine run: add the result structure as a new entry, mark it
 /// an MD-run output when it produced a trajectory, and record it in the ledger.
-fn apply_engine_outcome(state: &mut AppState, cx: &JobContext, success: EngineSuccess) {
+pub(crate) fn apply_engine_outcome(state: &mut AppState, cx: &JobContext, success: EngineSuccess) {
+    if cx
+        .job_id
+        .is_some_and(|id| outcome_already_materialized(state, &id.to_string()))
+    {
+        return;
+    }
+    if !super::compute_identity_valid(state, cx) {
+        return;
+    }
     // The badge tracks the job kind, not the trajectory, so a relax-only run (which
     // writes no `.xtc`) is still marked; build jobs are not.
     let is_md_run = success.job_kind == "run-md";
@@ -285,7 +290,14 @@ impl JobRuntime for RunningQmJob {
 /// Apply a finished local QM outcome: save the report, surface an optimized
 /// geometry as a new entry (or record a report for an entry-less run), and record
 /// the outcome in the ledger so a re-poll never re-imports it.
-fn apply_qm_outcome(state: &mut AppState, cx: &JobContext, outcome: crate::engines::qm::QmOutcome) {
+pub(crate) fn apply_qm_outcome(
+    state: &mut AppState,
+    cx: &JobContext,
+    outcome: crate::engines::qm::QmOutcome,
+) {
+    if !super::compute_identity_valid(state, cx) {
+        return;
+    }
     if let Some(job_id) = cx.job_id {
         for line in outcome.summary.lines() {
             state.append_job_log(job_id, LogLevel::Info, line);
@@ -293,7 +305,7 @@ fn apply_qm_outcome(state: &mut AppState, cx: &JobContext, outcome: crate::engin
     }
     // Persist the raw report to the task's run directory before any new entry is
     // added, so the run's source entry is the input structure, not the result.
-    save_qm_run_artifacts(state, &outcome);
+    save_qm_run_artifacts(state, cx.task_run_id, &outcome);
     // A QM run's optimized geometry is surfaced as a new entry (the original is
     // preserved). A single-point energy or frequency run produces no entry but
     // still records a report in the ledger, so its outcome is durably applied.

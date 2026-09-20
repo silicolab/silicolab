@@ -125,46 +125,49 @@ fn gated_command_pauses_for_approval() {
 }
 
 #[test]
-fn batch_gates_only_consequential_calls_and_resolves_in_any_order() {
+fn failed_read_only_call_stops_remaining_batch() {
     let mut state = AppState::scratch(Default::default(), Vec::new());
     let ctx = egui::Context::default();
-    // Default mode is AutoSafe: the read-only call auto-runs (an unknown command
-    // here, so it errors gracefully without touching the empty workspace); the
-    // compute and destructive calls wait â€” together, as one batch. They are
-    // resolved by reject so nothing executes against the entry-less scratch state.
     handle_turn_result(
         &mut state,
         Ok(turn_with_tools(&[
-            "inspect-noop",            // read-only â†’ auto-runs, errors gracefully
-            "score --receptor active", // compute â†’ gated in AutoSafe
-            "delete chain A",          // destructive â†’ always gated
+            "inspect-noop",
+            "qm energy",
+            "delete chain A",
         ])),
         &ctx,
     );
-    assert_eq!(state.ui.agent.phase, AgentPhase::AwaitingApproval);
-    let ids: Vec<String> = gated_pending(&state)
-        .iter()
-        .map(|call| call.id.clone())
-        .collect();
-    assert_eq!(
-        ids,
-        vec!["call_2", "call_3"],
-        "only the two gated calls wait"
+    assert!(state.ui.agent.pending_calls.is_empty());
+    let results = last_tool_results(&state);
+    assert_eq!(results.len(), 3);
+    assert!(results["call_2"].contains("Not executed"));
+    assert!(results["call_3"].contains("Not executed"));
+    assert!(state.jobs.agent_jobs.is_empty());
+}
+
+#[test]
+fn approval_is_head_only_and_middle_rejection_stops_every_pending_call() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let ctx = egui::Context::default();
+    handle_turn_result(
+        &mut state,
+        Ok(turn_with_tools(&[
+            "delete chain A",
+            "delete chain B",
+            "status",
+        ])),
+        &ctx,
     );
-
-    // Resolve out of order: rejecting the destructive one leaves the batch paused
-    // on the still-undecided compute call.
-    reject_tool_call(&mut state, "call_3", &ctx);
-    assert_eq!(state.ui.agent.phase, AgentPhase::AwaitingApproval);
-    let remaining: Vec<String> = gated_pending(&state)
-        .iter()
-        .map(|call| call.id.clone())
-        .collect();
-    assert_eq!(remaining, vec!["call_2"]);
-
-    // Resolving the last one drains the batch.
+    assert_eq!(gated_pending(&state).len(), 1);
+    approve_tool_call(&mut state, "call_2", &ctx);
+    assert!(state.ui.agent.approved_ids.is_empty());
+    assert_eq!(state.ui.agent.pending_calls.len(), 3);
     reject_tool_call(&mut state, "call_2", &ctx);
-    assert!(state.ui.agent.pending_approval().is_none());
+    let results = last_tool_results(&state);
+    assert_eq!(results.len(), 3);
+    assert!(results["call_2"].contains("declined"));
+    assert!(results["call_1"].contains("Not executed"));
+    assert!(results["call_3"].contains("Not executed"));
     assert!(state.ui.agent.pending_calls.is_empty());
 }
 
@@ -583,3 +586,5 @@ fn crystal_rules_require_selection_and_post_import_confirmation() {
 }
 
 mod jobs;
+
+mod provenance;

@@ -9,10 +9,6 @@ use crate::frontend::console::RiskLevel;
 use crate::frontend::state::AppState;
 use crate::io::llm::types::{ChatMessage, ContentBlock, Role, ToolCall};
 
-/// Run queued tool calls in order until the batch empties or one hits the
-/// approval gate. A failing call still yields an `is_error` result; the batch is
-/// not aborted (the model recovers from the error). `Plan` mode diverts to
-/// [`propose_in_plan_mode`].
 pub fn run_tool_batch(state: &mut AppState, ctx: &egui::Context) {
     if state.config.assistant.approval_mode == ApprovalMode::Plan {
         propose_in_plan_mode(state, ctx);
@@ -24,13 +20,30 @@ pub fn run_tool_batch(state: &mut AppState, ctx: &egui::Context) {
             return;
         };
         if gate_blocks(state, &call) {
+            match heavy_inputs(state, &call) {
+                Ok(Some(inputs)) => {
+                    state.ui.agent.approval_inputs = Some((call.id.clone(), inputs))
+                }
+                Ok(None) => state.ui.agent.approval_inputs = None,
+                Err(error) => {
+                    push_tool_call_entry(state, &call);
+                    record_result(state, &call, error.to_string(), true);
+                    state.ui.agent.pending_calls.pop_front();
+                    stop_batch(state, &call.id, "failed", ctx);
+                    return;
+                }
+            }
             state.ui.agent.phase = AgentPhase::AwaitingApproval;
             ctx.request_repaint();
             return;
         }
         state.ui.agent.approved_ids.remove(&call.id);
-        dispatch_call(state, &call, ctx);
+        let succeeded = dispatch_call(state, &call, ctx);
         state.ui.agent.pending_calls.pop_front();
+        if !succeeded {
+            stop_batch(state, &call.id, "failed", ctx);
+            return;
+        }
     }
 }
 
@@ -60,8 +73,9 @@ pub fn gated_pending(state: &AppState) -> Vec<ToolCall> {
         .ui
         .agent
         .pending_calls
-        .iter()
+        .front()
         .filter(|call| gate_blocks(state, call))
+        .into_iter()
         .cloned()
         .collect()
 }
@@ -82,8 +96,9 @@ fn propose_in_plan_mode(state: &mut AppState, ctx: &egui::Context) {
                 describe_call(&call)
             );
             record_result(state, &call, summary, false);
-        } else {
-            dispatch_call(state, &call, ctx);
+        } else if !dispatch_call(state, &call, ctx) {
+            stop_batch(state, &call.id, "failed", ctx);
+            return;
         }
     }
     finish_tool_batch(state, ctx);
@@ -92,17 +107,18 @@ fn propose_in_plan_mode(state: &mut AppState, ctx: &egui::Context) {
 /// Execute a call inline, or launch it as a detached background job. Heavy jobs
 /// no longer pause the batch — `spawn_heavy` records a "started" result and the
 /// computation runs off-thread, reporting back later through the queue.
-pub fn dispatch_call(state: &mut AppState, call: &ToolCall, ctx: &egui::Context) {
+pub fn dispatch_call(state: &mut AppState, call: &ToolCall, ctx: &egui::Context) -> bool {
     push_tool_call_entry(state, call);
-    if spawn_agent_online_structure_search(state, call, ctx) {
-        return;
+    if let Some(succeeded) = spawn_agent_online_structure_search(state, call, ctx) {
+        return succeeded;
     }
     if let Some(kind) = heavy_kind_of(call) {
-        spawn_heavy(state, call, kind, ctx);
-        return;
+        return spawn_heavy(state, call, kind, ctx);
     }
     let outcome = tools::execute_tool(state, call);
+    let succeeded = !outcome.is_error;
     record_result(state, call, outcome.content, outcome.is_error);
+    succeeded
 }
 
 fn push_tool_call_entry(state: &mut AppState, call: &ToolCall) {
@@ -148,6 +164,7 @@ pub fn fill_pending_tool_entry(state: &mut AppState, content: &str, is_error: bo
 /// next model turn.
 fn finish_tool_batch(state: &mut AppState, ctx: &egui::Context) {
     state.ui.agent.approved_ids.clear();
+    state.ui.agent.approval_inputs = None;
     let results = std::mem::take(&mut state.ui.agent.collected_results);
     state.ui.agent.history.push(ChatMessage {
         role: Role::Tool,
@@ -171,9 +188,39 @@ fn pending_call(state: &AppState, id: &str) -> Option<ToolCall> {
 /// when the loop reaches it, so execution stays in queue order; if other gated
 /// calls remain undecided the loop pauses again on the next one.
 pub fn approve_tool_call(state: &mut AppState, id: &str, ctx: &egui::Context) {
-    if state.ui.agent.phase != AgentPhase::AwaitingApproval {
+    if state.ui.agent.phase != AgentPhase::AwaitingApproval
+        || state
+            .ui
+            .agent
+            .pending_calls
+            .front()
+            .is_none_or(|call| call.id != id)
+    {
         return;
     }
+    if let Some((snapshot_id, inputs)) = state.ui.agent.approval_inputs.clone() {
+        let call = state.ui.agent.pending_calls.front().cloned();
+        if snapshot_id != id {
+            return;
+        }
+        if let Some(call) = call {
+            let current = heavy_inputs(state, &call);
+            if !matches!(current, Ok(Some(ref current)) if current == &inputs) {
+                push_tool_call_entry(state, &call);
+                record_result(
+                    state,
+                    &call,
+                    "Calculation inputs changed while awaiting approval; replan before running."
+                        .to_string(),
+                    true,
+                );
+                state.ui.agent.pending_calls.pop_front();
+                stop_batch(state, id, "failed (inputs changed)", ctx);
+                return;
+            }
+        }
+    }
+    state.ui.agent.approval_inputs = None;
     state.ui.agent.approved_ids.insert(id.to_string());
     state.ui.agent.phase = AgentPhase::ExecutingTools;
     run_tool_batch(state, ctx);
@@ -182,6 +229,16 @@ pub fn approve_tool_call(state: &mut AppState, id: &str, ctx: &egui::Context) {
 /// Approve `id` and auto-allow its command verb for the rest of the conversation,
 /// so repeats of the same command stop prompting.
 pub fn always_allow_command(state: &mut AppState, id: &str, ctx: &egui::Context) {
+    if state.ui.agent.phase != AgentPhase::AwaitingApproval
+        || state
+            .ui
+            .agent
+            .pending_calls
+            .front()
+            .is_none_or(|call| call.id != id)
+    {
+        return;
+    }
     if let Some(call) = pending_call(state, id) {
         state
             .ui
@@ -195,6 +252,16 @@ pub fn always_allow_command(state: &mut AppState, id: &str, ctx: &egui::Context)
 /// Approve `id` and auto-allow every command of its risk level (never
 /// `Destructive`) for the rest of the conversation.
 pub fn always_allow_risk(state: &mut AppState, id: &str, ctx: &egui::Context) {
+    if state.ui.agent.phase != AgentPhase::AwaitingApproval
+        || state
+            .ui
+            .agent
+            .pending_calls
+            .front()
+            .is_none_or(|call| call.id != id)
+    {
+        return;
+    }
     if let Some(call) = pending_call(state, id) {
         let risk = tools::risk_of_call(&call);
         if risk != RiskLevel::Destructive {
@@ -205,7 +272,7 @@ pub fn always_allow_risk(state: &mut AppState, id: &str, ctx: &egui::Context) {
 }
 
 /// Reject the gated call `id`: drop it from the queue and record an `is_error`
-/// result so the model learns it was declined, then resume the batch.
+/// result, then stop every remaining call and request a new model turn.
 pub fn reject_tool_call(state: &mut AppState, id: &str, ctx: &egui::Context) {
     if state.ui.agent.phase != AgentPhase::AwaitingApproval {
         return;
@@ -219,12 +286,9 @@ pub fn reject_tool_call(state: &mut AppState, id: &str, ctx: &egui::Context) {
     else {
         return;
     };
-    let call = state
-        .ui
-        .agent
-        .pending_calls
-        .remove(position)
-        .expect("position just found");
+    let Some(call) = state.ui.agent.pending_calls.remove(position) else {
+        return;
+    };
     state.ui.agent.approved_ids.remove(id);
     push_tool_call_entry(state, &call);
     record_result(
@@ -233,6 +297,18 @@ pub fn reject_tool_call(state: &mut AppState, id: &str, ctx: &egui::Context) {
         "The user declined to run this command.".to_string(),
         true,
     );
-    state.ui.agent.phase = AgentPhase::ExecutingTools;
-    run_tool_batch(state, ctx);
+    stop_batch(state, id, "was rejected", ctx);
+}
+
+fn stop_batch(state: &mut AppState, cause: &str, reason: &str, ctx: &egui::Context) {
+    while let Some(call) = state.ui.agent.pending_calls.pop_front() {
+        push_tool_call_entry(state, &call);
+        record_result(
+            state,
+            &call,
+            format!("Not executed: this batch stopped because call {cause} {reason}."),
+            true,
+        );
+    }
+    finish_tool_batch(state, ctx);
 }

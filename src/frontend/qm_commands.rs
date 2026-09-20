@@ -614,3 +614,22 @@ fn build_solvation(flags: &QmFlags) -> Result<Option<QmSolvation>> {
 
 #[cfg(test)]
 mod tests;
+
+pub(crate) fn agent_qm_inputs(
+    state: &AppState,
+    args: &[String],
+) -> Result<Vec<crate::backend::tasks::TaskInput>> {
+    let mut inputs = vec![crate::frontend::entry_ref::primary_input(state)?];
+    let flags = QmFlags::parse(&args[1..])?;
+    if matches!(
+        args.first().map(String::as_str),
+        Some("ts" | "saddle" | "transition-state")
+    ) && let Some(reference) = flags.str("product")
+    {
+        let id = crate::frontend::entry_ref::resolve_entry_id(state, reference)?;
+        inputs.push(crate::frontend::entry_ref::input_reference(
+            state, "product", id,
+        )?);
+    }
+    Ok(inputs)
+}

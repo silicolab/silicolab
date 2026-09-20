@@ -3,6 +3,8 @@ use crate::frontend::state::{LogLevel, SystemSubsystem};
 
 mod compute;
 mod poll;
+#[cfg(test)]
+mod provenance_tests;
 mod runtime;
 #[cfg(test)]
 mod tests;

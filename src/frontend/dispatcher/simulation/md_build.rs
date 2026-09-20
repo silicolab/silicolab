@@ -55,11 +55,14 @@ pub(crate) fn start_material_md_build(
         state.status_neutral("another external engine job is already running");
         return false;
     }
-    let run_dir = match ensure_active_task_run_dir(
-        state,
-        TaskKind::BuildMdSystem,
-        Some(prompt.run_name.as_str()),
-    ) {
+    let run_dir = match crate::frontend::entry_ref::primary_input(state).and_then(|input| {
+        prepare_compute_run(
+            state,
+            TaskPanelKind::MdSystemPrompt,
+            vec![input],
+            Some(prompt.run_name.as_str()),
+        )
+    }) {
         Ok(path) => path,
         Err(error) => {
             state.report_system_error(
@@ -151,11 +154,14 @@ pub(crate) fn start_gromacs_md_build(
         state.status_neutral("another external engine job is already running");
         return false;
     }
-    let run_dir = match ensure_active_task_run_dir(
-        state,
-        TaskKind::BuildMdSystem,
-        Some(prompt.run_name.as_str()),
-    ) {
+    let run_dir = match crate::frontend::entry_ref::primary_input(state).and_then(|input| {
+        prepare_compute_run(
+            state,
+            TaskPanelKind::MdSystemPrompt,
+            vec![input],
+            Some(prompt.run_name.as_str()),
+        )
+    }) {
         Ok(path) => path,
         Err(error) => {
             state.report_system_error(
@@ -272,11 +278,14 @@ pub(crate) fn build_md_system_builtin(
         None => None,
     };
 
-    let run_dir = match ensure_active_task_run_dir(
-        state,
-        TaskKind::BuildMdSystem,
-        Some(prompt.run_name.as_str()),
-    ) {
+    let run_dir = match crate::frontend::entry_ref::primary_input(state).and_then(|input| {
+        prepare_compute_run(
+            state,
+            TaskPanelKind::MdSystemPrompt,
+            vec![input],
+            Some(prompt.run_name.as_str()),
+        )
+    }) {
         Ok(path) => path,
         Err(error) => {
             state.report_system_error(

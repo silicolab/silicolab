@@ -80,3 +80,27 @@ pub(crate) fn parse_anchor(spec: &str) -> Result<ResidueId> {
         .map_err(|_| anyhow!("--at residue number is invalid in `{spec}`"))?;
     Ok(ResidueId::new(chain_id, sequence_number, insertion_code))
 }
+
+pub(crate) fn input_reference(
+    state: &AppState,
+    role: &str,
+    entry_id: u64,
+) -> Result<crate::backend::tasks::TaskInput> {
+    let entry = state
+        .entries
+        .entry(entry_id)
+        .ok_or_else(|| anyhow!("input entry #{entry_id} no longer exists"))?;
+    Ok(crate::backend::tasks::TaskInput {
+        role: role.to_string(),
+        entry_id,
+        revision: entry.revision,
+    })
+}
+
+pub(crate) fn primary_input(state: &AppState) -> Result<crate::backend::tasks::TaskInput> {
+    let id = state
+        .entries
+        .active_entry_id()
+        .ok_or_else(|| anyhow!("no active input entry"))?;
+    input_reference(state, "primary", id)
+}

@@ -63,6 +63,13 @@ pub(crate) fn apply_remote_gromacs_outcome(
     let belongs_here = outcome_belongs_to_current_workspace(state, row);
     let already = outcome_already_materialized(state, &row.job_id);
     let task_id = state.tasks.runs.task_run_id_for_job(&row.job_id);
+    if belongs_here && !task_id.is_some_and(|id| state.tasks.task_run(id).is_some()) {
+        state.report_unscoped_remote_error(format!(
+            "Cannot import remote result {}: missing task identity",
+            row.job_id
+        ));
+        return;
+    }
 
     if belongs_here && !already {
         let run_dir = PathBuf::from(&row.local_run_dir);

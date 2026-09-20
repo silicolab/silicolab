@@ -182,7 +182,9 @@ fn save_qm_run_artifacts_writes_report_and_series_into_the_run_dir() {
         opt_trace: Vec::new(),
         frequencies: Vec::new(),
     };
-    save_qm_run_artifacts(&mut state, &outcome);
+    ensure_task_run_dir(&mut state, task_id, TaskKind::RunQmEnergy, None).unwrap();
+    state.active_task_run = None;
+    save_qm_run_artifacts(&mut state, Some(task_id), &outcome);
 
     let run_dir = state
         .tasks
@@ -205,7 +207,8 @@ fn save_qm_run_artifacts_writes_report_and_series_into_the_run_dir() {
         frequencies: Vec::new(),
         ..outcome
     };
-    save_qm_run_artifacts(&mut state, &empty);
+    ensure_task_run_dir(&mut state, empty_task, TaskKind::RunQmEnergy, None).unwrap();
+    save_qm_run_artifacts(&mut state, Some(empty_task), &empty);
     let empty_dir = state
         .tasks
         .task_run(empty_task)

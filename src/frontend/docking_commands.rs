@@ -162,6 +162,21 @@ pub(crate) fn add_pose_entries(state: &mut AppState, outcome: &DockingOutcome) {
     }
 }
 
+pub(crate) fn agent_dock_inputs(
+    state: &AppState,
+    args: &[String],
+) -> Result<Vec<crate::backend::tasks::TaskInput>> {
+    let args = crate::frontend::console::parse_dock_args(args)?;
+    [("receptor", args.receptor), ("ligand", args.ligand)]
+        .into_iter()
+        .map(|(role, reference)| {
+            let reference = reference.ok_or_else(|| anyhow!("dock requires --{role} <entry>"))?;
+            let id = resolve_entry_id(state, &reference)?;
+            crate::frontend::entry_ref::input_reference(state, role, id)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use nalgebra::Point3;

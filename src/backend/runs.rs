@@ -25,6 +25,7 @@ pub struct RunManifest<'a> {
     pub finished_at_ms: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_entry_id: Option<u64>,
+    pub inputs: Option<&'a [crate::backend::tasks::TaskInput]>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_entry_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -44,6 +45,7 @@ impl<'a> RunManifest<'a> {
             created_at_ms: task.created_at_ms,
             finished_at_ms: task.finished_at_ms,
             source_entry_id: task.source_entry_id,
+            inputs: task.inputs.as_deref(),
             result_entry_id: task.result_entry_id,
             engine: task.engine_label.as_deref(),
         }

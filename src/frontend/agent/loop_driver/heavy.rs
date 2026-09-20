@@ -2,16 +2,14 @@ use super::*;
 
 use eframe::egui;
 
-use crate::backend::entries::EntryOrigin;
 use crate::backend::tasks::{TaskStatus, task_controller_by_id};
 use crate::frontend::agent::session::{AssistantConversationId, PendingTurn, TranscriptEntry};
 use crate::frontend::jobs::{
     AgentHeavyJob, DockingWorkerMessage, EngineWorkerMessage, QmWorkerMessage, RunningDockingJob,
     RunningEngineJob, RunningQmJob, TrackedAgentJob, spawn_docking_job, spawn_gromacs_pipeline_job,
 };
-use crate::frontend::state::{AppState, LogLevel, SystemSubsystem};
+use crate::frontend::state::{AppState, LogLevel};
 use crate::io::llm::types::ToolCall;
-use crate::io::structure_io::default_structure_save_path;
 use crate::job::JobId;
 
 /// Most heavy jobs the agent may have running at once. Serialized to one by
@@ -63,19 +61,17 @@ pub fn spawn_agent_online_structure_search(
     state: &mut AppState,
     call: &ToolCall,
     ctx: &egui::Context,
-) -> bool {
+) -> Option<bool> {
     if call.name != "run_command" {
-        return false;
+        return None;
     }
-    let Some(command) = call.input.get("command").and_then(|value| value.as_str()) else {
-        return false;
-    };
+    let command = call.input.get("command").and_then(|value| value.as_str())?;
     let parsed = match crate::frontend::console::parse_find_query(command) {
         Ok(Some(query)) => query,
-        Ok(None) => return false,
+        Ok(None) => return None,
         Err(error) => {
             record_result(state, call, error.to_string(), true);
-            return true;
+            return Some(false);
         }
     };
     let id = state.jobs.next_agent_job_id;
@@ -97,7 +93,7 @@ pub fn spawn_agent_online_structure_search(
         false,
     );
     ctx.request_repaint_after(AGENT_POLL);
-    true
+    Some(true)
 }
 
 /// A short cost/impact hint for an approval card, or `None` when the call has no
@@ -145,11 +141,7 @@ fn register_agent_task_run(state: &mut AppState, kind: HeavyKind, command: &str)
     let controller = task_controller_by_id(agent_task_controller_id(kind, command))
         .copied()
         .expect("agent heavy controller ids are defined in TASK_CONTROLLERS");
-    let task_run_id = state.tasks.create_task_run(controller);
-    let source = state.entries.active_entry_id();
-    state.tasks.set_source_entry_id(task_run_id, source);
-    crate::frontend::dispatcher::mark_task_status(state, task_run_id, TaskStatus::Running);
-    task_run_id
+    state.tasks.create_task_run(controller)
 }
 
 /// Launch a heavy command as a detached background job and record an immediate
@@ -157,7 +149,12 @@ fn register_agent_task_run(state: &mut AppState, kind: HeavyKind, command: &str)
 /// blocking. Heavy jobs are serialized ([`MAX_AGENT_HEAVY`]): while one runs, a
 /// second launch is refused with a "wait" result. A build error records an
 /// `is_error` result. This never pauses the turn.
-pub fn spawn_heavy(state: &mut AppState, call: &ToolCall, kind: HeavyKind, ctx: &egui::Context) {
+pub fn spawn_heavy(
+    state: &mut AppState,
+    call: &ToolCall,
+    kind: HeavyKind,
+    ctx: &egui::Context,
+) -> bool {
     let command = call
         .input
         .get("command")
@@ -176,14 +173,28 @@ pub fn spawn_heavy(state: &mut AppState, call: &ToolCall, kind: HeavyKind, ctx: 
                 "Only one heavy computation can run at a time, and one is already \
                  running. Try `{command}` again once it finishes."
             ),
-            false,
+            true,
         );
-        return;
+        return false;
     }
 
     let words: Vec<String> = command.split_whitespace().map(str::to_string).collect();
     let args = &words[1..]; // drop the `md` / `qm` / `dock` verb
 
+    let mut prepared_task = None;
+    let mut prepare = |state: &mut AppState| -> anyhow::Result<std::path::PathBuf> {
+        let inputs =
+            heavy_inputs(state, call)?.ok_or_else(|| anyhow::anyhow!("missing compute inputs"))?;
+        let task_id = register_agent_task_run(state, kind, &command);
+        prepared_task = Some(task_id);
+        crate::frontend::dispatcher::bind_task_inputs(state, task_id, inputs)?;
+        let task_kind = state
+            .tasks
+            .task_run(task_id)
+            .ok_or_else(|| anyhow::anyhow!("missing task"))?
+            .kind;
+        crate::frontend::dispatcher::ensure_task_run_dir(state, task_id, task_kind, None)
+    };
     let spawned: Result<AgentHeavyJob, String> = match kind {
         HeavyKind::Qm => crate::frontend::qm_commands::build_agent_qm_request(state, args)
             .and_then(|job| {
@@ -198,16 +209,23 @@ pub fn spawn_heavy(state: &mut AppState, call: &ToolCall, kind: HeavyKind, ctx: 
                     .launch;
                     launches.insert(crate::engines::registry::EngineId::ORCA, launch);
                 }
+                prepare(state)?;
                 Ok(AgentHeavyJob::Qm(
                     crate::frontend::jobs::spawn_qm_job_with_launches(job, None, launches)?,
                 ))
             })
             .map_err(|error| error.to_string()),
         HeavyKind::Md => crate::frontend::md_commands::build_agent_md_request(state, args)
-            .map(|request| AgentHeavyJob::Engine(spawn_gromacs_pipeline_job(request)))
+            .and_then(|request| {
+                let request = request.with_working_dir(prepare(state)?);
+                Ok(AgentHeavyJob::Engine(spawn_gromacs_pipeline_job(request)))
+            })
             .map_err(|error| error.to_string()),
         HeavyKind::Dock => crate::frontend::docking_commands::build_agent_dock_request(state, args)
-            .map(|request| AgentHeavyJob::Docking(spawn_docking_job(request)))
+            .and_then(|request| {
+                prepare(state)?;
+                Ok(AgentHeavyJob::Docking(spawn_docking_job(request)))
+            })
             .map_err(|error| error.to_string()),
     };
 
@@ -216,7 +234,11 @@ pub fn spawn_heavy(state: &mut AppState, call: &ToolCall, kind: HeavyKind, ctx: 
             let id = state.jobs.next_agent_job_id;
             state.jobs.next_agent_job_id += 1;
             let conversation = state.ui.agent.active_conversation;
-            let task_run_id = register_agent_task_run(state, kind, &command);
+            let Some(task_run_id) = prepared_task else {
+                record_result(state, call, "missing prepared task".to_string(), true);
+                return false;
+            };
+            crate::frontend::dispatcher::mark_task_status(state, task_run_id, TaskStatus::Running);
             let job_kind = state
                 .tasks
                 .task_run(task_run_id)
@@ -250,14 +272,19 @@ pub fn spawn_heavy(state: &mut AppState, call: &ToolCall, kind: HeavyKind, ctx: 
                 &format!("Started `{command}` as background job #{id}."),
             );
             ctx.request_repaint_after(AGENT_POLL);
+            true
         }
         Err(reason) => {
+            if let Some(id) = prepared_task {
+                crate::frontend::dispatcher::mark_task_status(state, id, TaskStatus::Failed);
+            }
             record_result(
                 state,
                 call,
                 format!("could not start `{command}`: {reason}"),
                 true,
             );
+            false
         }
     }
 }
@@ -434,7 +461,7 @@ fn finish_agent_job(
 fn drain_docking(
     state: &mut AppState,
     running: &mut RunningDockingJob,
-    _job_id: JobId,
+    job_id: JobId,
 ) -> Option<(String, bool)> {
     let mut completion = None;
     while let Ok(message) = running.receiver.try_recv() {
@@ -442,8 +469,13 @@ fn drain_docking(
             DockingWorkerMessage::Progress { stage } => running.latest_stage = Some(stage),
             DockingWorkerMessage::Finished(outcome) => {
                 let outcome = *outcome;
-                crate::frontend::docking_commands::add_pose_entries(state, &outcome);
-                completion = Some((outcome.summary, false));
+                let summary = outcome.summary.clone();
+                let cx = crate::frontend::dispatcher::JobContext {
+                    job_id: Some(job_id),
+                    task_run_id: state.tasks.runs.task_run_id_for_job(&job_id.to_string()),
+                };
+                crate::frontend::dispatcher::apply_docking_outcome(state, &cx, outcome);
+                completion = Some((summary, false));
             }
             DockingWorkerMessage::Failed(error) => {
                 completion = Some((format!("docking failed: {error}"), true));
@@ -451,30 +483,6 @@ fn drain_docking(
         }
     }
     completion
-}
-
-/// Write an agent-driven QM run's report and series into its run directory,
-/// creating the directory on demand. The agent registers its task run without an
-/// active-task binding, so the run dir is resolved by id rather than through
-/// `ensure_active_task_run_dir`.
-fn save_agent_qm_artifacts(
-    state: &mut AppState,
-    task_run_id: u64,
-    outcome: &crate::engines::qm::QmOutcome,
-) {
-    let Some(kind) = state.tasks.task_run(task_run_id).map(|task| task.kind) else {
-        return;
-    };
-    if !kind.is_qm() {
-        return;
-    }
-    match crate::frontend::dispatcher::ensure_task_run_dir(state, task_run_id, kind, None) {
-        Ok(run_dir) => crate::frontend::dispatcher::save_qm_artifacts(state, &run_dir, outcome),
-        Err(error) => state.report_system_error(
-            SystemSubsystem::Storage,
-            format!("failed to create QM run directory: {error}"),
-        ),
-    }
 }
 
 fn drain_qm(
@@ -494,27 +502,13 @@ fn drain_qm(
                     completion = Some(("QM calculation cancelled".to_string(), true));
                     continue;
                 }
-                let outcome = *outcome;
-                // Persist the report and series into the run directory before any
-                // new entry is added, so the run anchors to the input structure —
-                // the same ordering, and the same writer, as the local and remote
-                // QM paths. Without this an agent-driven run had no artifacts at
-                // all, and so no report or chart on either surface.
-                save_agent_qm_artifacts(state, task_run_id, &outcome);
-                if let Some(optimized) = outcome.optimized_structure {
-                    let save_path = default_structure_save_path(&optimized, None);
-                    let entry_id = state.entries.add_entry(optimized, None, save_path);
-                    state.show_entry(entry_id);
-                    state.entries.set_entry_origin(entry_id, EntryOrigin::QmRun);
-                    crate::frontend::dispatcher::record_task_result_entry(
-                        state,
-                        task_run_id,
-                        entry_id,
-                    );
-                }
-                state.ui.chart_availability.clear();
-                state.ui.task_chart_thumbnails.remove(&task_run_id);
-                completion = Some((outcome.summary, false));
+                let summary = outcome.summary.clone();
+                let cx = crate::frontend::dispatcher::JobContext {
+                    job_id: Some(_job_id),
+                    task_run_id: Some(task_run_id),
+                };
+                crate::frontend::dispatcher::apply_qm_outcome(state, &cx, *outcome);
+                completion = Some((summary, false));
             }
             QmWorkerMessage::Failed(error) => {
                 completion = if running.cancel_requested {
@@ -542,20 +536,12 @@ fn drain_engine(
             }
             EngineWorkerMessage::Log(line) => state.append_job_log(job_id, LogLevel::Info, line),
             EngineWorkerMessage::Finished(success) => {
-                let success = *success;
                 let summary = success.summary.clone();
-                let trajectory = success.trajectory.clone();
-                let save_path = default_structure_save_path(&success.structure, None);
-                let entry_id = state.entries.add_entry(success.structure, None, save_path);
-                state.show_entry(entry_id);
-                let project_root = state
-                    .workspace
-                    .project()
-                    .map(|project| project.root.clone());
-                let origin =
-                    crate::frontend::dispatcher::md_run_origin(trajectory, project_root.as_deref());
-                state.entries.set_entry_origin(entry_id, origin);
-                crate::frontend::dispatcher::record_task_result_entry(state, task_run_id, entry_id);
+                let cx = crate::frontend::dispatcher::JobContext {
+                    job_id: Some(job_id),
+                    task_run_id: Some(task_run_id),
+                };
+                crate::frontend::dispatcher::apply_engine_outcome(state, &cx, *success);
                 completion = Some((summary, false));
             }
             EngineWorkerMessage::Failed(error) => {
@@ -564,6 +550,31 @@ fn drain_engine(
         }
     }
     completion
+}
+
+pub(crate) fn heavy_inputs(
+    state: &AppState,
+    call: &ToolCall,
+) -> anyhow::Result<Option<Vec<crate::backend::tasks::TaskInput>>> {
+    let Some(kind) = heavy_kind_of(call) else {
+        return Ok(None);
+    };
+    let command = call
+        .input
+        .get("command")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| anyhow::anyhow!("missing command"))?;
+    let words: Vec<String> = command
+        .split_whitespace()
+        .skip(1)
+        .map(str::to_string)
+        .collect();
+    let inputs = match kind {
+        HeavyKind::Qm => crate::frontend::qm_commands::agent_qm_inputs(state, &words)?,
+        HeavyKind::Md => vec![crate::frontend::entry_ref::primary_input(state)?],
+        HeavyKind::Dock => crate::frontend::docking_commands::agent_dock_inputs(state, &words)?,
+    };
+    Ok(Some(inputs))
 }
 
 #[cfg(test)]
@@ -598,12 +609,12 @@ mod tests {
     }
 
     #[test]
-    fn register_creates_a_running_task_run() {
+    fn register_creates_a_ready_task_run() {
         let mut state = AppState::scratch(Default::default(), Vec::new());
         let id = register_agent_task_run(&mut state, HeavyKind::Qm, "qm optimize");
         let task = state.tasks.task_run(id).expect("task run created");
         assert_eq!(task.controller_id, "qm-optimize");
-        assert_eq!(task.status, TaskStatus::Running);
+        assert_eq!(task.status, TaskStatus::Ready);
     }
 
     #[test]
