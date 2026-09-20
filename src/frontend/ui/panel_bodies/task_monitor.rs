@@ -321,6 +321,18 @@ pub(crate) fn render_task_monitor_panel(
                                 None => format!("{controller_id} / {outcome}"),
                             };
                             ui.label(RichText::new(meta).small().color(pal.text_tertiary));
+                            if controller_id.starts_with("qm-") {
+                                let result = state
+                                    .tasks
+                                    .runs
+                                    .latest_execution(task_id)
+                                    .and_then(|e| e.qm_result.as_ref())
+                                    .map(|r| r.summary())
+                                    .unwrap_or_else(|| {
+                                        "QM convergence and artifact status unknown".into()
+                                    });
+                                ui.label(RichText::new(result).small());
+                            }
                             if let Some(engine_label) = engine_label {
                                 ui.label(
                                     RichText::new(format!("Engine: {engine_label}"))

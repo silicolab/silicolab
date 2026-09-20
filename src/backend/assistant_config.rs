@@ -114,6 +114,8 @@ pub struct AssistantConfig {
     /// Whether the assistant is usable (the Assistant tab still renders a hint when a
     /// key is missing). On by default.
     pub enabled: bool,
+    #[serde(default = "default_auto_diagnose_qm_issues")]
+    pub auto_diagnose_qm_issues: bool,
     /// Provider and model copied into each newly-created conversation.
     pub default_selection: AssistantModelSelection,
     /// Reasoning effort; adapters map or drop it per model capability.
@@ -139,6 +141,7 @@ impl Default for AssistantConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            auto_diagnose_qm_issues: true,
             default_selection: AssistantModelSelection::default(),
             effort: crate::io::llm::types::Effort::High,
             base_urls: Default::default(),
@@ -147,5 +150,30 @@ impl Default for AssistantConfig {
             external_agent_access: ExternalAgentAccess::default(),
             external_agent_executables: Default::default(),
         }
+    }
+}
+
+fn default_auto_diagnose_qm_issues() -> bool {
+    true
+}
+
+#[cfg(test)]
+mod qm_tests {
+    #[test]
+    fn diagnosis_defaults_on_and_explicit_off_round_trips() {
+        let mut value = serde_json::to_value(super::AssistantConfig::default()).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("auto_diagnose_qm_issues");
+        let mut config: super::AssistantConfig = serde_json::from_value(value).unwrap();
+        assert!(config.auto_diagnose_qm_issues);
+        config.auto_diagnose_qm_issues = false;
+        let saved = serde_json::to_string(&config).unwrap();
+        assert!(
+            !serde_json::from_str::<super::AssistantConfig>(&saved)
+                .unwrap()
+                .auto_diagnose_qm_issues
+        );
     }
 }

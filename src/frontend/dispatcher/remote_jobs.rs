@@ -516,7 +516,8 @@ fn apply_remote_qm_outcome(
         }
     }
     let run_dir = PathBuf::from(&row.local_run_dir);
-    save_qm_artifacts(state, &run_dir, &outcome);
+    let result = save_qm_artifacts(state, &run_dir, &outcome);
+    state.tasks.runs.set_qm_result(&row.job_id, result.clone());
 
     let belongs_here = outcome_belongs_to_current_workspace(state, row);
     let already = outcome_already_materialized(state, &row.job_id);
@@ -559,17 +560,13 @@ fn apply_remote_qm_outcome(
         mark_task_status(state, task_id, TaskStatus::Completed);
         state.ui.task_chart_thumbnails.remove(&task_id);
     }
-    let summary = format!(
-        "Remote QM complete: energy {:.6} Eh{}",
-        outcome.energy_hartree,
-        if outcome.converged {
-            " (converged)"
-        } else {
-            " (not converged)"
-        }
-    );
     if let Some(job_id) = job_id {
-        state.job_succeeded(job_id, summary);
+        let summary = format!("Remote QM execution complete: {}", result.summary());
+        if result.needs_diagnosis() {
+            state.job_notice(job_id, summary);
+        } else {
+            state.job_succeeded(job_id, summary);
+        }
     }
 }
 
@@ -610,7 +607,14 @@ pub(crate) fn import_completed_remote_jobs(state: &mut AppState, rows: Vec<regis
     let mut recovered = 0usize;
     let mut pending = 0usize;
     for row in rows {
-        if outcome_already_materialized(state, &row.job_id) {
+        let already = outcome_already_materialized(state, &row.job_id);
+        let repair = state
+            .tasks
+            .runs
+            .execution(&row.job_id)
+            .and_then(|e| e.qm_result.as_ref())
+            .is_some_and(|r| !r.artifacts_complete());
+        if already && !repair {
             continue;
         }
         match read_local_outcome(&row.local_run_dir) {
@@ -625,6 +629,12 @@ pub(crate) fn import_completed_remote_jobs(state: &mut AppState, rows: Vec<regis
                         crate::backend::run_attempt::ResultImport::PendingRecovery,
                     );
                 }
+            }
+            None if already => {
+                state.report_unscoped_remote_error(format!(
+                    "Cannot repair QM artifacts for {}: outcome file missing",
+                    row.job_id
+                ));
             }
             None => {
                 pending += 1;

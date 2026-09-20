@@ -373,6 +373,7 @@ pub enum AppAction {
     },
     /// Enable or disable the assistant and persist.
     SetAssistantEnabled(bool),
+    SetAutoDiagnoseQmIssues(bool),
     /// Set the assistant's reasoning effort and persist.
     SetAssistantEffort(crate::io::llm::types::Effort),
     /// Pin whether the active OpenAI-compatible model accepts a reasoning-effort

@@ -98,6 +98,7 @@ pub(crate) fn create_project_schema(db: &Connection) -> Result<()> {
             observation_state text,
             cancel_capability text,
             import_state      text not null default 'not_required',
+            qm_result_json    text,
             exit_code         integer,
             error             text,
             created_at_ms     integer not null default 0,
@@ -120,6 +121,7 @@ pub(crate) fn create_project_schema(db: &Connection) -> Result<()> {
         ",
     )?;
     ensure_task_run_columns(db)?;
+    ensure_job_execution_columns(db)?;
     ensure_entry_columns(db)?;
     Ok(())
 }
@@ -155,6 +157,20 @@ pub(crate) fn project_meta(db: &Connection, key: &str) -> Result<Option<String>>
     )
     .optional()
     .map_err(Into::into)
+}
+
+fn ensure_job_execution_columns(db: &Connection) -> Result<()> {
+    let mut statement = db.prepare("pragma table_info(job_executions)")?;
+    let columns = statement
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if !columns.iter().any(|column| column == "qm_result_json") {
+        db.execute(
+            "alter table job_executions add column qm_result_json text",
+            [],
+        )?;
+    }
+    Ok(())
 }
 
 fn ensure_task_run_columns(db: &Connection) -> Result<()> {

@@ -55,6 +55,8 @@ pub struct PersistedAssistantConversation {
     #[serde(default)]
     pub external_access: crate::backend::assistant_config::ExternalAgentAccess,
     #[serde(default)]
+    pub qm_diagnostic_only: bool,
+    #[serde(default)]
     pub history: Vec<PersistedChatMessage>,
     #[serde(default)]
     pub transcript: Vec<PersistedTranscriptEntry>,

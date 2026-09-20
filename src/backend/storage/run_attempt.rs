@@ -26,7 +26,7 @@ pub(crate) fn load_run_graph(db: &Connection) -> Result<RunGraph> {
 
     let mut execution_stmt = db.prepare(
         "select job_id, run_attempt_id, ordinal, placement, placement_host, job_kind,
-                execution_state, import_state, created_at_ms, finished_at_ms
+                execution_state, import_state, created_at_ms, finished_at_ms, qm_result_json
          from job_executions
          order by run_attempt_id, ordinal",
     )?;
@@ -43,6 +43,7 @@ pub(crate) fn load_run_graph(db: &Connection) -> Result<RunGraph> {
                 row.get::<_, String>(7)?,
                 row.get::<_, i64>(8)? as u64,
                 row.get::<_, Option<i64>>(9)?.map(|value| value as u64),
+                row.get::<_, Option<String>>(10)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -59,6 +60,7 @@ pub(crate) fn load_run_graph(db: &Connection) -> Result<RunGraph> {
         import_state,
         created_at_ms,
         finished_at_ms,
+        qm_result_json,
     ) in rows
     {
         // A row with an unparseable id or state predates or corrupts this schema;
@@ -80,6 +82,9 @@ pub(crate) fn load_run_graph(db: &Connection) -> Result<RunGraph> {
                 .unwrap_or(ResultImport::NotRequired),
             created_at_ms,
             finished_at_ms,
+            qm_result: qm_result_json
+                .map(|json| serde_json::from_str(&json))
+                .transpose()?,
         });
     }
 
@@ -110,8 +115,8 @@ pub(crate) fn write_run_graph(conn: &Connection, runs: &RunGraph) -> Result<()> 
         conn.execute(
             "insert into job_executions
                 (job_id, run_attempt_id, ordinal, placement, placement_host, job_kind,
-                 execution_state, import_state, created_at_ms, finished_at_ms)
-             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                 execution_state, import_state, created_at_ms, finished_at_ms, qm_result_json)
+             values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 execution.job_id.to_string(),
                 execution.run_attempt_id as i64,
@@ -123,6 +128,11 @@ pub(crate) fn write_run_graph(conn: &Connection, runs: &RunGraph) -> Result<()> 
                 execution.import_state.token(),
                 execution.created_at_ms as i64,
                 execution.finished_at_ms.map(|value| value as i64),
+                execution
+                    .qm_result
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?,
             ],
         )?;
     }
@@ -133,6 +143,43 @@ pub(crate) fn write_run_graph(conn: &Connection, runs: &RunGraph) -> Result<()> 
 mod tests {
     use super::*;
     use crate::backend::storage::create_project_schema;
+
+    #[test]
+    fn existing_job_executions_gain_nullable_qm_results_idempotently() {
+        use crate::backend::run_attempt::{ArtifactStatus, QmResult};
+
+        let conn = Connection::open_in_memory().unwrap();
+        create_project_schema(&conn).unwrap();
+        let mut graph = RunGraph::default();
+        let job = graph.begin_execution(3, Placement::Local, Some("qm-energy".into()), 100);
+        graph.set_execution_state(&job.to_string(), ExecutionState::Succeeded, 200);
+        write_run_graph(&conn, &graph).unwrap();
+        conn.execute("alter table job_executions drop column qm_result_json", [])
+            .unwrap();
+
+        create_project_schema(&conn).unwrap();
+        create_project_schema(&conn).unwrap();
+        let mut loaded = load_run_graph(&conn).unwrap();
+        assert_eq!(loaded.task_run_id_for_job(&job.to_string()), Some(3));
+        let execution = loaded.execution(&job.to_string()).unwrap();
+        assert_eq!(execution.execution_state, ExecutionState::Succeeded);
+        assert_eq!(execution.finished_at_ms, Some(200));
+        assert!(execution.qm_result.is_none());
+
+        let result = QmResult {
+            converged: false,
+            report: ArtifactStatus::Saved,
+            series: ArtifactStatus::NotApplicable,
+        };
+        loaded.set_qm_result(&job.to_string(), result.clone());
+        write_run_graph(&conn, &loaded).unwrap();
+        create_project_schema(&conn).unwrap();
+        let reloaded = load_run_graph(&conn).unwrap();
+        assert_eq!(
+            reloaded.execution(&job.to_string()).unwrap().qm_result,
+            Some(result)
+        );
+    }
 
     #[test]
     fn run_graph_round_trips_through_project_db() {
@@ -154,6 +201,12 @@ mod tests {
         // A remote result whose downloaded outcome went missing.
         graph.set_import_state(&remote.to_string(), ResultImport::PendingRecovery);
 
+        let qm = crate::backend::run_attempt::QmResult {
+            converged: false,
+            report: crate::backend::run_attempt::ArtifactStatus::Failed("disk full".into()),
+            series: crate::backend::run_attempt::ArtifactStatus::NotApplicable,
+        };
+        graph.set_qm_result(&local.to_string(), qm.clone());
         write_run_graph(&conn, &graph).unwrap();
         let loaded = load_run_graph(&conn).unwrap();
 
@@ -170,6 +223,7 @@ mod tests {
             ExecutionState::Succeeded,
             "the terminal state survives the round-trip"
         );
+        assert_eq!(local_execution.qm_result, Some(qm));
         assert_eq!(local_execution.placement, Placement::Local);
         assert_eq!(local_execution.import_state, ResultImport::Applied);
         let remote_execution = loaded
@@ -177,6 +231,7 @@ mod tests {
             .iter()
             .find(|execution| execution.job_id == remote)
             .unwrap();
+        assert!(remote_execution.qm_result.is_none());
         assert_eq!(
             remote_execution.import_state,
             ResultImport::PendingRecovery,

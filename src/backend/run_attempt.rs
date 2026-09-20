@@ -110,6 +110,53 @@ impl ResultImport {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum ArtifactStatus {
+    Saved,
+    NotApplicable,
+    Failed(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct QmResult {
+    pub converged: bool,
+    pub report: ArtifactStatus,
+    pub series: ArtifactStatus,
+}
+
+impl QmResult {
+    pub fn needs_diagnosis(&self) -> bool {
+        !self.converged || !self.artifacts_complete()
+    }
+
+    pub fn artifacts_complete(&self) -> bool {
+        self.report == ArtifactStatus::Saved && !matches!(self.series, ArtifactStatus::Failed(_))
+    }
+
+    pub fn summary(&self) -> String {
+        let artifact = |status: &ArtifactStatus| match status {
+            ArtifactStatus::Saved => "saved".to_string(),
+            ArtifactStatus::NotApplicable => "not applicable".to_string(),
+            ArtifactStatus::Failed(error) => format!("save failed: {error}"),
+        };
+        format!(
+            "engine reports {}; {}; report: {}; numerical series: {}",
+            if self.converged {
+                "converged"
+            } else {
+                "not converged"
+            },
+            if self.artifacts_complete() {
+                "evidence saved"
+            } else {
+                "evidence incomplete"
+            },
+            artifact(&self.report),
+            artifact(&self.series)
+        )
+    }
+}
+
 /// One engine invocation. `job_id` is the global execution identity that
 /// supersedes `run_uuid`; `(run_attempt_id, ordinal)` orders executions within an
 /// attempt.
@@ -124,6 +171,7 @@ pub struct JobExecution {
     /// Whether this execution's outcome has been imported — the durable home
     /// for the pending-recovery signal, orthogonal to `execution_state`.
     pub import_state: ResultImport,
+    pub qm_result: Option<QmResult>,
     pub created_at_ms: u64,
     pub finished_at_ms: Option<u64>,
 }
@@ -230,6 +278,7 @@ impl RunGraph {
             job_kind,
             execution_state: ExecutionState::Queued,
             import_state,
+            qm_result: None,
             created_at_ms: now_ms,
             finished_at_ms: None,
         });
@@ -237,10 +286,28 @@ impl RunGraph {
         job_id
     }
 
-    fn execution(&self, job_id: &str) -> Option<&JobExecution> {
+    pub fn execution(&self, job_id: &str) -> Option<&JobExecution> {
         self.executions
             .iter()
             .find(|execution| execution.job_id.to_string() == job_id)
+    }
+
+    pub fn set_qm_result(&mut self, job_id: &str, result: QmResult) {
+        if let Some(execution) = self
+            .executions
+            .iter_mut()
+            .find(|e| e.job_id.to_string() == job_id)
+        {
+            execution.qm_result = Some(result);
+            self.dirty = true;
+        }
+    }
+
+    pub fn latest_execution(&self, task_id: u64) -> Option<&JobExecution> {
+        self.executions
+            .iter()
+            .rev()
+            .find(|e| self.task_run_id_for_job(&e.job_id.to_string()) == Some(task_id))
     }
 
     /// Resolve a job identity (its `JobId` string, as carried by a runtime handle or

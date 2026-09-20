@@ -11,7 +11,7 @@ pub(crate) fn save_qm_run_artifacts(
     state: &mut AppState,
     task_id: Option<u64>,
     outcome: &crate::engines::qm::QmOutcome,
-) {
+) -> crate::backend::run_attempt::QmResult {
     let run = task_id
         .and_then(|id| state.tasks.task_run(id))
         .and_then(|task| task.run_dir.clone().map(|dir| (task.id, dir)));
@@ -20,10 +20,20 @@ pub(crate) fn save_qm_run_artifacts(
             SystemSubsystem::Storage,
             "missing QM run identity or directory".to_string(),
         );
-        return;
+        use crate::backend::run_attempt::{ArtifactStatus, QmResult};
+        return QmResult {
+            converged: outcome.converged,
+            report: ArtifactStatus::Failed("missing QM run directory".into()),
+            series: if crate::backend::runs::QmSeries::from_outcome(outcome).is_empty() {
+                ArtifactStatus::NotApplicable
+            } else {
+                ArtifactStatus::Failed("missing QM run directory".into())
+            },
+        };
     };
-    save_qm_artifacts(state, &run_dir, outcome);
+    let result = save_qm_artifacts(state, &run_dir, outcome);
     state.ui.task_chart_thumbnails.remove(&task_id);
+    result
 }
 
 pub(crate) fn poll_engine_job(state: &mut AppState, ctx: &egui::Context) {
@@ -305,7 +315,13 @@ pub(crate) fn apply_qm_outcome(
     }
     // Persist the raw report to the task's run directory before any new entry is
     // added, so the run's source entry is the input structure, not the result.
-    save_qm_run_artifacts(state, cx.task_run_id, &outcome);
+    let result = save_qm_run_artifacts(state, cx.task_run_id, &outcome);
+    if let Some(job_id) = cx.job_id {
+        state
+            .tasks
+            .runs
+            .set_qm_result(&job_id.to_string(), result.clone());
+    }
     // A QM run's optimized geometry is surfaced as a new entry (the original is
     // preserved). A single-point energy or frequency run produces no entry but
     // still records a report in the ledger, so its outcome is durably applied.
@@ -343,16 +359,14 @@ pub(crate) fn apply_qm_outcome(
     // per-entry chart availability is stale.
     state.ui.chart_availability.clear();
     let summary = format!(
-        "QM complete: energy {:.6} Eh{}",
+        "QM execution complete: energy {:.6} Eh; {}",
         outcome.energy_hartree,
-        if outcome.converged {
-            " (converged)"
-        } else {
-            " (not converged)"
-        }
+        result.summary()
     );
     match cx.job_id {
+        Some(job_id) if result.needs_diagnosis() => state.job_notice(job_id, summary),
         Some(job_id) => state.job_succeeded(job_id, summary),
+        None if result.needs_diagnosis() => state.status_neutral(summary),
         None => state.status_success(summary),
     }
 }

@@ -208,7 +208,7 @@ fn job_finishing_in_inactive_conversation_routes_to_its_origin() {
     assert_eq!(origin_conv.queued.len(), 1);
     assert!(matches!(
         origin_conv.queued.front(),
-        Some(PendingTurn::JobDone { .. })
+        Some(PendingTurn::QmDone { .. })
     ));
 }
 

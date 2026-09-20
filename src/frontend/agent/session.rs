@@ -57,6 +57,12 @@ pub enum TranscriptEntry {
 pub enum PendingTurn {
     /// A user message submitted while the agent was busy or awaiting approval.
     UserMessage(String),
+    QmDone {
+        job_id: String,
+        summary: String,
+        result: Option<crate::backend::run_attempt::QmResult>,
+        execution_failed: bool,
+    },
     /// A background job finished; wake the model with its result so it can
     /// continue the workflow (e.g. optimize → frequencies).
     JobDone {
@@ -70,6 +76,7 @@ impl PendingTurn {
     /// Short label for the composer's queued-message strip.
     pub fn preview(&self) -> &str {
         match self {
+            PendingTurn::QmDone { .. } => "QM result",
             PendingTurn::UserMessage(text) => text,
             PendingTurn::JobDone { label, .. } => label,
         }
@@ -110,6 +117,7 @@ pub struct AssistantConversation {
     pub title: String,
     pub selection: AssistantModelSelection,
     pub external_access: ExternalAgentAccess,
+    pub qm_diagnostic_only: bool,
     /// Neutral conversation history replayed to the provider each turn (includes
     /// prior assistant turns with their opaque reasoning blobs). The system
     /// prompt is *not* stored here — it is rebuilt per turn into `LlmConfig`.
@@ -165,6 +173,7 @@ impl AssistantConversation {
             title,
             selection,
             external_access: ExternalAgentAccess::Controlled,
+            qm_diagnostic_only: false,
             history: Vec::new(),
             transcript: Vec::new(),
             input: String::new(),

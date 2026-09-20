@@ -228,8 +228,8 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
             || !state.jobs.agent_jobs.is_empty()
             || !state.jobs.agent_online_structures.is_empty()))
     .then(|| state.assistant_fingerprint());
-    crate::frontend::agent::poll_agent_turn(state, ctx);
     crate::frontend::agent::poll_agent_jobs(state, ctx);
+    crate::frontend::agent::poll_agent_turn(state, ctx);
     crate::frontend::agent::poll_model_fetch(state, ctx);
     if let Some(before) = assistant_before
         && state.assistant_fingerprint() != before
