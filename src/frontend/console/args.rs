@@ -21,6 +21,29 @@ pub(crate) fn parse_silhouette_mode(value: &str) -> Result<SilhouetteMode, Strin
 }
 
 #[derive(Debug, Clone, Copy)]
+pub(crate) struct BackgroundColor(pub Option<Color32>);
+
+pub(crate) fn parse_background_color(value: &str) -> Result<BackgroundColor, String> {
+    if value.eq_ignore_ascii_case("theme") {
+        Ok(BackgroundColor(None))
+    } else {
+        parse_color_value(value).map(|color| BackgroundColor(Some(color)))
+    }
+}
+
+pub(crate) fn parse_export_background(
+    value: &str,
+) -> Result<crate::frontend::viewport::ImageExportBackground, String> {
+    use crate::frontend::viewport::ImageExportBackground;
+    match value.to_ascii_lowercase().as_str() {
+        "viewport" => Ok(ImageExportBackground::Viewport),
+        "white" => Ok(ImageExportBackground::White),
+        "transparent" => Ok(ImageExportBackground::Transparent),
+        _ => parse_color_value(value).map(ImageExportBackground::Custom),
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct OutlineColor(pub Option<Color32>);
 
 pub(crate) fn parse_outline_color(value: &str) -> Result<OutlineColor, String> {
@@ -44,7 +67,7 @@ pub(crate) fn parse_color(value: &str) -> Option<Color32> {
         "red" => Some(Color32::from_rgb(220, 70, 70)),
         "green" => Some(Color32::from_rgb(76, 166, 96)),
         "blue" => Some(Color32::from_rgb(80, 130, 230)),
-        _ if value.starts_with('#') && value.len() == 7 => {
+        _ if value.starts_with('#') && value.len() == 7 && value.is_ascii() => {
             let r = u8::from_str_radix(&value[1..3], 16).ok()?;
             let g = u8::from_str_radix(&value[3..5], 16).ok()?;
             let b = u8::from_str_radix(&value[5..7], 16).ok()?;

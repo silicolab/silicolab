@@ -62,12 +62,13 @@ fn save_viewport_settings(
             set_render_override_bool(db, RenderTarget::atom(scope, *atom_index), "hidden", true)?;
         }
     }
-    if viewport.background_color != default_viewport.background_color {
+    if let Some(color) = viewport.background_color {
+        set_render_override_text(db, RenderTarget::view(scope), "background_mode", "custom")?;
         set_render_override_json(
             db,
             RenderTarget::view(scope),
             "background_color",
-            color_json(viewport.background_color),
+            color_json(color),
         )?;
     }
     if viewport.show_cell != default_viewport.show_cell {

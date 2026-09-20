@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, bail};
-use eframe::{egui, wgpu};
+use eframe::wgpu;
 
 use super::super::camera::Projector;
 use super::{DEPTH_FORMAT, GpuExporter, MoleculeInstances, MoleculeRenderer, camera_uniform};
@@ -17,7 +17,7 @@ pub(in crate::frontend::viewport) fn export_png(
     projector: &Projector,
     width: u32,
     height: u32,
-    background: egui::Color32,
+    background: super::super::export::ResolvedExportBackground,
     lighting: crate::frontend::viewport::ViewportLightingState,
     output_path: &Path,
 ) -> Result<()> {
@@ -38,7 +38,7 @@ pub(in crate::frontend::viewport) fn export_png(
     let width_scale = (width.min(height) as f32 / 900.0).max(1.0);
     renderer.write_camera(
         queue,
-        camera_uniform(projector).with_lighting(lighting, background, width_scale),
+        camera_uniform(projector).with_lighting(lighting, background.substrate, width_scale),
     );
     renderer.upload(device, queue, instances);
 
@@ -72,7 +72,7 @@ pub(in crate::frontend::viewport) fn export_png(
     let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("molecule_export_encoder"),
     });
-    let clear = background.to_normalized_gamma_f32();
+    let clear = background.clear.to_normalized_gamma_f32();
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("molecule_export_pass"),
@@ -154,6 +154,18 @@ pub(in crate::frontend::viewport) fn export_png(
     }
     drop(data);
     readback.unmap();
+    if background.clear.a() == 0 {
+        // The blend target contains premultiplied RGB; PNG stores straight RGB.
+        for pixel in pixels.as_chunks_mut::<4>().0 {
+            let alpha = u32::from(pixel[3]);
+            for channel in &mut pixel[..3] {
+                *channel = (u32::from(*channel) * 255 + alpha / 2)
+                    .checked_div(alpha)
+                    .unwrap_or(0)
+                    .min(255) as u8;
+            }
+        }
+    }
     let image = image::RgbaImage::from_raw(width, height, pixels)
         .ok_or_else(|| anyhow!("GPU image readback returned an invalid buffer size"))?;
     image

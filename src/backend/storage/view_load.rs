@@ -27,9 +27,27 @@ pub(crate) fn load_project_view_settings(db: &Connection) -> Result<ProjectViewS
             value_json: row.get(9)?,
         })
     })?;
+    let mut custom_scopes = std::collections::BTreeSet::new();
     for row in rows {
         let row = row?;
+        if row.target_type == "view"
+            && row.property == "background_mode"
+            && row.value_text.as_deref() == Some("custom")
+        {
+            custom_scopes.insert((row.scope_type.clone(), row.scope_id.clone()));
+        }
         apply_render_override_row(&mut view, row)?;
+    }
+    let migrate = |viewport: &mut ViewportVisualState, scope: (String, String)| {
+        if !custom_scopes.contains(&scope)
+            && viewport.background_color == Some(ViewportVisualState::DEFAULT_BACKGROUND)
+        {
+            viewport.background_color = None;
+        }
+    };
+    migrate(&mut view.viewport, ("project".into(), "project".into()));
+    for (id, viewport) in &mut view.entry_viewports {
+        migrate(viewport, ("entry".into(), id.to_string()));
     }
     Ok(view)
 }
@@ -76,7 +94,7 @@ fn apply_view_override(viewport: &mut ViewportVisualState, row: &RenderOverrideR
     match row.property.as_str() {
         "background_color" => {
             if let Some(color) = row.json_value()?.as_ref().and_then(parse_color_json) {
-                viewport.background_color = color;
+                viewport.background_color = Some(color);
             }
         }
         "show_cell" => set_bool_from_integer(row.value_integer, &mut viewport.show_cell),
@@ -209,5 +227,87 @@ fn apply_cartoon_section(
     }
     if let Some(thickness) = value.get("thickness").and_then(serde_json::Value::as_f64) {
         section.thickness = thickness as f32;
+    }
+}
+
+#[cfg(test)]
+mod background_tests {
+    use super::*;
+
+    #[test]
+    fn background_modes_roundtrip_and_migrate_in_both_scopes() {
+        let path = std::path::Path::new("target").join("background-roundtrip.sqlite");
+        let mut db = Connection::open(&path).unwrap();
+        create_project_schema(&db).unwrap();
+        for color in [
+            None,
+            Some(eframe::egui::Color32::RED),
+            Some(ViewportVisualState::DEFAULT_BACKGROUND),
+        ] {
+            let visual = ViewportVisualState {
+                background_color: color,
+                ..Default::default()
+            };
+            let view = ProjectViewSettings {
+                viewport: visual.clone(),
+                entry_viewports: [(7, visual)].into(),
+            };
+            super::super::view_save::save_project_view_settings(&db, &view).unwrap();
+            drop(db);
+            db = Connection::open(&path).unwrap();
+            for priority in [-1, 1] {
+                db.execute(
+                    "update render_overrides set priority = ? where property = 'background_mode'",
+                    [priority],
+                )
+                .unwrap();
+                let loaded = load_project_view_settings(&db).unwrap();
+                assert_eq!(loaded.viewport.background_color, color);
+                assert_eq!(
+                    loaded
+                        .entry_viewports
+                        .get(&7)
+                        .cloned()
+                        .unwrap_or_default()
+                        .background_color,
+                    color
+                );
+            }
+            db.execute(
+                "delete from render_overrides where property = 'background_mode' and scope_type = 'project'",
+                [],
+            ).unwrap();
+            let scoped = load_project_view_settings(&db).unwrap();
+            assert_eq!(
+                scoped.viewport.background_color,
+                color.filter(|c| *c != ViewportVisualState::DEFAULT_BACKGROUND)
+            );
+            assert_eq!(
+                scoped
+                    .entry_viewports
+                    .get(&7)
+                    .cloned()
+                    .unwrap_or_default()
+                    .background_color,
+                color
+            );
+            db.execute(
+                "delete from render_overrides where property = 'background_mode'",
+                [],
+            )
+            .unwrap();
+            let loaded = load_project_view_settings(&db).unwrap();
+            let legacy = color.filter(|c| *c != ViewportVisualState::DEFAULT_BACKGROUND);
+            assert_eq!(loaded.viewport.background_color, legacy);
+            assert_eq!(
+                loaded
+                    .entry_viewports
+                    .get(&7)
+                    .cloned()
+                    .unwrap_or_default()
+                    .background_color,
+                legacy
+            );
+        }
     }
 }

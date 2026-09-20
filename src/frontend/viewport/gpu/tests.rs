@@ -420,7 +420,7 @@ fn gpu_renders_benzene_to_png() {
         Vec2::ZERO,
     );
     let background = ViewportVisualState::default()
-        .background_color
+        .resolve_background(ViewportVisualState::DEFAULT_BACKGROUND)
         .to_normalized_gamma_f32();
     let pixels = render_offscreen(&instances, &projector, width, height, background);
 
@@ -481,7 +481,8 @@ fn gpu_export_api_writes_png() {
         &projector,
         width,
         height,
-        visual.background_color,
+        super::super::ImageExportBackground::Viewport
+            .resolve(&visual, ViewportVisualState::DEFAULT_BACKGROUND),
         visual.lighting,
         &path,
     )
@@ -506,7 +507,8 @@ fn gpu_export_api_writes_png() {
         &projector,
         width,
         height,
-        visual.background_color,
+        super::super::ImageExportBackground::Viewport
+            .resolve(&visual, ViewportVisualState::DEFAULT_BACKGROUND),
         visual.lighting,
         &path,
     )
@@ -626,7 +628,7 @@ fn gpu_renders_cartoon_to_png() {
         Vec2::ZERO,
     );
     let background = ViewportVisualState::default()
-        .background_color
+        .resolve_background(ViewportVisualState::DEFAULT_BACKGROUND)
         .to_normalized_gamma_f32();
     let pixels = render_offscreen(&instances, &projector, width, height, background);
 
@@ -673,7 +675,9 @@ fn gpu_renders_surface_to_png() {
         0.5,
         Vec2::ZERO,
     );
-    let background = visual_state.background_color.to_normalized_gamma_f32();
+    let background = visual_state
+        .resolve_background(ViewportVisualState::DEFAULT_BACKGROUND)
+        .to_normalized_gamma_f32();
     let pixels = render_offscreen(&instances, &projector, width, height, background);
 
     let path = std::path::Path::new("target").join("gpu_smoke_surface.png");

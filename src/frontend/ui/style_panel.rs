@@ -82,7 +82,7 @@ pub(super) fn render_style_panel(
                     ui.add_space(6.0);
                     surface_section(state, ui, &pal);
                     ui.add_space(6.0);
-                    scene_section(state, ui, &pal);
+                    scene_section(state, ui, actions, &pal);
                     ui.add_space(6.0);
                     scene_advanced_section(state, ui, actions, &pal);
                 },
@@ -223,11 +223,36 @@ fn visibility_section(
     });
 }
 
-fn scene_section(state: &mut AppState, ui: &mut egui::Ui, pal: &crate::frontend::theme::Palette) {
+fn scene_section(
+    state: &mut AppState,
+    ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
+    pal: &crate::frontend::theme::Palette,
+) {
     style_group_label(ui, "Scene", pal);
     ui.horizontal(|ui| {
         ui.label("Background");
-        ui.color_edit_button_srgba(&mut state.ui.viewport.background_color);
+        let previous = state.ui.viewport.background_color;
+        let mut background = previous;
+        let mut custom = background.is_some();
+        ui.selectable_value(&mut custom, false, "Follow theme");
+        ui.selectable_value(&mut custom, true, "Custom");
+        if custom {
+            let color = state.ui.viewport.resolve_background(pal.viewport_bg);
+            let mut rgb = [color.r(), color.g(), color.b()];
+            ui.color_edit_button_srgb(&mut rgb);
+            background = Some(egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]));
+        } else {
+            background = None;
+        }
+        if previous != background {
+            let token = background
+                .map(|c| format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b()))
+                .unwrap_or_else(|| "theme".into());
+            actions.push(AppAction::RunConsoleCommand(format!(
+                "view background {token}"
+            )));
+        }
     });
     ui.horizontal(|ui| {
         toggle_switch(ui, &mut state.ui.viewport.show_cell, "Unit cell", pal);
@@ -290,11 +315,7 @@ fn scene_advanced_section(
     style_group_label(ui, "Silhouettes", pal);
     let previous = state.ui.viewport.lighting;
     let mut lighting = previous;
-    let background = if state.ui.viewport.background_follows_theme() {
-        pal.viewport_bg
-    } else {
-        state.ui.viewport.background_color
-    };
+    let background = state.ui.viewport.resolve_background(pal.viewport_bg);
     ui.horizontal(|ui| {
         use crate::frontend::viewport::SilhouetteMode;
         for (mode, label) in [

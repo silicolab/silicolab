@@ -273,7 +273,7 @@ impl OverlayScope {
 
 #[derive(Debug, Clone)]
 pub struct ViewportVisualState {
-    pub background_color: Color32,
+    pub background_color: Option<Color32>,
     /// Project-level style override for each chemical category, overriding the
     /// `software_default_style`. Empty categories fall back to the software
     /// default. This is the "project display style" the user sets in View.
@@ -304,22 +304,17 @@ pub struct ViewportVisualState {
 }
 
 impl ViewportVisualState {
-    /// Factory background. Also the sentinel for "no explicit choice — follow
-    /// the app theme"; the viewport swaps in the theme's background when the
-    /// stored color still equals this.
     pub const DEFAULT_BACKGROUND: Color32 = Color32::from_rgb(245, 247, 249);
 
-    /// Whether the background should track the active light/dark theme, i.e. the
-    /// user hasn't picked a custom color in settings.
-    pub fn background_follows_theme(&self) -> bool {
-        self.background_color == Self::DEFAULT_BACKGROUND
+    pub fn resolve_background(&self, theme_background: Color32) -> Color32 {
+        self.background_color.unwrap_or(theme_background)
     }
 }
 
 impl Default for ViewportVisualState {
     fn default() -> Self {
         Self {
-            background_color: Self::DEFAULT_BACKGROUND,
+            background_color: None,
             category_styles: BTreeMap::new(),
             atom_styles: BTreeMap::new(),
             atom_hidden: BTreeSet::new(),

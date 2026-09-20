@@ -14,7 +14,7 @@ pub(crate) fn view_command(state: &mut AppState, args: ViewArgs) -> Result<Strin
     match args.kind {
         ViewKind::Background { color } => {
             update_viewport(state, global, |viewport| {
-                viewport.background_color = color;
+                viewport.background_color = color.0;
             });
             Ok("set view background".to_string())
         }
@@ -215,7 +215,7 @@ pub(crate) fn save_command(
     target: SaveTarget,
 ) -> Result<String> {
     match target {
-        SaveTarget::Image { path } => {
+        SaveTarget::Image { path, background } => {
             if !context.gpu_image_export {
                 anyhow::bail!(
                     "image export is unavailable in CLI mode; launch the GUI to use GPU export"
@@ -223,6 +223,7 @@ pub(crate) fn save_command(
             }
             let resolved_path = context.resolve_path(&path);
             let request = PendingViewportPngExport {
+                background,
                 structure: state.structure().clone(),
                 camera: state.ui.camera,
                 selection: state.ui.selection.clone(),
@@ -248,7 +249,7 @@ pub(crate) fn save_command(
 }
 
 /// Serialize the current viewport into a replayable `.sls` script of console
-/// commands. Only settings that differ from the defaults are emitted, mirroring
+/// commands. Background is always emitted; other settings differ from defaults, mirroring
 /// how the project database stores sparse render overrides. The result can be
 /// re-applied to any entry with `run <file>`, making a visualization setup
 /// portable and human-readable (cf. Maestro's `*_cmd.txt` view scripts).
@@ -259,12 +260,13 @@ fn view_state_to_script(viewport: &ViewportVisualState) -> String {
         "# Replay on the active entry with:  run <this-file>".to_string(),
     ];
 
-    if viewport.background_color != default.background_color {
-        lines.push(format!(
-            "view background {}",
-            color_to_hex(viewport.background_color)
-        ));
-    }
+    lines.push(format!(
+        "view background {}",
+        viewport
+            .background_color
+            .map(color_to_hex)
+            .unwrap_or_else(|| "theme".into())
+    ));
     if viewport.show_cell != default.show_cell {
         lines.push(format!(
             "view cell {}",
@@ -379,5 +381,73 @@ fn trim_float(value: f32) -> String {
         format!("{}", rounded as i64)
     } else {
         format!("{rounded}")
+    }
+}
+
+#[cfg(test)]
+mod background_tests {
+    use super::*;
+    use crate::frontend::viewport::ImageExportBackground;
+
+    #[test]
+    fn export_background_options_preserve_snapshot_and_view() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        execute_console_line(&mut state, "view background #f5f7f9 --global").unwrap();
+        state.structure_mut().title = "queued structure".into();
+        let original = state.ui.viewport.background_color;
+        assert_eq!(state.ui.project_viewport.background_color, original);
+        for (option, expected) in [
+            ("", ImageExportBackground::Viewport),
+            (" --background viewport", ImageExportBackground::Viewport),
+            (" --background white", ImageExportBackground::White),
+            (
+                " --background transparent",
+                ImageExportBackground::Transparent,
+            ),
+            (
+                " --background #102030",
+                ImageExportBackground::Custom(Color32::from_rgb(16, 32, 48)),
+            ),
+        ] {
+            execute_console_line(&mut state, &format!("save image queued.png{option}")).unwrap();
+            assert_eq!(state.ui.viewport.background_color, original);
+            let request = state.ui.pending_viewport_exports.back().unwrap();
+            assert_eq!(request.background, expected);
+            assert_eq!(request.visual_state.background_color, original);
+        }
+        execute_console_line(&mut state, "view background theme --global").unwrap();
+        state.structure_mut().title = "later structure".into();
+        assert_eq!(
+            state
+                .ui
+                .pending_viewport_exports
+                .front()
+                .unwrap()
+                .structure
+                .title,
+            "queued structure"
+        );
+        assert!(state.ui.project_viewport.background_color.is_none());
+        assert!(state.ui.viewport.background_color.is_none());
+        assert_eq!(
+            state
+                .ui
+                .pending_viewport_exports
+                .front()
+                .unwrap()
+                .visual_state
+                .background_color,
+            original
+        );
+        assert!(
+            execute_console_line(&mut state, "save image x.png --background nonsense").is_err()
+        );
+        assert!(execute_console_line(&mut state, "view background #红红").is_err());
+        let script = view_state_to_script(&state.ui.viewport);
+        execute_console_line(&mut state, "view background black").unwrap();
+        for line in script.lines().filter(|line| !line.starts_with('#')) {
+            execute_console_line(&mut state, line).unwrap();
+        }
+        assert!(state.ui.viewport.background_color.is_none());
     }
 }
