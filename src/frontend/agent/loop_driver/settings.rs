@@ -267,3 +267,8 @@ pub fn poll_model_fetch(state: &mut AppState, ctx: &egui::Context) {
         }
     }
 }
+
+pub fn set_auto_diagnose_qm_issues(state: &mut AppState, enabled: bool) {
+    state.config.assistant.auto_diagnose_qm_issues = enabled;
+    persist(state);
+}

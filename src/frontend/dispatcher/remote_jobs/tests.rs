@@ -301,3 +301,46 @@ fn mismatched_origin_is_left_for_its_own_workspace() {
     assert!(!project_root_matches(Some("/work/a"), None));
     assert!(!project_root_matches(None, Some("/work/b")));
 }
+
+#[test]
+fn qm_remote_artifact_repair_does_not_reimport_geometry() {
+    use crate::backend::run_attempt::{ArtifactStatus, ResultImport};
+    let dir = std::env::temp_dir().join(format!(
+        "silicolab-remote-qm-repair-{}",
+        uuid::Uuid::new_v4()
+    ));
+    std::fs::create_dir_all(dir.join(QM_OUTPUT_FILE)).unwrap();
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let job_id = bind_remote_task(&mut state, &dir);
+    let row = qm_remote_row(&job_id, &dir);
+    let outcome = crate::wire::EngineOutcome::Qm(crate::engines::qm::QmOutcome {
+        energy_hartree: -1.0,
+        converged: false,
+        optimized_structure: Some(crate::domain::Structure::empty()),
+        summary: "unconverged remote report".into(),
+        scf_trace: vec![-1.0],
+        opt_trace: vec![],
+        frequencies: vec![],
+    });
+    std::fs::write(
+        dir.join(crate::engines::remote::launcher::OUTCOME_FILE),
+        serde_json::to_vec(&outcome).unwrap(),
+    )
+    .unwrap();
+    import_completed_remote_jobs(&mut state, vec![row.clone()]);
+    let execution = state.tasks.runs.execution(&job_id).unwrap();
+    let result = execution.qm_result.as_ref().unwrap();
+    assert!(matches!(result.report, ArtifactStatus::Failed(_)));
+    assert_eq!(result.series, ArtifactStatus::Saved);
+    assert_eq!(state.entries.records.len(), 1);
+    assert_eq!(execution.import_state, ResultImport::Applied);
+    std::fs::remove_dir(dir.join(QM_OUTPUT_FILE)).unwrap();
+    import_completed_remote_jobs(&mut state, vec![row.clone()]);
+    let execution = state.tasks.runs.execution(&job_id).unwrap();
+    assert!(execution.qm_result.as_ref().unwrap().artifacts_complete());
+    assert!(!execution.qm_result.as_ref().unwrap().converged);
+    assert_eq!(state.entries.records.len(), 1);
+    import_completed_remote_jobs(&mut state, vec![row]);
+    assert_eq!(state.entries.records.len(), 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}

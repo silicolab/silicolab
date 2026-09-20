@@ -561,3 +561,142 @@ fn optimization_progress_accumulates_the_energy_trace() {
         "first progress seeds the initial energy at step 0"
     );
 }
+
+#[test]
+fn qm_artifact_status_matrix_and_repair_preserve_execution_and_geometry() {
+    use crate::backend::run_attempt::{ArtifactStatus, Placement};
+    use crate::backend::runs::SERIES_FILE;
+    use crate::backend::tasks::task_controller_by_id;
+    for converged in [false, true] {
+        for blocked in ["none", "report", "series", "directory"] {
+            let root =
+                std::env::temp_dir().join(format!("silicolab-qm-matrix-{}", uuid::Uuid::new_v4()));
+            let dir = root.join("run");
+            std::fs::create_dir_all(&root).unwrap();
+            if blocked == "directory" {
+                std::fs::write(&dir, "blocked").unwrap();
+            } else {
+                std::fs::create_dir_all(&dir).unwrap();
+                if blocked == "report" {
+                    std::fs::create_dir(dir.join(QM_OUTPUT_FILE)).unwrap();
+                }
+                if blocked == "series" {
+                    std::fs::create_dir(dir.join(SERIES_FILE)).unwrap();
+                }
+            }
+            let mut state = AppState::scratch(Default::default(), Vec::new());
+            let task = state
+                .tasks
+                .create_task_run(*task_controller_by_id("qm-optimize").unwrap());
+            state.tasks.set_run_dir(task, dir.clone());
+            let job = state.tasks.runs.begin_execution(
+                task,
+                Placement::Local,
+                Some("qm-optimize".into()),
+                0,
+            );
+            let cx = JobContext {
+                job_id: Some(job),
+                task_run_id: Some(task),
+            };
+            let outcome = crate::engines::qm::QmOutcome {
+                energy_hartree: -1.0,
+                converged,
+                optimized_structure: Some(crate::domain::Structure::empty()),
+                summary: "diagnostic report".into(),
+                scf_trace: vec![-1.0],
+                opt_trace: vec![],
+                frequencies: vec![],
+            };
+            apply_qm_outcome(&mut state, &cx, outcome.clone());
+            complete_local_job(&mut state, Some(job), TaskStatus::Completed);
+            let execution = state.tasks.runs.execution(&job.to_string()).unwrap();
+            assert_eq!(
+                execution.execution_state,
+                crate::job::ExecutionState::Succeeded
+            );
+            let result = execution.qm_result.as_ref().unwrap();
+            assert_eq!(result.converged, converged);
+            assert_eq!(
+                matches!(result.report, ArtifactStatus::Failed(_)),
+                matches!(blocked, "report" | "directory")
+            );
+            assert_eq!(
+                matches!(result.series, ArtifactStatus::Failed(_)),
+                matches!(blocked, "series" | "directory")
+            );
+            assert_eq!(result.needs_diagnosis(), !converged || blocked != "none");
+            assert_eq!(state.entries.records.len(), 1);
+            if blocked == "directory" {
+                std::fs::remove_file(&dir).unwrap();
+            }
+            if blocked == "report" {
+                std::fs::remove_dir(dir.join(QM_OUTPUT_FILE)).unwrap();
+            }
+            if blocked == "series" {
+                std::fs::remove_dir(dir.join(SERIES_FILE)).unwrap();
+            }
+            apply_qm_outcome(&mut state, &cx, outcome);
+            assert_eq!(state.entries.records.len(), 1);
+            let result = state
+                .tasks
+                .runs
+                .execution(&job.to_string())
+                .unwrap()
+                .qm_result
+                .as_ref()
+                .unwrap();
+            assert!(result.artifacts_complete());
+            assert_eq!(result.needs_diagnosis(), !converged);
+            std::fs::remove_dir_all(root).unwrap();
+        }
+    }
+}
+
+#[test]
+fn qm_single_point_inspection_checks_report_access_independently() {
+    use crate::backend::run_attempt::Placement;
+    use crate::backend::tasks::task_controller_by_id;
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let entry = state
+        .entries
+        .add_entry(crate::domain::Structure::empty(), None, PathBuf::new());
+    let task = state
+        .tasks
+        .create_task_run(*task_controller_by_id("qm-energy").unwrap());
+    let dir = std::env::temp_dir().join(format!("silicolab-qm-inspect-{}", uuid::Uuid::new_v4()));
+    state.tasks.set_run_dir(task, dir.clone());
+    state.tasks.task_run_mut(task).unwrap().source_entry_id = Some(entry);
+    let job = state
+        .tasks
+        .runs
+        .begin_execution(task, Placement::Local, None, 0);
+    let cx = JobContext {
+        job_id: Some(job),
+        task_run_id: Some(task),
+    };
+    apply_qm_outcome(
+        &mut state,
+        &cx,
+        crate::engines::qm::QmOutcome {
+            energy_hartree: -1.0,
+            converged: false,
+            optimized_structure: None,
+            summary: "SCF exhausted".into(),
+            scf_trace: vec![],
+            opt_trace: vec![],
+            frequencies: vec![],
+        },
+    );
+    complete_local_job(&mut state, Some(job), TaskStatus::Completed);
+    assert_eq!(state.entries.records.len(), 1);
+    let inspect = crate::frontend::agent::tools::inspect(&state, Some(&job.to_string()));
+    assert!(inspect.contains("engine reports not converged"));
+    assert!(inspect.contains("not applicable"));
+    assert!(inspect.contains("SCF exhausted"));
+    std::fs::remove_file(dir.join(QM_OUTPUT_FILE)).unwrap();
+    let inspect = crate::frontend::agent::tools::inspect(&state, Some(&job.to_string()));
+    assert!(inspect.contains("missing or inaccessible"));
+    assert!(!inspect.contains("provenance: QM-run output (report saved)"));
+    std::fs::remove_dir_all(dir).unwrap();
+}

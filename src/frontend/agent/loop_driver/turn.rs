@@ -26,6 +26,20 @@ pub fn send_agent_message(state: &mut AppState, text: &str, ctx: &egui::Context)
         );
         return;
     }
+    if state.ui.agent.qm_diagnostic_only {
+        if let Some(job) = state.jobs.agent.take() {
+            job.cancel.store(true, Ordering::Relaxed);
+        }
+        state.ui.agent.truncate_to_resumable();
+        state.ui.agent.pending_calls.clear();
+        state.ui.agent.collected_results.clear();
+        state.ui.agent.approved_ids.clear();
+        state.ui.agent.approval_inputs = None;
+        state.ui.agent.streaming_text.clear();
+        state.ui.agent.queued.clear();
+        state.ui.agent.phase = AgentPhase::Idle;
+        state.ui.agent.qm_diagnostic_only = false;
+    }
     // Busy, paused on approval, or a follow-up is already queued (e.g. a finished
     // job's wake): enqueue so FIFO order holds, then pump in case we are idle.
     if state.ui.agent.is_busy()
@@ -81,8 +95,7 @@ pub fn spawn_next_turn(state: &mut AppState, ctx: &egui::Context) {
     }
 
     let selection = state.ui.agent.selection.clone();
-    let mut assistant_config = state.config.assistant.clone();
-    assistant_config.external_agent_access = state.ui.agent.external_access;
+    let (assistant_config, tools) = request_config_and_tools(state);
     let provider = match registry::build_provider(&assistant_config, &selection) {
         Ok(provider) => provider,
         Err(reason) => {
@@ -106,7 +119,7 @@ pub fn spawn_next_turn(state: &mut AppState, ctx: &egui::Context) {
         .project()
         .map(|project| project.root.clone());
     state.ui.agent.ensure_skills_loaded(project_root.clone());
-    let cfg = LlmConfig {
+    let mut cfg = LlmConfig {
         model: selection.model,
         effort: state.config.assistant.effort,
         max_output_tokens: MAX_OUTPUT_TOKENS,
@@ -114,13 +127,34 @@ pub fn spawn_next_turn(state: &mut AppState, ctx: &egui::Context) {
         system: system_prompt(&state.ui.agent.skills),
         working_dir: project_root,
     };
-    let tools = tools::tool_defs();
+    if state.ui.agent.qm_diagnostic_only {
+        cfg.system.push_str("\nQM diagnosis only. Explain the problem, available evidence and recommended next steps, then wait for a new user instruction. Do not rerun, repair files or accept an unconverged result. Only inspect, list_jobs and recommend_method are allowed.");
+    }
     let history = state.ui.agent.history.clone();
 
     state.ui.agent.iterations += 1;
     state.ui.agent.phase = AgentPhase::AwaitingModel;
     state.jobs.agent = Some(spawn_agent_turn(provider, cfg, tools, history));
     ctx.request_repaint_after(AGENT_POLL);
+}
+
+fn request_config_and_tools(
+    state: &AppState,
+) -> (
+    crate::backend::config::AssistantConfig,
+    Vec<crate::io::llm::types::ToolDef>,
+) {
+    let mut assistant_config = state.config.assistant.clone();
+    assistant_config.external_agent_access = if state.ui.agent.qm_diagnostic_only {
+        crate::backend::config::ExternalAgentAccess::Controlled
+    } else {
+        state.ui.agent.external_access
+    };
+    let mut tools = tools::tool_defs();
+    if state.ui.agent.qm_diagnostic_only {
+        tools.retain(|tool| tools::diagnostic_tool_allowed(&tool.name));
+    }
+    (assistant_config, tools)
 }
 
 /// Drain the in-flight agent turn (called from `poll_jobs`). Esc cancels.
@@ -284,6 +318,29 @@ pub fn pump_queue(state: &mut AppState, ctx: &egui::Context) {
         return;
     };
     match item {
+        PendingTurn::QmDone {
+            job_id,
+            summary,
+            result,
+            execution_failed,
+        } => {
+            let issue = execution_failed || result.as_ref().is_none_or(|r| r.needs_diagnosis());
+            if issue {
+                if state.ui.agent.qm_diagnostic_only
+                    && state.config.assistant.auto_diagnose_qm_issues
+                    && state.config.assistant.enabled
+                {
+                    state.ui.agent.iterations = 0;
+                    spawn_next_turn(state, ctx);
+                }
+            } else if !state.ui.agent.qm_diagnostic_only {
+                let summary = format!(
+                    "{summary}\n{}",
+                    result.as_ref().map(|r| r.summary()).unwrap_or_default()
+                );
+                begin_job_followup(state, &format!("QM {job_id}"), &summary, false, ctx);
+            }
+        }
         PendingTurn::UserMessage(text) => {
             let baseline = conversation_job_count(state);
             state.ui.agent.note_backlog_start(text.clone(), baseline);
@@ -308,6 +365,9 @@ fn begin_job_followup(
     is_error: bool,
     ctx: &egui::Context,
 ) {
+    if state.ui.agent.qm_diagnostic_only {
+        return;
+    }
     if let Err(reason) =
         registry::build_provider(&state.config.assistant, &state.ui.agent.selection)
     {
@@ -337,11 +397,12 @@ fn job_followup_text(label: &str, summary: &str, is_error: bool) -> String {
 /// workspace) still deserves to be reported, so it survives to fire later.
 fn discard_queued(state: &mut AppState, why: &str) {
     let before = state.ui.agent.queued.len();
-    state
-        .ui
-        .agent
-        .queued
-        .retain(|item| matches!(item, PendingTurn::JobDone { .. }));
+    state.ui.agent.queued.retain(|item| {
+        matches!(
+            item,
+            PendingTurn::JobDone { .. } | PendingTurn::QmDone { .. }
+        )
+    });
     let dropped = before - state.ui.agent.queued.len();
     if dropped > 0 {
         notice(
@@ -378,4 +439,41 @@ pub fn cancel_agent(state: &mut AppState, ctx: &egui::Context) {
     }
     state.ui.agent.phase = AgentPhase::Idle;
     ctx.request_repaint();
+}
+
+#[cfg(test)]
+mod qm_request_tests {
+    use super::*;
+    use crate::backend::config::ExternalAgentAccess;
+
+    #[test]
+    fn diagnostic_request_forces_controlled_access_and_only_three_tools() {
+        let mut state = AppState::scratch(Default::default(), Vec::new());
+        state.ui.agent.external_access = ExternalAgentAccess::Unrestricted;
+        state.config.assistant.external_agent_access = ExternalAgentAccess::Unrestricted;
+        state.ui.agent.qm_diagnostic_only = true;
+        let (config, tools) = request_config_and_tools(&state);
+        assert_eq!(
+            config.external_agent_access,
+            ExternalAgentAccess::Controlled
+        );
+        let mut names: Vec<_> = tools.iter().map(|tool| tool.name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, ["inspect", "list_jobs", "recommend_method"]);
+        assert_eq!(
+            state.ui.agent.external_access,
+            ExternalAgentAccess::Unrestricted
+        );
+        assert_eq!(
+            state.config.assistant.external_agent_access,
+            ExternalAgentAccess::Unrestricted
+        );
+        state.ui.agent.qm_diagnostic_only = false;
+        let (config, tools) = request_config_and_tools(&state);
+        assert_eq!(
+            config.external_agent_access,
+            ExternalAgentAccess::Unrestricted
+        );
+        assert!(tools.iter().any(|tool| tool.name == "run_command"));
+    }
 }

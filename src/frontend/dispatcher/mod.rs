@@ -400,6 +400,9 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SwitchProviderModel { provider, model } => {
             crate::frontend::agent::switch_provider_model(state, &provider, &model)
         }
+        AppAction::SetAutoDiagnoseQmIssues(on) => {
+            crate::frontend::agent::loop_driver::set_auto_diagnose_qm_issues(state, on)
+        }
         AppAction::SetAssistantEnabled(on) => {
             crate::frontend::agent::set_assistant_enabled(state, on)
         }

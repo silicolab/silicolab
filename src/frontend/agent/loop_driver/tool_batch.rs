@@ -10,7 +10,9 @@ use crate::frontend::state::AppState;
 use crate::io::llm::types::{ChatMessage, ContentBlock, Role, ToolCall};
 
 pub fn run_tool_batch(state: &mut AppState, ctx: &egui::Context) {
-    if state.config.assistant.approval_mode == ApprovalMode::Plan {
+    if !state.ui.agent.qm_diagnostic_only
+        && state.config.assistant.approval_mode == ApprovalMode::Plan
+    {
         propose_in_plan_mode(state, ctx);
         return;
     }
@@ -50,6 +52,9 @@ pub fn run_tool_batch(state: &mut AppState, ctx: &egui::Context) {
 /// Whether `call` should pause the batch for approval: gated by the policy and
 /// not already pre-approved by the user in this batch.
 fn gate_blocks(state: &AppState, call: &ToolCall) -> bool {
+    if state.ui.agent.qm_diagnostic_only {
+        return false;
+    }
     if state.ui.agent.approved_ids.contains(&call.id) {
         return false;
     }
@@ -109,6 +114,15 @@ fn propose_in_plan_mode(state: &mut AppState, ctx: &egui::Context) {
 /// computation runs off-thread, reporting back later through the queue.
 pub fn dispatch_call(state: &mut AppState, call: &ToolCall, ctx: &egui::Context) -> bool {
     push_tool_call_entry(state, call);
+    if state.ui.agent.qm_diagnostic_only && !tools::diagnostic_tool_allowed(&call.name) {
+        record_result(
+            state,
+            call,
+            "QM diagnosis is read only; await a new user instruction.".into(),
+            true,
+        );
+        return false;
+    }
     if let Some(succeeded) = spawn_agent_online_structure_search(state, call, ctx) {
         return succeeded;
     }

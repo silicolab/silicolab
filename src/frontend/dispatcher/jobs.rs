@@ -155,50 +155,50 @@ pub(crate) fn save_qm_artifacts(
     state: &mut AppState,
     run_dir: &Path,
     outcome: &crate::engines::qm::QmOutcome,
-) {
-    if let Err(error) = std::fs::create_dir_all(run_dir) {
-        state.log_system(
-            SystemSubsystem::Storage,
-            LogLevel::Warn,
-            format!("failed to create QM run directory: {error}"),
-        );
-        return;
-    }
-
-    let path = run_dir.join(QM_OUTPUT_FILE);
-    let mut text = outcome.summary.clone();
-    if !text.ends_with('\n') {
-        text.push('\n');
-    }
-    match std::fs::write(&path, text) {
-        Ok(()) => state.log_system(
-            SystemSubsystem::File,
-            LogLevel::Info,
-            format!("QM output saved to {}", path.display()),
-        ),
-        Err(error) => state.log_system(
-            SystemSubsystem::Storage,
-            LogLevel::Warn,
-            format!("failed to save QM output: {error}"),
-        ),
-    }
-
+) -> crate::backend::run_attempt::QmResult {
+    use crate::backend::run_attempt::{ArtifactStatus, QmResult};
+    use anyhow::Context;
+    let save = |result: anyhow::Result<()>| match result {
+        Ok(()) => ArtifactStatus::Saved,
+        Err(error) => ArtifactStatus::Failed(format!("{error:#}")),
+    };
+    let report = save((|| {
+        std::fs::create_dir_all(run_dir)
+            .with_context(|| format!("create {}", run_dir.display()))?;
+        let path = run_dir.join(QM_OUTPUT_FILE);
+        let mut text = outcome.summary.clone();
+        if !text.ends_with('\n') {
+            text.push('\n');
+        }
+        std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
+        Ok(())
+    })());
     let series = crate::backend::runs::QmSeries::from_outcome(outcome);
-    if series.is_empty() {
-        return;
-    }
-    match crate::backend::runs::save_qm_series_file(run_dir, &series) {
-        Ok(path) => state.log_system(
-            SystemSubsystem::File,
-            LogLevel::Info,
-            format!("QM series saved to {}", path.display()),
-        ),
-        Err(error) => state.log_system(
-            SystemSubsystem::Storage,
-            LogLevel::Warn,
-            format!("failed to save QM series: {error}"),
-        ),
-    }
+    let series = if series.is_empty() {
+        ArtifactStatus::NotApplicable
+    } else {
+        save((|| {
+            std::fs::create_dir_all(run_dir)
+                .with_context(|| format!("create {}", run_dir.display()))?;
+            crate::backend::runs::save_qm_series_file(run_dir, &series)?;
+            Ok(())
+        })())
+    };
+    let result = QmResult {
+        converged: outcome.converged,
+        report,
+        series,
+    };
+    state.log_system(
+        SystemSubsystem::Storage,
+        if result.artifacts_complete() {
+            LogLevel::Info
+        } else {
+            LogLevel::Warn
+        },
+        result.summary(),
+    );
+    result
 }
 
 /// Mark an entry as the output of a QM run (the provenance badge). The report

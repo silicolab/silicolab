@@ -67,6 +67,16 @@ pub(crate) fn render_assistant_settings(
 
     let pal = crate::frontend::theme::palette(ui);
 
+    let mut diagnose = state.config.assistant.auto_diagnose_qm_issues;
+    if ui
+        .checkbox(
+            &mut diagnose,
+            "Automatically diagnose QM issues (read only)",
+        )
+        .changed()
+    {
+        actions.push(AppAction::SetAutoDiagnoseQmIssues(diagnose));
+    }
     let mut enabled = state.config.assistant.enabled;
     if ui.checkbox(&mut enabled, "Enable the assistant").changed() {
         actions.push(AppAction::SetAssistantEnabled(enabled));

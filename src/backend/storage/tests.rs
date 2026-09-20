@@ -645,6 +645,7 @@ fn assistant_history_survives_save_and_load() {
         next_conversation_number: 3,
         conversations: vec![PersistedAssistantConversation {
             external_access: Default::default(),
+            qm_diagnostic_only: false,
             id: 2,
             title: "Protein setup".to_string(),
             provider: "openai".to_string(),
@@ -749,6 +750,7 @@ fn corrupt_assistant_state_warns_but_project_loads() {
             assistant: ProjectAssistantSnapshot {
                 conversations: vec![PersistedAssistantConversation {
                     external_access: Default::default(),
+                    qm_diagnostic_only: false,
                     id: 1,
                     title: "Chat".to_string(),
                     provider: "anthropic".to_string(),

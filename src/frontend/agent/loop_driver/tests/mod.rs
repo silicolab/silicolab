@@ -588,3 +588,5 @@ fn crystal_rules_require_selection_and_post_import_confirmation() {
 mod jobs;
 
 mod provenance;
+
+mod qm_diagnosis;

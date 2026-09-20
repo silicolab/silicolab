@@ -436,6 +436,7 @@ fn finish_agent_job(
     // does, then surface the same job-scoped feedback.
     crate::frontend::dispatcher::complete_local_job(state, Some(tracked.job_id), status);
     match status {
+        TaskStatus::Completed if matches!(&tracked.job, AgentHeavyJob::Qm(_)) => {}
         TaskStatus::Completed => state.job_succeeded(tracked.job_id, summary.clone()),
         TaskStatus::Failed => state.job_failed(tracked.job_id, summary.clone()),
         _ => state.job_notice(tracked.job_id, summary.clone()),
@@ -447,14 +448,87 @@ fn finish_agent_job(
     } else {
         "finished"
     };
-    let note = format!("Background job #{} ({}) {verb}.", tracked.id, tracked.label);
-    if let Some(conversation) = state.ui.agent.conversation_mut(tracked.conversation) {
-        conversation.transcript.push(TranscriptEntry::Notice(note));
-        conversation.queued.push_back(PendingTurn::JobDone {
-            label: tracked.label.clone(),
+    let is_qm = matches!(&tracked.job, AgentHeavyJob::Qm(_));
+    let result = state
+        .tasks
+        .runs
+        .execution(&tracked.job_id.to_string())
+        .and_then(|e| e.qm_result.clone());
+    let issue =
+        is_qm && !cancelled && (is_error || result.as_ref().is_none_or(|r| r.needs_diagnosis()));
+    let evidence = state
+        .tasks
+        .task_run(tracked.task_run_id)
+        .and_then(|t| t.run_dir.as_ref())
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "unknown".into());
+    let note = if is_qm {
+        format!(
+            "Background job #{} ({}, job {}, task {}) {verb}. {}\n{}\nEvidence directory: {}",
+            tracked.id,
+            tracked.label,
+            tracked.job_id,
+            tracked.task_run_id,
             summary,
-            is_error,
-        });
+            result
+                .as_ref()
+                .map(|r| r.summary())
+                .unwrap_or_else(|| "QM result status unknown".into()),
+            evidence
+        )
+    } else {
+        format!("Background job #{} ({}) {verb}.", tracked.id, tracked.label)
+    };
+    if issue
+        && tracked.conversation == state.ui.agent.active_conversation
+        && let Some(job) = state.jobs.agent.take()
+    {
+        job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+    if let Some(conversation) = state.ui.agent.conversation_mut(tracked.conversation) {
+        if issue {
+            conversation.truncate_to_resumable();
+            conversation.qm_diagnostic_only = true;
+            let dropped = conversation
+                .queued
+                .iter()
+                .filter(|p| matches!(p, PendingTurn::UserMessage(_)))
+                .count();
+            conversation.queued.clear();
+            if dropped > 0 {
+                conversation
+                    .transcript
+                    .push(TranscriptEntry::Notice(format!(
+                        "Discarded {dropped} queued message(s) — QM requires diagnosis."
+                    )));
+            }
+            conversation.pending_calls.clear();
+            conversation.approved_ids.clear();
+            conversation.approval_inputs = None;
+            conversation.collected_results.clear();
+            conversation.streaming_text.clear();
+            conversation.current_backlog = None;
+            conversation.phase = crate::frontend::agent::session::AgentPhase::Idle;
+            conversation.history.push(crate::io::llm::types::ChatMessage::user_text(format!("{note}\nDiagnose read only, explain evidence and suggestions, then wait for new user instructions.")));
+        }
+        conversation.transcript.push(TranscriptEntry::Notice(note));
+        if cancelled {
+            return;
+        }
+        if is_qm {
+            conversation.queued.push_back(PendingTurn::QmDone {
+                job_id: tracked.job_id.to_string(),
+                summary,
+                result,
+                execution_failed: is_error,
+            });
+        } else {
+            conversation.queued.push_back(PendingTurn::JobDone {
+                label: tracked.label.clone(),
+                summary,
+                is_error,
+            });
+        }
     }
 }
 
@@ -489,37 +563,42 @@ fn drain_qm(
     state: &mut AppState,
     running: &mut RunningQmJob,
     task_run_id: u64,
-    _job_id: JobId,
+    job_id: JobId,
 ) -> Option<(String, bool)> {
-    let mut completion = None;
-    while let Ok(message) = running.receiver.try_recv() {
-        match message {
-            QmWorkerMessage::Progress { stage } => {
-                running.latest_stage = Some(stage);
-            }
-            QmWorkerMessage::Finished(outcome) => {
+    loop {
+        match running.receiver.try_recv() {
+            Ok(QmWorkerMessage::Progress { stage }) => running.latest_stage = Some(stage),
+            Ok(QmWorkerMessage::Finished(outcome)) => {
                 if running.cancel_requested {
-                    completion = Some(("QM calculation cancelled".to_string(), true));
-                    continue;
+                    return Some(("QM calculation cancelled".to_string(), true));
                 }
                 let summary = outcome.summary.clone();
                 let cx = crate::frontend::dispatcher::JobContext {
-                    job_id: Some(_job_id),
+                    job_id: Some(job_id),
                     task_run_id: Some(task_run_id),
                 };
                 crate::frontend::dispatcher::apply_qm_outcome(state, &cx, *outcome);
-                completion = Some((summary, false));
+                return Some((summary, false));
             }
-            QmWorkerMessage::Failed(error) => {
-                completion = if running.cancel_requested {
-                    Some(("QM calculation cancelled".to_string(), true))
+            Ok(QmWorkerMessage::Failed(error)) => {
+                let summary = if running.cancel_requested {
+                    "QM calculation cancelled".to_string()
                 } else {
-                    Some((format!("QM calculation failed: {error}"), true))
+                    format!("QM calculation failed: {error}")
                 };
+                return Some((summary, true));
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => return None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                let summary = if running.cancel_requested {
+                    "QM calculation cancelled"
+                } else {
+                    "QM worker stopped without a result"
+                };
+                return Some((summary.to_string(), true));
             }
         }
     }
-    completion
 }
 
 fn drain_engine(
