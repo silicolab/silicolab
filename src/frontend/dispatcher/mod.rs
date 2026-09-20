@@ -63,6 +63,7 @@ mod feedback_tests;
 mod files;
 mod gromacs;
 mod heavy_render;
+mod image_export;
 mod jobs;
 mod project;
 mod ptm;
@@ -142,6 +143,10 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::OpenExportDialog { entry_id } => open_export_dialog(state, entry_id),
         AppAction::RunExport => run_export(state),
         AppAction::CancelExport => cancel_export(state),
+        AppAction::OpenImageExportDialog => image_export::open(state),
+        AppAction::ChooseImageExportPath => image_export::choose_path(state),
+        AppAction::RunImageExport => image_export::run(state),
+        AppAction::CancelImageExport => state.ui.pending_image_export = None,
         AppAction::Undo => undo(state),
         AppAction::Redo => redo(state),
         AppAction::EditStructure => edit_structure(state),

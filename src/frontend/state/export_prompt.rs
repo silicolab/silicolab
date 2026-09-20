@@ -54,3 +54,48 @@ impl ExportPrompt {
         }
     }
 }
+
+#[derive(Debug, Clone)]
+pub(crate) struct ImageExportPrompt {
+    pub path: String,
+    pub width: String,
+    pub height: String,
+    pub background: crate::frontend::viewport::ImageExportBackground,
+}
+
+impl ImageExportPrompt {
+    pub fn new(size: [u32; 2]) -> Self {
+        Self {
+            path: "image.png".into(),
+            width: size[0].to_string(),
+            height: size[1].to_string(),
+            background: Default::default(),
+        }
+    }
+
+    pub fn validate(&self) -> anyhow::Result<(std::path::PathBuf, [u32; 2])> {
+        anyhow::ensure!(!self.path.trim().is_empty(), "Choose a PNG output path");
+        let path = std::path::PathBuf::from(&self.path);
+        anyhow::ensure!(
+            path.extension()
+                .and_then(|s| s.to_str())
+                .is_some_and(|s| s.eq_ignore_ascii_case("png")),
+            "Output path must end in .png"
+        );
+        anyhow::ensure!(!path.is_dir(), "Output path is a directory");
+        let dimension = |text: &str| -> anyhow::Result<u32> {
+            let value = text.trim().parse::<u32>().ok().filter(|v| *v > 0);
+            value.ok_or_else(|| anyhow::anyhow!("Width and height must be positive integers"))
+        };
+        if let crate::frontend::viewport::ImageExportBackground::Custom(color) = self.background {
+            anyhow::ensure!(color.a() == 255, "Custom background must be opaque RGB");
+        }
+        Ok((path, [dimension(&self.width)?, dimension(&self.height)?]))
+    }
+
+    pub fn apply_chosen_path(&mut self, path: Option<std::path::PathBuf>) {
+        if let Some(path) = path {
+            self.path = path.to_string_lossy().into_owned();
+        }
+    }
+}

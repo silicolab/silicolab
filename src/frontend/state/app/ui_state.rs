@@ -208,6 +208,7 @@ pub struct UiState {
     pub pending_ptm: Option<PendingPtm>,
     pub pending_pdb_fetch: Option<String>,
     pub online_structure_search: Option<OnlineStructureSearchState>,
+    pub(crate) pending_image_export: Option<crate::frontend::state::ImageExportPrompt>,
     /// The open Export dialog's draft, or `None` when it is closed.
     pub pending_export: Option<crate::frontend::state::ExportPrompt>,
     /// Modal confirmation shown before leaving when the current workspace has
@@ -357,6 +358,7 @@ impl Default for UiState {
             pending_pdb_fetch: None,
             online_structure_search: None,
             pending_export: None,
+            pending_image_export: None,
             leave_confirmation: None,
             allow_window_close: false,
             request_window_close: false,
