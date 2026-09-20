@@ -326,7 +326,7 @@ fn cancel_resolves_a_running_tool_entry() {
                 result: Some(text),
                 is_error: true,
                 ..
-            } if text == "Cancelled."
+            } if text.contains("turn cancelled")
         )
     });
     assert!(cancelled);
@@ -590,3 +590,4 @@ mod jobs;
 mod provenance;
 
 mod qm_diagnosis;
+mod recovery;

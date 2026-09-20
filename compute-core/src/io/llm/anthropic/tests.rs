@@ -201,3 +201,65 @@ fn empty_assistant_turn_renders_nonempty_content() {
     assert!(!blocks.is_empty(), "content array must never be empty");
     assert_eq!(rendered["role"], "assistant");
 }
+
+#[test]
+fn interrupted_exchange_keeps_reasoning_and_pairs_results_before_continuation() {
+    let thinking = json!({"type": "thinking", "thinking": "opaque", "signature": "sig"});
+    let history = vec![
+        ChatMessage::user_text("original goal"),
+        ChatMessage {
+            role: Role::Assistant,
+            content: vec![
+                ContentBlock::OpaqueReasoning(ReasoningBlob::Anthropic(vec![thinking.clone()])),
+                ContentBlock::ToolUse {
+                    id: "started".into(),
+                    name: "run_command".into(),
+                    input: json!({}),
+                },
+                ContentBlock::ToolUse {
+                    id: "pending".into(),
+                    name: "run_command".into(),
+                    input: json!({}),
+                },
+            ],
+        },
+        ChatMessage {
+            role: Role::Tool,
+            content: vec![
+                ContentBlock::ToolResult {
+                    tool_use_id: "started".into(),
+                    content: "Started job #42".into(),
+                    is_error: false,
+                },
+                ContentBlock::ToolResult {
+                    tool_use_id: "pending".into(),
+                    content: "Not executed: turn cancelled.".into(),
+                    is_error: true,
+                },
+            ],
+        },
+        ChatMessage::user_text("continue"),
+    ];
+    let provider = AnthropicProvider::new("unused".into(), "claude-sonnet-4-6".into());
+    let cfg = LlmConfig {
+        model: "claude-sonnet-4-6".into(),
+        effort: Effort::High,
+        max_output_tokens: 1000,
+        stream: false,
+        system: "system".into(),
+        working_dir: None,
+    };
+    let body = provider.build_request_body(&cfg, &[], &history);
+    let messages = body["messages"].as_array().unwrap();
+    assert_eq!(messages.len(), 4);
+    assert_eq!(messages[0]["content"][0]["text"], "original goal");
+    assert_eq!(messages[1]["content"][0], thinking);
+    for (index, id) in ["started", "pending"].iter().enumerate() {
+        assert_eq!(messages[1]["content"][index + 1]["id"], *id);
+        assert_eq!(messages[2]["content"][index]["tool_use_id"], *id);
+    }
+    assert_eq!(messages[2]["role"], "user");
+    assert_eq!(messages[2]["content"][0]["is_error"], false);
+    assert_eq!(messages[2]["content"][1]["is_error"], true);
+    assert_eq!(messages[3]["content"][0]["text"], "continue");
+}

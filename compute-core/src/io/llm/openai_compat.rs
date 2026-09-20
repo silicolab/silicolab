@@ -661,4 +661,59 @@ mod tests {
         let without = assistant_to_json(&message, false);
         assert!(without.get("reasoning_content").is_none());
     }
+    #[test]
+    fn interrupted_exchange_keeps_reasoning_and_pairs_results_before_continuation() {
+        let history = vec![
+            ChatMessage::user_text("original goal"),
+            ChatMessage {
+                role: Role::Assistant,
+                content: vec![
+                    ContentBlock::OpaqueReasoning(ReasoningBlob::OpenAiCompat {
+                        reasoning_content: Some("opaque".into()),
+                    }),
+                    ContentBlock::ToolUse {
+                        id: "started".into(),
+                        name: "run_command".into(),
+                        input: json!({}),
+                    },
+                    ContentBlock::ToolUse {
+                        id: "pending".into(),
+                        name: "run_command".into(),
+                        input: json!({}),
+                    },
+                ],
+            },
+            ChatMessage {
+                role: Role::Tool,
+                content: vec![
+                    ContentBlock::ToolResult {
+                        tool_use_id: "started".into(),
+                        content: "Started job #42".into(),
+                        is_error: false,
+                    },
+                    ContentBlock::ToolResult {
+                        tool_use_id: "pending".into(),
+                        content: "Not executed: turn cancelled.".into(),
+                        is_error: true,
+                    },
+                ],
+            },
+            ChatMessage::user_text("continue"),
+        ];
+        let mut messages = Vec::new();
+        for message in &history {
+            append_messages(message, true, &mut messages);
+        }
+        assert_eq!(messages.len(), 5);
+        assert_eq!(messages[0]["content"], "original goal");
+        assert_eq!(messages[1]["reasoning_content"], "opaque");
+        for (index, id) in ["started", "pending"].iter().enumerate() {
+            assert_eq!(messages[1]["tool_calls"][index]["id"], *id);
+            assert_eq!(messages[index + 2]["role"], "tool");
+            assert_eq!(messages[index + 2]["tool_call_id"], *id);
+        }
+        assert_eq!(messages[2]["content"], "Started job #42");
+        assert_eq!(messages[3]["content"], "Not executed: turn cancelled.");
+        assert_eq!(messages[4]["content"], "continue");
+    }
 }

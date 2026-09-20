@@ -83,7 +83,7 @@ fn persist_conversation(conversation: &AssistantConversation) -> PersistedAssist
         || !conversation.streaming_text.is_empty()
         || !conversation.pending_calls.is_empty()
         || !conversation.collected_results.is_empty();
-    resumable.truncate_to_resumable();
+    resumable.recover_interrupted("session restored from a saved snapshot");
     let mut transcript = resumable
         .transcript
         .iter()
@@ -129,6 +129,7 @@ fn restore_conversation(payload: PersistedAssistantConversation) -> AssistantCon
     conversation.input = payload.input;
     conversation.session_usage = restore_usage(payload.session_usage);
     conversation.last_usage = payload.last_usage.map(restore_usage);
+    conversation.recover_interrupted("session restored from a saved snapshot");
     conversation.phase = if conversation.has_activity() {
         AgentPhase::Done
     } else {

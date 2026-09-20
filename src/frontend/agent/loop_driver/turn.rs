@@ -30,11 +30,10 @@ pub fn send_agent_message(state: &mut AppState, text: &str, ctx: &egui::Context)
         if let Some(job) = state.jobs.agent.take() {
             job.cancel.store(true, Ordering::Relaxed);
         }
-        state.ui.agent.truncate_to_resumable();
-        state.ui.agent.pending_calls.clear();
-        state.ui.agent.collected_results.clear();
-        state.ui.agent.approved_ids.clear();
-        state.ui.agent.approval_inputs = None;
+        state
+            .ui
+            .agent
+            .recover_interrupted("continuing the conversation");
         state.ui.agent.streaming_text.clear();
         state.ui.agent.queued.clear();
         state.ui.agent.phase = AgentPhase::Idle;
@@ -70,7 +69,10 @@ fn begin_user_turn(state: &mut AppState, text: &str, ctx: &egui::Context) {
     }
 
     // Keep the replayed history valid if a prior exchange was interrupted.
-    state.ui.agent.truncate_to_resumable();
+    state
+        .ui
+        .agent
+        .recover_interrupted("continuing the conversation");
     state.ui.agent.maybe_title_from_first_user_message(text);
     state.ui.agent.history.push(ChatMessage::user_text(text));
     state
@@ -89,6 +91,10 @@ pub fn spawn_next_turn(state: &mut AppState, ctx: &egui::Context) {
             state,
             &format!("Stopped after {MAX_ITERATIONS} steps (loop bound)."),
         );
+        state
+            .ui
+            .agent
+            .recover_interrupted("iteration limit reached");
         state.ui.agent.phase = AgentPhase::Done;
         ctx.request_repaint();
         return;
@@ -99,6 +105,10 @@ pub fn spawn_next_turn(state: &mut AppState, ctx: &egui::Context) {
     let provider = match registry::build_provider(&assistant_config, &selection) {
         Ok(provider) => provider,
         Err(reason) => {
+            state
+                .ui
+                .agent
+                .recover_interrupted(&format!("model request could not start: {reason}"));
             notice(state, &reason);
             state.ui.agent.phase = AgentPhase::Idle;
             ctx.request_repaint();
@@ -165,6 +175,7 @@ pub fn poll_agent_turn(state: &mut AppState, ctx: &egui::Context) {
 
     if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
         job.cancel.store(true, Ordering::Relaxed);
+        state.ui.agent.recover_interrupted("turn cancelled");
         // Drop the handle; a late worker result lands on a closed channel.
         state.ui.agent.streaming_text.clear();
         discard_queued(state, "the turn was cancelled");
@@ -193,6 +204,7 @@ pub fn poll_agent_turn(state: &mut AppState, ctx: &egui::Context) {
                 return;
             }
             Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                state.ui.agent.recover_interrupted("worker disconnected");
                 state.ui.agent.streaming_text.clear();
                 discard_queued(state, "the turn ended early");
                 state.ui.agent.current_backlog = None;
@@ -216,6 +228,10 @@ pub fn handle_turn_result(
         Ok(turn) => turn,
         Err(error) => {
             let message = error.user_message();
+            state
+                .ui
+                .agent
+                .recover_interrupted(&format!("model request ended: {message}"));
             notice(state, &format!("Assistant error: {message}"));
             state.log_agent(None, LogLevel::Error, format!("assistant error: {message}"));
             let cancelled = matches!(error, LlmError::Cancelled);
@@ -374,7 +390,10 @@ fn begin_job_followup(
         notice(state, &reason);
         return;
     }
-    state.ui.agent.truncate_to_resumable();
+    state
+        .ui
+        .agent
+        .recover_interrupted("continuing the conversation");
     let text = job_followup_text(label, summary, is_error);
     state.ui.agent.history.push(ChatMessage::user_text(&text));
     state.ui.agent.iterations = 0;
@@ -427,11 +446,8 @@ pub fn cancel_agent(state: &mut AppState, ctx: &egui::Context) {
     }
     let active = state.ui.agent.active_conversation;
     let cancelled_jobs = cancel_conversation_jobs(state, active);
-    fill_pending_tool_entry(state, "Cancelled.", true);
-    state.ui.agent.pending_calls.clear();
-    state.ui.agent.approved_ids.clear();
-    state.ui.agent.approval_inputs = None;
-    state.ui.agent.collected_results.clear();
+    state.ui.agent.recover_interrupted("turn cancelled");
+    state.ui.agent.streaming_text.clear();
     discard_queued(state, "the turn was cancelled");
     state.ui.agent.current_backlog = None;
     if state.ui.agent.phase != AgentPhase::Idle || cancelled_jobs > 0 {

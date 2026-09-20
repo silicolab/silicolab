@@ -53,12 +53,34 @@ fn qm_issue_stops_old_turn_approval_and_queue_even_when_diagnosis_disabled() {
             cancel: cancel.clone(),
             receiver,
         });
-        state.ui.agent.phase = phase;
         state
             .ui
             .agent
-            .pending_calls
-            .push_back(turn_with_tool("qm energy").tool_calls.remove(0));
+            .history
+            .push(ChatMessage::user_text("original QM goal"));
+        state
+            .ui
+            .agent
+            .history
+            .push(fallback_encode(&turn_with_tools(&[
+                "sketch C",
+                "qm energy",
+            ])));
+        state
+            .ui
+            .agent
+            .collected_results
+            .push(ContentBlock::ToolResult {
+                tool_use_id: "call_1".into(),
+                content: "Created methane".into(),
+                is_error: false,
+            });
+        state.ui.agent.phase = phase;
+        state.ui.agent.pending_calls.push_back(
+            turn_with_tools(&["sketch C", "qm energy"])
+                .tool_calls
+                .remove(1),
+        );
         state.ui.agent.approved_ids.insert("call_1".into());
         state
             .ui
@@ -82,6 +104,9 @@ fn qm_issue_stops_old_turn_approval_and_queue_even_when_diagnosis_disabled() {
                 .any(|e| matches!(e, TranscriptEntry::Notice(n) if n.contains("Discarded 1")))
         );
         let history = format!("{:?}", state.ui.agent.history);
+        assert!(history.contains("original QM goal"));
+        assert!(history.contains("Created methane"));
+        assert!(history.contains("Not executed: QM issue requires read-only diagnosis"));
         assert!(history.contains(&job_id.to_string()));
         assert!(history.contains("raw evidence"));
         assert!(history.contains("not converged"));
@@ -191,6 +216,11 @@ fn qm_restriction_survives_snapshot_switch_and_other_completion_until_new_user_m
     let mut state = offline_state();
     state.config.assistant.auto_diagnose_qm_issues = false;
     let origin = state.ui.agent.active_conversation;
+    state
+        .ui
+        .agent
+        .history
+        .push(ChatMessage::user_text("original goal"));
     let (job_id, dir) = completed_job(&mut state, false);
     state.ui.agent.start_new_conversation(Default::default());
     let other = state.ui.agent.active_conversation;
@@ -231,6 +261,10 @@ fn qm_restriction_survives_snapshot_switch_and_other_completion_until_new_user_m
         &egui::Context::default(),
     );
     assert!(!state.ui.agent.qm_diagnostic_only);
+    let history = format!("{:?}", state.ui.agent.history);
+    assert!(history.contains("original goal"));
+    assert!(history.contains("raw evidence"));
+    assert!(history.contains("Wait for user."));
     assert!(
         !state
             .tasks

@@ -11,6 +11,9 @@ use crate::frontend::console::RiskLevel;
 use crate::io::llm::types::{ChatMessage, ContentBlock, ToolCall, Usage};
 
 mod persistence;
+mod recovery;
+#[cfg(test)]
+mod recovery_tests;
 
 /// Where the session is in the turn cycle.
 ///
@@ -252,19 +255,6 @@ impl AssistantConversation {
             || self.session_usage.output > 0
             || self.last_usage.is_some()
     }
-
-    /// Trim the history back to a clean continuation boundary: the last
-    /// assistant message that made no tool call (or empty). Drops a dangling
-    /// `tool_use` without results, an unanswered user turn, or a half-finished
-    /// tool batch — all invalid as the prefix before a new user message.
-    pub fn truncate_to_resumable(&mut self) {
-        while let Some(last) = self.history.last() {
-            if last.is_resumable_assistant() {
-                break;
-            }
-            self.history.pop();
-        }
-    }
 }
 
 pub struct AgentSession {
@@ -488,14 +478,6 @@ impl AgentSession {
         if conversation.title.starts_with("Chat ") && !conversation.has_activity() {
             conversation.title = title_from_message(text);
         }
-    }
-
-    /// Trim the history back to a clean continuation boundary: the last
-    /// assistant message that made no tool call (or empty). Drops a dangling
-    /// `tool_use` without results, an unanswered user turn, or a half-finished
-    /// tool batch — all invalid as the prefix before a new user message.
-    pub fn truncate_to_resumable(&mut self) {
-        self.active_mut().truncate_to_resumable();
     }
 }
 
