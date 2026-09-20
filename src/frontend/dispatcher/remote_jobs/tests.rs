@@ -26,6 +26,23 @@ fn qm_remote_row(job_id: &str, run_dir: &std::path::Path) -> registry::RemoteJob
     }
 }
 
+fn bind_remote_task(state: &mut AppState, dir: &std::path::Path) -> String {
+    let task = state
+        .tasks
+        .create_task_run(*task_controller_by_id("qm-energy").unwrap());
+    state.tasks.set_run_dir(task, dir.to_path_buf());
+    state
+        .tasks
+        .runs
+        .begin_execution(
+            task,
+            crate::backend::run_attempt::Placement::Remote { host: None },
+            None,
+            0,
+        )
+        .to_string()
+}
+
 #[test]
 fn remote_qm_report_records_once_and_creates_no_entry() {
     // import cardinality (0 entry): a single-point energy report creates no
@@ -35,7 +52,8 @@ fn remote_qm_report_records_once_and_creates_no_entry() {
     let _ = std::fs::remove_dir_all(&run_dir);
     std::fs::create_dir_all(&run_dir).unwrap();
     let mut state = AppState::scratch(Default::default(), Vec::new());
-    let row = qm_remote_row("job-qm", &run_dir);
+    let job_id = bind_remote_task(&mut state, &run_dir);
+    let row = qm_remote_row(&job_id, &run_dir);
     let outcome = crate::engines::qm::QmOutcome {
         energy_hartree: -1.5,
         converged: true,
@@ -53,7 +71,7 @@ fn remote_qm_report_records_once_and_creates_no_entry() {
     );
     let record = state
         .materializations
-        .get("job-qm")
+        .get(&job_id)
         .expect("the report is recorded in the ledger");
     assert!(record.primary_entry_id.is_none());
     assert!(record.entries.is_empty());
@@ -88,13 +106,14 @@ fn open_project_compensation_imports_present_outcome_and_flags_missing() {
     .unwrap();
 
     let mut state = AppState::scratch(Default::default(), Vec::new());
-    let present = qm_remote_row("job-present", &present_dir);
+    let present_id = bind_remote_task(&mut state, &present_dir);
+    let present = qm_remote_row(&present_id, &present_dir);
     let missing = qm_remote_row("job-missing", &root.join("missing"));
 
     import_completed_remote_jobs(&mut state, vec![present, missing]);
 
     assert!(
-        state.materializations.contains("job-present"),
+        state.materializations.contains(&present_id),
         "the downloaded outcome is imported"
     );
     assert!(

@@ -404,6 +404,13 @@ impl TaskStatus {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct TaskInput {
+    pub role: String,
+    pub entry_id: u64,
+    pub revision: u64,
+}
+
 #[derive(Debug, Clone)]
 pub struct TaskRun {
     /// In-memory handle used by the UI and actions. Stable within a project, but
@@ -425,6 +432,7 @@ pub struct TaskRun {
     pub status: TaskStatus,
     pub run_dir: Option<PathBuf>,
     pub source_entry_id: Option<u64>,
+    pub inputs: Option<Vec<TaskInput>>,
     pub result_entry_id: Option<u64>,
     pub engine_label: Option<String>,
     pub created_at_ms: u64,
@@ -457,6 +465,7 @@ impl TaskRun {
             status: TaskStatus::Ready,
             run_dir: None,
             source_entry_id: None,
+            inputs: None,
             result_entry_id: None,
             engine_label: None,
             created_at_ms: now_unix_ms(),

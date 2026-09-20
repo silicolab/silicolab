@@ -257,6 +257,7 @@ pub(crate) fn replace_workspace_from_project(
     let recovered_from_crash = housekeeping::acquire_lock(&project);
     state.workspace = WorkspaceSession::Project(project.clone());
     state.entries = snapshot.entries;
+    state.ui.submitted_compute_prompts.clear();
     state.tasks = snapshot.tasks;
     state.materializations = snapshot.materializations;
     state.history = snapshot.history;
@@ -397,6 +398,7 @@ fn close_project_without_persist(state: &mut AppState, run_maintenance: bool) {
     }
     state.workspace = WorkspaceSession::Scratch;
     state.entries = EntryStore::new_empty();
+    state.ui.submitted_compute_prompts.clear();
     state.tasks = TaskManager::default();
     state.materializations = Default::default();
     state.ui.project_viewport = Default::default();

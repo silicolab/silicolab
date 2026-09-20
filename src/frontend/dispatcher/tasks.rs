@@ -116,10 +116,6 @@ pub(crate) fn ensure_active_task_run_dir(
     ensure_task_run_dir(state, task_run_id, kind, desired_name)
 }
 
-/// Create (once) the run directory of a specific task run and record the entry it
-/// was launched from. Both are written only on first creation, so the run stays
-/// anchored to the structure that was actually computed even if the user
-/// activates a different entry while it is still running.
 pub(crate) fn ensure_task_run_dir(
     state: &mut AppState,
     task_run_id: u64,
@@ -134,7 +130,8 @@ pub(crate) fn ensure_task_run_dir(
     if task.kind != kind {
         bail!("task run #{task_run_id} is not {kind:?}");
     }
-    if let Some(run_dir) = task.run_dir {
+    if let Some(run_dir) = task.run_dir.clone() {
+        crate::frontend::task_executor::sync_task_manifest(state, task_run_id)?;
         return Ok(run_dir);
     }
     if !task.uses_run_directory {
@@ -151,10 +148,7 @@ pub(crate) fn ensure_task_run_dir(
         .unwrap_or_else(|| crate::backend::runs::default_run_name(&runs_dir, task.controller_id));
     let run_dir = ensure_run_dir(&runs_dir, &name)?;
     state.tasks.set_run_dir(task_run_id, run_dir.clone());
-    state
-        .tasks
-        .set_source_entry_id(task_run_id, state.entries.active_entry_id());
-    sync_task_manifest(state, task_run_id);
+    crate::frontend::task_executor::sync_task_manifest(state, task_run_id)?;
     Ok(run_dir)
 }
 
@@ -340,6 +334,33 @@ pub(crate) fn ensure_panel_form(state: &mut AppState, task_run_id: u64) {
     let Some(task) = state.tasks.task_run(task_run_id).cloned() else {
         return;
     };
+    if matches!(
+        task.panel,
+        TaskPanelKind::QmPrompt | TaskPanelKind::DockingPrompt | TaskPanelKind::MdRunPrompt
+    ) {
+        if matches!(task.status, TaskStatus::Running | TaskStatus::Cancelling) {
+            return;
+        }
+        if let Some(submitted) = state
+            .ui
+            .submitted_compute_prompts
+            .get(&task_run_id)
+            .cloned()
+        {
+            use crate::frontend::state::SubmittedComputePrompt;
+            match submitted {
+                SubmittedComputePrompt::Qm(prompt) => {
+                    state.ui.pending_qm.get_or_insert(*prompt);
+                }
+                SubmittedComputePrompt::Docking(prompt) => {
+                    state.ui.pending_docking.get_or_insert(*prompt);
+                }
+                SubmittedComputePrompt::Md(prompt) => {
+                    state.ui.pending_md_run.get_or_insert(*prompt);
+                }
+            }
+        }
+    }
     match task.panel {
         TaskPanelKind::OptimizationPrompt => {
             let allow_cell = task.kind == TaskKind::OptimizeCrystalGeometry;
@@ -545,6 +566,110 @@ pub(crate) fn bind_active_panel_task(state: &mut AppState, panel: TaskPanelKind)
 pub(crate) fn close_active_task_panel(state: &mut AppState) {
     if let Some(task_run_id) = state.tasks.active_panel {
         close_task_panel(state, task_run_id);
+    }
+}
+
+pub(crate) fn bind_task_inputs(
+    state: &mut AppState,
+    task_id: u64,
+    inputs: Vec<crate::backend::tasks::TaskInput>,
+) -> anyhow::Result<()> {
+    let task = state
+        .tasks
+        .task_run_mut(task_id)
+        .ok_or_else(|| anyhow!("task #{task_id} not found"))?;
+    if let Some(bound) = &task.inputs {
+        if bound != &inputs {
+            bail!("task #{task_id} already has different inputs");
+        }
+        return Ok(());
+    }
+    task.source_entry_id = inputs
+        .iter()
+        .find(|input| matches!(input.role.as_str(), "primary" | "ligand"))
+        .map(|input| input.entry_id);
+    task.inputs = Some(inputs);
+    state.tasks.mark_task_runs_dirty([task_id]);
+    Ok(())
+}
+
+pub(crate) fn prepare_compute_run(
+    state: &mut AppState,
+    panel: TaskPanelKind,
+    inputs: Vec<crate::backend::tasks::TaskInput>,
+    name: Option<&str>,
+) -> anyhow::Result<PathBuf> {
+    let id = state
+        .tasks
+        .active_panel
+        .or(state.active_task_run)
+        .ok_or_else(|| anyhow!("no compute task panel"))?;
+    let task = state
+        .tasks
+        .task_run(id)
+        .ok_or_else(|| anyhow!("task #{id} not found"))?
+        .clone();
+    if task.panel != panel {
+        bail!("active panel does not match calculation");
+    }
+    let id = if task.inputs.is_some()
+        || task.status.is_terminal()
+        || matches!(task.status, TaskStatus::Running | TaskStatus::Cancelling)
+    {
+        let controller = task_controller_by_id(task.controller_id)
+            .copied()
+            .ok_or_else(|| anyhow!("unknown task controller"))?;
+        let id = state.tasks.create_task_run(controller);
+        state.tasks.open_panel(id);
+        state
+            .ui
+            .layout
+            .dock
+            .add_task(id, state.config.default_task_panel_placement);
+        id
+    } else {
+        id
+    };
+    state.active_task_run = Some(id);
+    let prepared = bind_task_inputs(state, id, inputs)
+        .and_then(|()| ensure_task_run_dir(state, id, task.kind, name));
+    if prepared.is_err() {
+        state.tasks.mark_status(id, TaskStatus::Failed);
+    }
+    prepared
+}
+
+pub(crate) fn dismiss_submitted_compute_prompt(state: &mut AppState) {
+    use crate::frontend::state::SubmittedComputePrompt;
+    let Some(task) = state
+        .active_task_run
+        .and_then(|id| state.tasks.task_run(id))
+    else {
+        return;
+    };
+    let submitted = match task.panel {
+        TaskPanelKind::QmPrompt => state
+            .ui
+            .pending_qm
+            .take()
+            .map(|prompt| SubmittedComputePrompt::Qm(Box::new(prompt))),
+        TaskPanelKind::DockingPrompt => state
+            .ui
+            .pending_docking
+            .take()
+            .map(|prompt| SubmittedComputePrompt::Docking(Box::new(prompt))),
+        TaskPanelKind::MdRunPrompt => state
+            .ui
+            .pending_md_run
+            .take()
+            .map(|prompt| SubmittedComputePrompt::Md(Box::new(prompt))),
+        _ => None,
+    };
+    if let Some(submitted) = submitted {
+        state
+            .ui
+            .submitted_compute_prompts
+            .insert(task.id, submitted);
     }
 }
 

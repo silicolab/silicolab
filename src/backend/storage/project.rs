@@ -255,8 +255,8 @@ fn write_project_snapshot_tx(
                 result_entry_id,
                 engine_label,
                 created_at_ms,
-                finished_at_ms
-            ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                finished_at_ms, inputs_json
+            ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 task.id as i64,
                 task.run_uuid,
@@ -268,6 +268,10 @@ fn write_project_snapshot_tx(
                 task.engine_label.as_deref(),
                 task.created_at_ms as i64,
                 task.finished_at_ms.map(|value| value as i64),
+                task.inputs
+                    .as_ref()
+                    .map(serde_json::to_string)
+                    .transpose()?,
             ],
         )?;
     }

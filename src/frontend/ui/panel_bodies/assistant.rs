@@ -44,6 +44,18 @@ pub(crate) fn render_assistant_panel(
     let key_present = state.ui.agent.key_available.unwrap_or(false);
     // Cloned so the cards can render without holding a borrow on `state`.
     let gated_calls = crate::frontend::agent::gated_pending(state);
+    let approval_inputs = state.ui.agent.approval_inputs.as_ref().map(|(_, inputs)| {
+        inputs
+            .iter()
+            .map(|input| {
+                format!(
+                    "{}: #{} (revision {})",
+                    input.role, input.entry_id, input.revision
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
+    });
     let active_id = state.ui.agent.active_conversation;
     // Snapshot the queued (type-ahead) follow-ups so the strip can render without
     // holding a borrow on `state` while the composer mutably borrows the input.
@@ -85,7 +97,11 @@ pub(crate) fn render_assistant_panel(
 
             let toolbar_height = 32.0;
             let panel_width = ui.available_width();
-            let approval_height = approval_block_height(&gated_calls, panel_width);
+            let approval_height = approval_block_height(&gated_calls, panel_width)
+                + approval_inputs
+                    .as_deref()
+                    .map(|text| approval_input_height(text, panel_width))
+                    .unwrap_or(0.0);
             let running_height = running_strip_height(&running_jobs);
             let queued_height = queued_strip_height(&queued);
             let footer_height = approval_height
@@ -195,7 +211,14 @@ pub(crate) fn render_assistant_panel(
                         ui.add_space(4.0);
                     }
                     for call in &gated_calls {
-                        render_approval_card(ui, &pal, actions, call, panel_width);
+                        render_approval_card(
+                            ui,
+                            &pal,
+                            actions,
+                            call,
+                            panel_width,
+                            approval_inputs.as_deref(),
+                        );
                         ui.add_space(6.0);
                     }
                 });
@@ -451,6 +474,7 @@ fn render_approval_card(
     actions: &mut Vec<AppAction>,
     call: &crate::io::llm::types::ToolCall,
     panel_width: f32,
+    inputs: Option<&str>,
 ) {
     use crate::frontend::console::RiskLevel;
     use crate::frontend::theme::radius;
@@ -463,7 +487,10 @@ fn render_approval_card(
     } else {
         pal.status_amber
     };
-    let card_height = approval_card_height(call, panel_width);
+    let card_height = approval_card_height(call, panel_width)
+        + inputs
+            .map(|text| approval_input_height(text, panel_width))
+            .unwrap_or(0.0);
 
     assistant_inset_row(ui, card_height, |ui| {
         let frame_inner_width = (panel_width - 20.0).max(48.0);
@@ -490,6 +517,9 @@ fn render_approval_card(
                     egui::Label::new(assistant_text(command).color(pal.text_primary))
                         .wrap_mode(egui::TextWrapMode::Wrap),
                 );
+                if let Some(inputs) = inputs {
+                    ui.label(RichText::new(inputs).small().color(pal.text_primary));
+                }
                 if let Some(impact) = &impact {
                     ui.label(RichText::new(impact).small().color(pal.text_tertiary));
                 }
@@ -670,4 +700,11 @@ fn render_assistant_empty_state(
 /// callout fills that stay readable on either theme.
 fn blend(a: Color32, b: Color32, t: f32) -> Color32 {
     crate::frontend::theme::mix(a, b, t)
+}
+
+fn approval_input_height(text: &str, panel_width: f32) -> f32 {
+    (text.chars().count() as f32 / ((panel_width - 40.0).max(48.0) / 7.0))
+        .ceil()
+        .max(1.0)
+        * 18.0
 }

@@ -30,7 +30,7 @@ pub use monitor::RemoteGpuLive;
 pub use monitor::RemoteGpuView;
 pub use ui_state::{
     OnlineStructurePhase, OnlineStructureSearchState, SelfUpdateStatus, SequenceDragState,
-    SequenceViewerState, TextViewer, UiState,
+    SequenceViewerState, SubmittedComputePrompt, TextViewer, UiState,
 };
 
 use super::*;

@@ -171,6 +171,10 @@ fn ensure_task_run_columns(db: &Connection) -> Result<()> {
         Ok(())
     };
 
+    add_column(
+        "inputs_json",
+        "alter table task_runs add column inputs_json text",
+    )?;
     add_column("run_uuid", "alter table task_runs add column run_uuid text")?;
     add_column("run_dir", "alter table task_runs add column run_dir text")?;
     add_column(

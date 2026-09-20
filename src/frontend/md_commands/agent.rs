@@ -1,7 +1,4 @@
-//! The agent's async heavy `run_md` tool: build a [`GromacsPipelineRequest`] from
-//! an `md <run|simulate>` line so it can be spawned off the UI thread. Mirrors the
-//! synchronous run/simulate setup but targets a plain run directory (no Task
-//! plumbing). The active entry must already carry an MD system (`md build` first).
+//! Request assembly for assistant MD jobs. The launcher supplies the prepared task directory.
 
 use super::*;
 
@@ -11,7 +8,6 @@ use anyhow::{Result, anyhow, bail};
 
 use crate::frontend::md_support::protocol_stage_specs;
 use crate::{
-    backend::runs::ensure_run_dir,
     engines::gromacs::{render_top, stage_specs_from_md_stages, topology::TopologySource},
     frontend::state::AppState,
     workflows::molecular_dynamics::{
@@ -23,32 +19,32 @@ use crate::{
     },
 };
 
-/// Build a GROMACS pipeline request for the agent's async `run_md` tool from a
-/// `md <run|simulate>` line (subcommand + flags). Mirrors the synchronous
-/// [`md_run`] / [`md_simulate`] setup but targets a plain run directory and
-/// returns the request so it can be spawned off the UI thread (no Task plumbing).
-/// The active entry must already carry an MD system (run `md build` first).
-pub fn build_agent_md_request(
-    state: &AppState,
-    args: &[String],
-) -> Result<crate::frontend::jobs::GromacsPipelineRequest> {
+pub struct AgentMdDraft {
+    request: crate::frontend::jobs::GromacsPipelineRequest,
+}
+
+impl AgentMdDraft {
+    pub fn with_working_dir(
+        mut self,
+        working_dir: PathBuf,
+    ) -> crate::frontend::jobs::GromacsPipelineRequest {
+        self.request.working_dir = working_dir;
+        self.request
+    }
+}
+
+pub fn build_agent_md_request(state: &AppState, args: &[String]) -> Result<AgentMdDraft> {
     let Some(sub) = args.first().map(String::as_str) else {
         bail!("usage: md <run|simulate> [options]");
     };
-    match sub {
+    let request = match sub {
         "run" => build_agent_md_run(state, &args[1..]),
         "simulate" => build_agent_md_simulate(state, &args[1..]),
         other => {
             bail!("`md {other}` is not a runnable simulation (use `md run` or `md simulate`)")
         }
-    }
-}
-
-/// A fresh run directory for an agent-initiated MD run (outside the Task system).
-fn agent_md_run_dir(state: &AppState) -> Result<PathBuf> {
-    let runs_dir = state.runs_dir();
-    let name = crate::backend::runs::default_run_name(&runs_dir, "run-md");
-    ensure_run_dir(&runs_dir, &name)
+    }?;
+    Ok(AgentMdDraft { request })
 }
 
 fn build_agent_md_run(
@@ -119,7 +115,7 @@ fn build_agent_md_run(
     }
     let topology = resolve_run_topology(state, entry_id)?;
     let launch = resolve_launch(state)?;
-    let working_dir = agent_md_run_dir(state)?;
+    let working_dir = PathBuf::new();
 
     Ok(crate::frontend::jobs::GromacsPipelineRequest {
         structure,
@@ -169,7 +165,7 @@ fn build_agent_md_simulate(
         }
     }
     let launch = resolve_launch(state)?;
-    let working_dir = agent_md_run_dir(state)?;
+    let working_dir = PathBuf::new();
 
     Ok(crate::frontend::jobs::GromacsPipelineRequest {
         structure,

@@ -76,6 +76,15 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
             }
             meta.freeze_selection()
         });
+    let prepare_run = |state: &mut AppState| {
+        let input = crate::frontend::entry_ref::primary_input(state)?;
+        prepare_compute_run(
+            state,
+            TaskPanelKind::MdRunPrompt,
+            vec![input],
+            Some(&prompt.run_name),
+        )
+    };
     // A remote target relays the whole pipeline to a deployed worker, which runs
     // the `gmx` the submission resolved against that host; the local arm runs
     // `gmx` here.
@@ -87,6 +96,10 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
                 return;
             }
         };
+        if let Err(error) = prepare_run(state) {
+            state.status_error(format!("could not prepare MD run: {error}"));
+            return;
+        }
         let job = crate::workflows::gromacs::GromacsJob::Run(
             crate::workflows::gromacs::GromacsRunRequest {
                 structure: state.structure().clone(),
@@ -101,7 +114,6 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
             },
         );
         state.optimization_origin = None;
-        state.ui.pending_md_run = None;
         let resources = prompt.prefs.job_resources();
         relay_gromacs_job(state, host, prompt.engine.label(), job, resources);
         return;
@@ -119,18 +131,17 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
         gpu: prompt.prefs.gpu.count(),
     };
 
-    let working_dir =
-        match ensure_active_task_run_dir(state, TaskKind::RunMd, Some(prompt.run_name.as_str())) {
-            Ok(path) => path,
-            Err(error) => {
-                state.report_system_error(
-                    SystemSubsystem::Storage,
-                    format!("failed to create run directory: {error}"),
-                );
-                complete_active_task(state, TaskKind::RunMd, TaskStatus::Failed);
-                return;
-            }
-        };
+    let working_dir = match prepare_run(state) {
+        Ok(path) => path,
+        Err(error) => {
+            state.report_system_error(
+                SystemSubsystem::Storage,
+                format!("failed to create run directory: {error}"),
+            );
+            complete_active_task(state, TaskKind::RunMd, TaskStatus::Failed);
+            return;
+        }
+    };
     if let Some(task_run_id) = state.active_task_run {
         state
             .tasks
@@ -147,7 +158,6 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
         freeze: framework_freeze,
     });
     state.optimization_origin = None;
-    state.ui.pending_md_run = None;
     state.jobs.set_engine(job);
     if let Some(task_run_id) = state.active_task_run {
         begin_local_job(
@@ -157,6 +167,7 @@ pub(crate) fn start_pending_md_run(state: &mut AppState) {
         );
         mark_task_status(state, task_run_id, TaskStatus::Running);
     }
+    dismiss_submitted_compute_prompt(state);
     state.status_neutral(format!(
         "{} MD running; press Esc to stop",
         prompt.engine.label()

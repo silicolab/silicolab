@@ -16,6 +16,13 @@ use crate::frontend::{
 
 use super::monitor::{MonitorHistory, RemoteGpuLive};
 
+#[derive(Clone)]
+pub enum SubmittedComputePrompt {
+    Qm(Box<QmPrompt>),
+    Docking(Box<DockingPrompt>),
+    Md(Box<MdRunPrompt>),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum OnlineStructurePhase {
     #[default]
@@ -191,6 +198,7 @@ pub struct UiState {
     pub block_editor: Option<BuildingBlockEditor>,
     pub pending_optimization: Option<OptimizationPrompt>,
     pub pending_qm: Option<QmPrompt>,
+    pub submitted_compute_prompts: BTreeMap<u64, SubmittedComputePrompt>,
     pub pending_supercell: Option<SupercellPrompt>,
     pub pending_protein_prep: Option<ProteinPrepPrompt>,
     pub pending_md_system: Option<MdSystemPrompt>,
@@ -338,6 +346,7 @@ impl Default for UiState {
             block_editor: None,
             pending_optimization: None,
             pending_qm: None,
+            submitted_compute_prompts: BTreeMap::new(),
             pending_supercell: None,
             pending_protein_prep: None,
             pending_md_system: None,

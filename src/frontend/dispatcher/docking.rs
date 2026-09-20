@@ -50,7 +50,14 @@ pub(crate) fn start_pending_docking(state: &mut AppState) {
     };
     // Create the run directory up front so the poses artifact has a home and the
     // run records its source entry.
-    if let Err(error) = ensure_active_task_run_dir(state, TaskKind::RunDocking, None) {
+    let prepared = (|| -> anyhow::Result<PathBuf> {
+        let inputs = vec![
+            crate::frontend::entry_ref::input_reference(state, "receptor", receptor_id)?,
+            crate::frontend::entry_ref::input_reference(state, "ligand", ligand_id)?,
+        ];
+        prepare_compute_run(state, TaskPanelKind::DockingPrompt, inputs, None)
+    })();
+    if let Err(error) = prepared {
         state.report_system_error(
             SystemSubsystem::Storage,
             format!("could not create docking run directory: {error}"),
@@ -75,7 +82,6 @@ pub(crate) fn start_pending_docking(state: &mut AppState) {
         },
     };
 
-    state.ui.pending_docking = None;
     match resolve_remote_host(state, &prompt.prefs.target) {
         // A configured remote target: deploy + submit detached, tracked via the
         // job registry and the opt-in refresh. Docking is single-threaded, so no
@@ -98,8 +104,9 @@ pub(crate) fn start_pending_docking(state: &mut AppState) {
                     crate::frontend::jobs::LocalJobSlot::Docking,
                     task_run_id,
                 );
-                state.tasks.mark_status(task_run_id, TaskStatus::Running);
+                mark_task_status(state, task_run_id, TaskStatus::Running);
             }
+            dismiss_submitted_compute_prompt(state);
             state.status_neutral("docking running; press Esc to stop");
         }
     }
@@ -182,13 +189,20 @@ impl JobRuntime for RunningDockingJob {
 
 /// Apply a finished local docking search: save the poses, add one entry per pose,
 /// and record them in the ledger so a re-poll never re-creates them.
-fn apply_docking_outcome(state: &mut AppState, cx: &JobContext, outcome: DockingOutcome) {
+pub(crate) fn apply_docking_outcome(
+    state: &mut AppState,
+    cx: &JobContext,
+    outcome: DockingOutcome,
+) {
+    if !compute_identity_valid(state, cx) {
+        return;
+    }
     if let Some(job_id) = cx.job_id {
         for line in outcome.summary.lines() {
             state.append_job_log(job_id, LogLevel::Info, line);
         }
     }
-    let poses_path = save_dock_poses(state, &outcome);
+    let poses_path = save_dock_poses(state, cx.task_run_id, &outcome);
     let already = cx
         .job_id
         .is_some_and(|id| outcome_already_materialized(state, &id.to_string()));
@@ -250,6 +264,13 @@ pub(crate) fn apply_remote_docking_outcome(
     let belongs_here = outcome_belongs_to_current_workspace(state, row);
     let already = outcome_already_materialized(state, &row.job_id);
     let task_id = state.tasks.runs.task_run_id_for_job(&row.job_id);
+    if belongs_here && !task_id.is_some_and(|id| state.tasks.task_run(id).is_some()) {
+        state.report_unscoped_remote_error(format!(
+            "Cannot import remote result {}: missing task identity",
+            row.job_id
+        ));
+        return;
+    }
 
     if belongs_here && !already {
         let pose_ids = add_dock_pose_entries(state, &outcome, task_id, poses_path);
@@ -291,8 +312,16 @@ fn dock_poses_pdbqt(outcome: &DockingOutcome) -> String {
 /// Persist all poses as one multi-`MODEL` PDBQT in the task's run directory, the
 /// way the QM run saves its report. Failures are logged but never abort result
 /// handling. Returns the written path.
-fn save_dock_poses(state: &mut AppState, outcome: &DockingOutcome) -> Option<PathBuf> {
-    let run_dir = match ensure_active_task_run_dir(state, TaskKind::RunDocking, None) {
+fn save_dock_poses(
+    state: &mut AppState,
+    task_id: Option<u64>,
+    outcome: &DockingOutcome,
+) -> Option<PathBuf> {
+    let run_dir = match task_id
+        .and_then(|id| state.tasks.task_run(id))
+        .and_then(|task| task.run_dir.clone())
+        .ok_or_else(|| anyhow!("missing docking run identity or directory"))
+    {
         Ok(run_dir) => run_dir,
         Err(error) => {
             state.log_system(
@@ -472,14 +501,28 @@ mod tests {
         let _ = std::fs::remove_dir_all(&run_dir);
         std::fs::create_dir_all(&run_dir).unwrap();
         let mut state = AppState::scratch(Default::default(), Vec::new());
-        let row = remote_row("job-dock", &run_dir);
+        let task = state
+            .tasks
+            .create_task_run(*task_controller_by_id("dock-ligand").unwrap());
+        state.tasks.set_run_dir(task, run_dir.clone());
+        let job_id = state
+            .tasks
+            .runs
+            .begin_execution(
+                task,
+                crate::backend::run_attempt::Placement::Remote { host: None },
+                None,
+                0,
+            )
+            .to_string();
+        let row = remote_row(&job_id, &run_dir);
 
         apply_remote_docking_outcome(&mut state, &row, dock_outcome(3));
         let after_first = state.entries.records.len();
         assert_eq!(after_first, 3, "three poses become three entries");
         let record = state
             .materializations
-            .get("job-dock")
+            .get(&job_id)
             .expect("the poses are recorded in the ledger");
         assert_eq!(record.entries.len(), 3);
         assert_eq!(

@@ -19,9 +19,10 @@ pub fn create_cli_task_run(state: &mut AppState, template_id: &'static str) -> R
         .copied()
         .ok_or_else(|| anyhow!("unknown task template `{template_id}`"))?;
     let task_run_id = state.tasks.create_task_run(controller);
-    state
-        .tasks
-        .set_source_entry_id(task_run_id, state.entries.active_entry_id());
+    if state.entries.active_entry_id().is_some() {
+        let input = crate::frontend::entry_ref::primary_input(state)?;
+        crate::frontend::dispatcher::bind_task_inputs(state, task_run_id, vec![input])?;
+    }
     sync_cli_task_manifest(state, task_run_id)?;
     Ok(task_run_id)
 }

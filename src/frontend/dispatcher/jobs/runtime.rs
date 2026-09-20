@@ -17,6 +17,20 @@ pub(crate) struct JobContext {
     pub task_run_id: Option<u64>,
 }
 
+pub(crate) fn compute_identity_valid(state: &mut AppState, cx: &JobContext) -> bool {
+    let valid = cx.job_id.zip(cx.task_run_id).is_some_and(|(job, task)| {
+        state.tasks.task_run(task).is_some()
+            && state.tasks.runs.task_run_id_for_job(&job.to_string()) == Some(task)
+    });
+    if !valid {
+        state.report_system_error(
+            crate::frontend::state::SystemSubsystem::Storage,
+            "Cannot import compute result: missing or inconsistent job/task identity".to_string(),
+        );
+    }
+    valid
+}
+
 /// The lifecycle result of draining one runtime for a frame.
 pub(crate) enum JobPoll {
     /// Still running: the driver puts the handle back and schedules the next poll.

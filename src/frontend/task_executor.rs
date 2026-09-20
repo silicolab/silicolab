@@ -204,9 +204,17 @@ fn open_panel_task(state: &mut AppState, task_run_id: u64) {
 
 fn wait_for_input(state: &mut AppState, task_run_id: u64) {
     state.active_task_run = Some(task_run_id);
-    state
-        .tasks
-        .mark_status(task_run_id, TaskStatus::WaitingInput);
+    let already_run = state.tasks.task_run(task_run_id).is_some_and(|task| {
+        task.uses_run_directory
+            && (task.inputs.is_some()
+                || task.status.is_terminal()
+                || matches!(task.status, TaskStatus::Running | TaskStatus::Cancelling))
+    });
+    if !already_run {
+        state
+            .tasks
+            .mark_status(task_run_id, TaskStatus::WaitingInput);
+    }
 }
 
 #[cfg(test)]

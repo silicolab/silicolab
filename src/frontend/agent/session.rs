@@ -138,10 +138,9 @@ pub struct AssistantConversation {
     /// Whole risk levels the user chose to auto-allow this conversation. Never
     /// holds `Destructive` (that always prompts).
     pub allowed_risks: HashSet<RiskLevel>,
-    /// Ids of gated calls the user approved in the current batch but which have
-    /// not run yet (an earlier call is still awaiting a decision). Lets the batch
-    /// be resolved in any order while executing in queue order.
+    /// Approval granted to the queue head for immediate execution.
     pub approved_ids: HashSet<String>,
+    pub approval_inputs: Option<(String, Vec<crate::backend::tasks::TaskInput>)>,
     /// Live preview of the assistant text streaming in this turn. Shown beneath
     /// the transcript while `AwaitingModel`, then cleared and replaced by the
     /// authoritative final text when the turn completes.
@@ -178,6 +177,7 @@ impl AssistantConversation {
             allowed_verbs: HashSet::new(),
             allowed_risks: HashSet::new(),
             approved_ids: HashSet::new(),
+            approval_inputs: None,
             streaming_text: String::new(),
             queued: VecDeque::new(),
             current_backlog: None,
