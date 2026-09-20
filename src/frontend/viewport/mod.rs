@@ -16,7 +16,7 @@ mod visual_state;
 
 pub use camera::ViewCamera;
 pub(crate) use camera::view_center_and_radius;
-pub(crate) use export::PendingViewportPngExport;
+pub(crate) use export::{ImageExportBackground, PendingViewportPngExport};
 pub(crate) use gpu::{GpuExporter, init as init_gpu_renderer};
 pub use visual_state::{
     CartoonSectionStyle, LightPreset, SilhouetteMode, SurfaceStyle, ViewportCartoonState,
@@ -263,11 +263,7 @@ pub fn draw_viewport(ui: &mut egui::Ui, args: ViewportDrawArgs<'_>) -> ViewportI
     // The default background follows the app theme (dark in dark mode); an
     // explicit user-chosen color in settings is left untouched.
     let pal = crate::frontend::theme::palette(ui);
-    let background = if visual_state.background_follows_theme() {
-        pal.viewport_bg
-    } else {
-        visual_state.background_color
-    };
+    let background = visual_state.resolve_background(pal.viewport_bg);
     let (rect, response) = ui.allocate_exact_size(available, Sense::click_and_drag());
     let painter = ui.painter_at(rect);
 

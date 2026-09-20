@@ -475,7 +475,7 @@ impl eframe::App for SilicoLabApp {
                 .gpu_exporter
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("GPU exporter is not initialized"))
-                .and_then(|exporter| request.execute(exporter));
+                .and_then(|exporter| request.execute(exporter, &ctx));
             match result {
                 Ok(()) => self
                     .state

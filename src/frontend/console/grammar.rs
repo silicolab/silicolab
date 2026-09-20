@@ -294,10 +294,10 @@ pub(crate) struct ViewArgs {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum ViewKind {
-    /// Background color (named or `#rrggbb`).
+    /// Background: theme, a named color, or `#rrggbb`.
     Background {
-        #[arg(value_parser = parse_color_value)]
-        color: Color32,
+        #[arg(value_parser = super::args::parse_background_color)]
+        color: super::args::BackgroundColor,
     },
     /// Requested off-screen render size in pixels.
     Size { width: f32, height: f32 },
@@ -461,7 +461,12 @@ pub(crate) enum DeleteTarget {
 #[derive(Debug, Subcommand)]
 pub(crate) enum SaveTarget {
     /// Render the viewport to a PNG.
-    Image { path: PathBuf },
+    Image {
+        path: PathBuf,
+        /// viewport, white, transparent (for white backing), or a color.
+        #[arg(long, default_value = "viewport", value_parser = super::args::parse_export_background)]
+        background: crate::frontend::viewport::ImageExportBackground,
+    },
     /// Save the current view as a replayable `.sls` script.
     View { path: PathBuf },
 }

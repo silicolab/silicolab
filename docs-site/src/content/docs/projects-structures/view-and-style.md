@@ -129,3 +129,25 @@ property.
 - [Select entries, atoms, and sequence residues](../selection-and-sequence/)
 - [Edit and export structures](../edit-and-export/)
 - [Understand entries, groups, and action scope](../entries-and-groups/)
+
+## PNG backgrounds
+
+The Scene background can follow the theme or use an opaque custom color.
+`view background theme` restores theme tracking; named colors and `#rrggbb`
+set a fixed color. Add `--global` to apply it across entries. Saved view scripts
+include the background mode.
+
+```text
+view size 3840 2160
+save image figure.png
+save image figure.png --background white
+save image figure.png --background transparent
+save image figure.png --background #102030
+```
+
+PNG export defaults to the viewport background, resolving the active theme when
+the GUI processes the request. Export options do not change the viewport.
+Transparent PNGs preserve alpha and use white as the reference for outlines and
+contrast, so they are intended for composition on white. Existing output files
+are overwritten. Image export requires the GUI's GPU renderer; CLI mode reports
+an error without creating a file.

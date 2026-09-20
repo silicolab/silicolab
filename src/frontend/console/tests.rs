@@ -430,7 +430,7 @@ fn view_script_export_roundtrips() {
     let viewport = &state.ui.viewport;
     assert_eq!(
         viewport.background_color,
-        Color32::from_rgb(0x10, 0x20, 0x30)
+        Some(Color32::from_rgb(0x10, 0x20, 0x30))
     );
     assert!(!viewport.show_cell);
     assert_eq!(viewport.lighting.preset, LightPreset::Studio);

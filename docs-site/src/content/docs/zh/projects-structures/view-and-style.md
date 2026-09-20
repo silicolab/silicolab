@@ -111,3 +111,21 @@ view contrast off
 - [选择条目、原子和序列残基](../selection-and-sequence/)
 - [编辑与导出结构](../edit-and-export/)
 - [理解条目、分组和操作范围](../entries-and-groups/)
+
+## PNG 背景
+
+Scene 背景可选择跟随主题或固定的不透明颜色。`view background theme`
+恢复跟随主题；命名颜色及 `#rrggbb` 设置固定颜色。添加 `--global`
+可应用到所有条目。保存的视图脚本会明确记录背景模式。
+
+```text
+view size 3840 2160
+save image figure.png
+save image figure.png --background white
+save image figure.png --background transparent
+save image figure.png --background #102030
+```
+
+PNG 默认使用视口背景，在 GUI 处理请求时解析当前主题。导出选项不会修改视口。
+透明 PNG 保留 alpha，并以白色为描边和对比度计算的衬底，适用于白底排版。
+已有输出文件会被覆盖。图片导出需要 GUI 的 GPU 渲染器；CLI 模式会报错且不生成文件。

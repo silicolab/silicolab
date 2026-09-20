@@ -562,3 +562,6 @@ pub(super) fn emit(
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod background_tests;
