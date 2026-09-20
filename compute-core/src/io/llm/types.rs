@@ -54,19 +54,6 @@ impl ChatMessage {
             content: vec![ContentBlock::Text(text.into())],
         }
     }
-
-    /// Whether this is a "resumable" assistant turn: an assistant message that
-    /// made no tool call, so the conversation can validly continue with a fresh
-    /// user message after it. Used to trim an interrupted exchange back to a
-    /// clean boundary (a dangling `tool_use` or bare user turn is invalid input
-    /// to most providers).
-    pub fn is_resumable_assistant(&self) -> bool {
-        self.role == Role::Assistant
-            && !self
-                .content
-                .iter()
-                .any(|block| matches!(block, ContentBlock::ToolUse { .. }))
-    }
 }
 
 /// A tool the model may call, described as a JSON Schema. Provider-neutral; each

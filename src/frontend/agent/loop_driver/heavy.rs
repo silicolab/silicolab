@@ -487,7 +487,7 @@ fn finish_agent_job(
     }
     if let Some(conversation) = state.ui.agent.conversation_mut(tracked.conversation) {
         if issue {
-            conversation.truncate_to_resumable();
+            conversation.recover_interrupted("QM issue requires read-only diagnosis");
             conversation.qm_diagnostic_only = true;
             let dropped = conversation
                 .queued
@@ -502,10 +502,6 @@ fn finish_agent_job(
                         "Discarded {dropped} queued message(s) — QM requires diagnosis."
                     )));
             }
-            conversation.pending_calls.clear();
-            conversation.approved_ids.clear();
-            conversation.approval_inputs = None;
-            conversation.collected_results.clear();
             conversation.streaming_text.clear();
             conversation.current_backlog = None;
             conversation.phase = crate::frontend::agent::session::AgentPhase::Idle;
