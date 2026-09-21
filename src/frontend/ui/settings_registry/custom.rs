@@ -143,6 +143,10 @@ pub(crate) fn render_assistant_settings(
             });
     });
 
+    if provider.id == crate::backend::config::CUSTOM_ENDPOINT_PROVIDER {
+        super::endpoint_profiles::render_profile_picker(state, ui, actions, &pal);
+    }
+
     // Model picker — built-in models first, then any live-fetched ids for this
     // provider. The static list always shows; a live refresh only augments it.
     let fetched = state
@@ -437,6 +441,7 @@ pub(crate) fn render_assistant_settings(
     );
 
     render_stored_keys_overview(ui, actions, &pal);
+    super::endpoint_profiles::render_profile_rows(state, ui, actions, &pal);
 }
 
 /// The "Stored keys" overview: every provider that currently has a usable key,

@@ -398,6 +398,16 @@ pub enum AppAction {
     /// Remove the stored key for the provider with this id (active "Clear" button
     /// and the per-row Remove in the keys overview).
     ClearStoredKey(String),
+    /// Create an empty custom-endpoint profile with this name and activate it.
+    NewEndpointProfile(String),
+    /// Activate the custom-endpoint profile with this id (base URL, model, key).
+    SelectEndpointProfile(String),
+    RenameEndpointProfile {
+        id: String,
+        name: String,
+    },
+    /// Delete the custom-endpoint profile with this id and its stored key.
+    DeleteEndpointProfile(String),
     /// Fetch the active provider's live model list from its `/models` endpoint.
     RefreshModels,
     /// Set the number of CPU cores QM jobs may use and persist it.

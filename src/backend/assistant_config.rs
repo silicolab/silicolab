@@ -9,6 +9,29 @@ pub struct AssistantModelSelection {
     pub model: String,
 }
 
+/// Provider id of the single bring-your-own OpenAI-compatible registry row.
+/// Its live base URL, model and key are what [`EndpointProfile`]s swap.
+pub const CUSTOM_ENDPOINT_PROVIDER: &str = "custom_openai";
+
+/// A named, saved configuration of the custom OpenAI-compatible provider. The
+/// matching API key lives in the key store under [`endpoint_key_id`], never here.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EndpointProfile {
+    pub id: String,
+    pub name: String,
+    #[serde(default)]
+    pub base_url: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub supports_effort: Option<bool>,
+}
+
+/// Key-store id holding the API key of the endpoint profile `profile_id`.
+pub fn endpoint_key_id(profile_id: &str) -> String {
+    format!("{CUSTOM_ENDPOINT_PROVIDER}:{profile_id}")
+}
+
 /// Sandbox posture handed to an external agent CLI. `Controlled` maps to the
 /// CLI's read-only/plan mode; `Unrestricted` opts into its approval- and
 /// sandbox-bypass flags.
@@ -135,6 +158,13 @@ pub struct AssistantConfig {
     pub external_agent_access: ExternalAgentAccess,
     #[serde(default)]
     pub external_agent_executables: std::collections::BTreeMap<String, String>,
+    /// Saved configurations of the custom OpenAI-compatible provider.
+    #[serde(default)]
+    pub custom_endpoints: Vec<EndpointProfile>,
+    /// The profile mirrored by the live custom-provider settings; edits to those
+    /// settings are captured back into it.
+    #[serde(default)]
+    pub active_custom_endpoint: Option<String>,
 }
 
 impl Default for AssistantConfig {
@@ -149,12 +179,137 @@ impl Default for AssistantConfig {
             approval_mode: ApprovalMode::default(),
             external_agent_access: ExternalAgentAccess::default(),
             external_agent_executables: Default::default(),
+            custom_endpoints: Vec::new(),
+            active_custom_endpoint: None,
         }
+    }
+}
+
+impl AssistantConfig {
+    pub fn active_endpoint(&self) -> Option<&EndpointProfile> {
+        let id = self.active_custom_endpoint.as_deref()?;
+        self.custom_endpoints
+            .iter()
+            .find(|profile| profile.id == id)
+    }
+
+    fn custom_model(&self) -> Option<String> {
+        (self.default_selection.provider == CUSTOM_ENDPOINT_PROVIDER)
+            .then(|| self.default_selection.model.clone())
+    }
+
+    /// Copy the live custom-provider settings into the active profile.
+    pub fn capture_active_endpoint(&mut self) {
+        let Some(id) = self.active_custom_endpoint.clone() else {
+            return;
+        };
+        let base_url = self
+            .base_urls
+            .get(CUSTOM_ENDPOINT_PROVIDER)
+            .cloned()
+            .unwrap_or_default();
+        let model = self.custom_model();
+        let supports_effort = model.as_ref().and_then(|model| {
+            self.model_effort_overrides
+                .get(CUSTOM_ENDPOINT_PROVIDER)
+                .and_then(|models| models.get(model))
+                .copied()
+        });
+        if let Some(profile) = self.custom_endpoints.iter_mut().find(|p| p.id == id) {
+            profile.base_url = base_url;
+            if let Some(model) = model {
+                profile.model = model;
+                profile.supports_effort = supports_effort;
+            }
+        }
+    }
+
+    /// Make `id` the active profile and copy it into the live custom-provider
+    /// settings. Returns the profile's model, or `None` for an unknown id.
+    pub fn apply_endpoint(&mut self, id: &str) -> Option<String> {
+        let profile = self.custom_endpoints.iter().find(|p| p.id == id)?.clone();
+        if profile.base_url.trim().is_empty() {
+            self.base_urls.remove(CUSTOM_ENDPOINT_PROVIDER);
+        } else {
+            self.base_urls
+                .insert(CUSTOM_ENDPOINT_PROVIDER.to_string(), profile.base_url);
+        }
+        if let Some(supported) = profile.supports_effort {
+            self.model_effort_overrides
+                .entry(CUSTOM_ENDPOINT_PROVIDER.to_string())
+                .or_default()
+                .insert(profile.model.clone(), supported);
+        }
+        self.active_custom_endpoint = Some(profile.id);
+        Some(profile.model)
+    }
+
+    /// Append an empty profile named `name` and return its id.
+    pub fn add_endpoint(&mut self, name: &str, model: &str) -> String {
+        let id = (1..)
+            .map(|n| format!("p{n}"))
+            .find(|id| self.custom_endpoints.iter().all(|p| &p.id != id))
+            .unwrap_or_default();
+        self.custom_endpoints.push(EndpointProfile {
+            id: id.clone(),
+            name: name.trim().to_string(),
+            base_url: String::new(),
+            model: model.to_string(),
+            supports_effort: None,
+        });
+        id
     }
 }
 
 fn default_auto_diagnose_qm_issues() -> bool {
     true
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::*;
+
+    #[test]
+    fn old_settings_without_profiles_parse() {
+        let mut value = serde_json::to_value(AssistantConfig::default()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("custom_endpoints");
+        object.remove("active_custom_endpoint");
+        let config: AssistantConfig = serde_json::from_value(value).unwrap();
+        assert!(config.custom_endpoints.is_empty());
+        assert!(config.active_custom_endpoint.is_none());
+    }
+
+    #[test]
+    fn switching_profiles_round_trips_live_settings() {
+        let mut config = AssistantConfig::default();
+        let first = config.add_endpoint("First", "gpt-5.5");
+        config.apply_endpoint(&first);
+        config.default_selection = AssistantModelSelection {
+            provider: CUSTOM_ENDPOINT_PROVIDER.to_string(),
+            model: "model-a".to_string(),
+        };
+        config.base_urls.insert(
+            CUSTOM_ENDPOINT_PROVIDER.to_string(),
+            "https://a.test/v1".to_string(),
+        );
+        config.capture_active_endpoint();
+
+        let second = config.add_endpoint("Second", "gpt-5.5");
+        assert_ne!(first, second);
+        assert_eq!(config.apply_endpoint(&second).as_deref(), Some("gpt-5.5"));
+        assert!(!config.base_urls.contains_key(CUSTOM_ENDPOINT_PROVIDER));
+
+        assert_eq!(config.apply_endpoint(&first).as_deref(), Some("model-a"));
+        assert_eq!(
+            config
+                .base_urls
+                .get(CUSTOM_ENDPOINT_PROVIDER)
+                .map(String::as_str),
+            Some("https://a.test/v1")
+        );
+        assert!(config.apply_endpoint("missing").is_none());
+    }
 }
 
 #[cfg(test)]
