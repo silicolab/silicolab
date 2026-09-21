@@ -226,7 +226,8 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     let assistant_before = (state.workspace.is_project()
         && (state.jobs.agent.is_some()
             || !state.jobs.agent_jobs.is_empty()
-            || !state.jobs.agent_online_structures.is_empty()))
+            || !state.jobs.agent_online_structures.is_empty()
+            || !state.jobs.agent_pdf_reads.is_empty()))
     .then(|| state.assistant_fingerprint());
     crate::frontend::agent::poll_agent_jobs(state, ctx);
     crate::frontend::agent::poll_agent_turn(state, ctx);

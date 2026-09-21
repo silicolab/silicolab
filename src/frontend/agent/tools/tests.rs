@@ -536,3 +536,37 @@ fn clamp_truncates_large_output() {
     assert!(clamped.ends_with("(truncated)"));
     assert!(clamped.chars().count() < big.chars().count());
 }
+
+fn read_pdf_call(path: &str) -> ToolCall {
+    ToolCall {
+        id: "p".to_string(),
+        name: "read_pdf".to_string(),
+        input: json!({ "path": path }),
+    }
+}
+
+#[test]
+fn read_pdf_is_free_inside_the_project_and_gated_outside_it() {
+    let gated_in = |path: &str, mode| {
+        needs_confirmation(&read_pdf_call(path), mode, &HashSet::new(), &HashSet::new())
+    };
+    assert_eq!(
+        risk_of_call(&read_pdf_call("refs/paper.pdf")),
+        RiskLevel::ReadOnly
+    );
+    assert!(!gated_in("refs/paper.pdf", ApprovalMode::Manual));
+
+    assert_eq!(
+        risk_of_call(&read_pdf_call("/Users/me/Downloads/paper.pdf")),
+        RiskLevel::ExternalRead
+    );
+    assert!(gated_in(
+        "/Users/me/Downloads/paper.pdf",
+        ApprovalMode::Manual
+    ));
+    assert!(gated_in("../paper.pdf", ApprovalMode::AutoSafe));
+    assert!(!gated_in(
+        "/Users/me/Downloads/paper.pdf",
+        ApprovalMode::Auto
+    ));
+}

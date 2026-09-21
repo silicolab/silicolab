@@ -60,12 +60,37 @@ fn gate_blocks(state: &AppState, call: &ToolCall) -> bool {
     }
     let mode = state.config.assistant.approval_mode;
     let conversation = state.ui.agent.active();
+    if user_named_pdf(conversation, call) {
+        return false;
+    }
     tools::needs_confirmation(
         call,
         mode,
         &conversation.allowed_verbs,
         &conversation.allowed_risks,
     )
+}
+
+/// A `read_pdf` of a path the user wrote (or dropped) into one of their own
+/// messages is already in scope. Only typed user turns count: background-job
+/// text also enters history as a user message, and a PDF must not be able to
+/// name further files to read.
+fn user_named_pdf(
+    conversation: &crate::frontend::agent::session::AssistantConversation,
+    call: &ToolCall,
+) -> bool {
+    if call.name != "read_pdf" {
+        return false;
+    }
+    let Some(path) = call.input.get("path").and_then(|value| value.as_str()) else {
+        return false;
+    };
+    let path = path.trim();
+    !path.is_empty()
+        && conversation
+            .transcript
+            .iter()
+            .any(|entry| matches!(entry, TranscriptEntry::User(text) if text.contains(path)))
 }
 
 /// The pending calls awaiting a user decision (gated, not yet approved). Drives
@@ -124,6 +149,9 @@ pub fn dispatch_call(state: &mut AppState, call: &ToolCall, ctx: &egui::Context)
         return false;
     }
     if let Some(succeeded) = spawn_agent_online_structure_search(state, call, ctx) {
+        return succeeded;
+    }
+    if let Some(succeeded) = spawn_agent_pdf_read(state, call, ctx) {
         return succeeded;
     }
     if let Some(kind) = heavy_kind_of(call) {

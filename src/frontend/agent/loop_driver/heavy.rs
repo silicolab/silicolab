@@ -97,6 +97,52 @@ pub fn spawn_agent_online_structure_search(
     Some(true)
 }
 
+pub fn spawn_agent_pdf_read(
+    state: &mut AppState,
+    call: &ToolCall,
+    ctx: &egui::Context,
+) -> Option<bool> {
+    if call.name != "read_pdf" {
+        return None;
+    }
+    let project_root = state
+        .workspace
+        .project()
+        .map(|project| project.root.clone());
+    let request = match crate::frontend::agent::tools::pdf::parse_request(
+        &call.input,
+        project_root.as_deref(),
+    ) {
+        Ok(request) => request,
+        Err(reason) => {
+            record_result(state, call, reason, true);
+            return Some(false);
+        }
+    };
+    let id = state.jobs.next_agent_job_id;
+    state.jobs.next_agent_job_id += 1;
+    let label = describe_call(call);
+    state
+        .jobs
+        .agent_pdf_reads
+        .push(crate::frontend::jobs::TrackedAgentPdfJob {
+            id,
+            conversation: state.ui.agent.active_conversation,
+            label: label.clone(),
+            running: crate::frontend::jobs::spawn_pdf_read(request),
+        });
+    record_result(
+        state,
+        call,
+        format!(
+            "Started background PDF read #{id} ({label}). The text will be returned when it finishes."
+        ),
+        false,
+    );
+    ctx.request_repaint_after(AGENT_POLL);
+    Some(true)
+}
+
 /// A short cost/impact hint for an approval card, or `None` when the call has no
 /// special cost (only heavy commands, which run off-thread one at a time, have one).
 pub fn impact_hint(call: &ToolCall) -> Option<String> {
@@ -301,6 +347,7 @@ pub fn spawn_heavy(
 /// completion the queue is pumped, so an idle agent auto-continues the workflow.
 pub fn poll_agent_jobs(state: &mut AppState, ctx: &egui::Context) {
     poll_agent_online_structure_jobs(state, ctx);
+    poll_agent_pdf_jobs(state, ctx);
     if state.jobs.agent_jobs.is_empty() {
         return;
     }
@@ -389,6 +436,50 @@ fn poll_agent_online_structure_jobs(state: &mut AppState, ctx: &egui::Context) {
     }
 }
 
+fn poll_agent_pdf_jobs(state: &mut AppState, ctx: &egui::Context) {
+    if state.jobs.agent_pdf_reads.is_empty() {
+        return;
+    }
+    let jobs = std::mem::take(&mut state.jobs.agent_pdf_reads);
+    let mut survivors = Vec::with_capacity(jobs.len());
+    let mut completed = false;
+    for tracked in jobs {
+        let (summary, is_error) = match tracked.running.receiver.try_recv() {
+            Ok(Ok(text)) => (text, false),
+            Ok(Err(error)) => (error.to_string(), true),
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                survivors.push(tracked);
+                continue;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                ("the PDF reader stopped unexpectedly".to_string(), true)
+            }
+        };
+        if let Some(conversation) = state.ui.agent.conversation_mut(tracked.conversation) {
+            conversation
+                .transcript
+                .push(TranscriptEntry::Notice(format!(
+                    "Background PDF read #{} {}.",
+                    tracked.id,
+                    if is_error { "failed" } else { "finished" }
+                )));
+            conversation.queued.push_back(PendingTurn::JobDone {
+                label: tracked.label,
+                summary,
+                is_error,
+            });
+        }
+        completed = true;
+    }
+    state.jobs.agent_pdf_reads = survivors;
+    if !state.jobs.agent_pdf_reads.is_empty() {
+        ctx.request_repaint_after(AGENT_POLL);
+    }
+    if completed {
+        pump_queue(state, ctx);
+    }
+}
+
 /// Cancel and remove every background job belonging to `conversation`, returning
 /// how many were stopped. Used when the user Stops the agent or deletes a chat, so
 /// detached workers and their orphaned results don't linger.
@@ -411,6 +502,16 @@ pub fn cancel_conversation_jobs(
         .jobs
         .agent_online_structures
         .retain(|job| job.conversation != conversation);
+    let mut cancelled_reads = 0;
+    state.jobs.agent_pdf_reads.retain(|job| {
+        if job.conversation == conversation {
+            job.running.cancel();
+            cancelled_reads += 1;
+            false
+        } else {
+            true
+        }
+    });
     for job_id in &cancelled_jobs {
         crate::frontend::dispatcher::complete_local_job(
             state,
@@ -418,7 +519,7 @@ pub fn cancel_conversation_jobs(
             TaskStatus::Cancelled,
         );
     }
-    cancelled_jobs.len() + before - state.jobs.agent_online_structures.len()
+    cancelled_jobs.len() + before - state.jobs.agent_online_structures.len() + cancelled_reads
 }
 
 /// Route a finished job to the conversation that launched it: a transcript
@@ -669,132 +770,4 @@ pub(crate) fn heavy_inputs(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::backend::tasks::TaskStatus;
-    use crate::frontend::state::AppState;
-
-    #[test]
-    fn agent_qm_subcommands_map_to_controllers() {
-        assert_eq!(
-            agent_task_controller_id(HeavyKind::Qm, "qm energy"),
-            "qm-energy"
-        );
-        assert_eq!(
-            agent_task_controller_id(HeavyKind::Qm, "qm opt"),
-            "qm-optimize"
-        );
-        assert_eq!(
-            agent_task_controller_id(HeavyKind::Qm, "qm freq"),
-            "qm-frequencies"
-        );
-        assert_eq!(
-            agent_task_controller_id(HeavyKind::Qm, "qm ts"),
-            "qm-transition-state"
-        );
-        assert_eq!(agent_task_controller_id(HeavyKind::Md, "md run"), "run-md");
-        assert_eq!(
-            agent_task_controller_id(HeavyKind::Dock, "dock lig"),
-            "dock-ligand"
-        );
-    }
-
-    #[test]
-    fn register_creates_a_ready_task_run() {
-        let mut state = AppState::scratch(Default::default(), Vec::new());
-        let id = register_agent_task_run(&mut state, HeavyKind::Qm, "qm optimize");
-        let task = state.tasks.task_run(id).expect("task run created");
-        assert_eq!(task.controller_id, "qm-optimize");
-        assert_eq!(task.status, TaskStatus::Ready);
-    }
-
-    #[test]
-    fn agent_qm_completion_creates_the_optimized_entry_and_records_the_result() {
-        // QM vertical slice (agent placement): an agent-driven QM run drains to
-        // completion, adds its optimized geometry as an entry, and records it as the
-        // task's result — attributed by the TrackedAgentJob's task_run_id.
-        let mut state = AppState::scratch(Default::default(), Vec::new());
-        let task = register_agent_task_run(&mut state, HeavyKind::Qm, "qm optimize");
-        let job_id = crate::frontend::dispatcher::begin_job_execution(
-            &mut state,
-            task,
-            crate::backend::run_attempt::Placement::Local,
-            Some("qm-optimize".to_string()),
-        );
-
-        let (tx, rx) = std::sync::mpsc::channel();
-        tx.send(QmWorkerMessage::Finished(Box::new(
-            crate::engines::qm::QmOutcome {
-                energy_hartree: -1.0,
-                converged: true,
-                optimized_structure: Some(crate::domain::Structure::empty()),
-                summary: "energy -1.0 Eh".to_string(),
-                scf_trace: Vec::new(),
-                opt_trace: Vec::new(),
-                frequencies: Vec::new(),
-            },
-        )))
-        .unwrap();
-        let mut running = RunningQmJob {
-            cancel: crate::wire::JobCancelHandle::from_flag(std::sync::Arc::new(
-                std::sync::atomic::AtomicBool::new(false),
-            )),
-            receiver: rx,
-            latest_stage: None,
-            cancel_requested: false,
-        };
-
-        let completion = drain_qm(&mut state, &mut running, task, job_id);
-        let (_summary, is_error) = completion.expect("the job completes");
-        assert!(!is_error, "a converged run is not an error");
-        assert!(
-            state
-                .tasks
-                .task_run(task)
-                .unwrap()
-                .result_entry_id
-                .is_some(),
-            "the optimized geometry is recorded as the task result"
-        );
-    }
-
-    #[test]
-    fn complete_marks_terminal_status() {
-        // An agent-launched job finalizes through the same run graph a manual job
-        // does: completing its bound execution marks the task terminal.
-        let mut state = AppState::scratch(Default::default(), Vec::new());
-        let ok = register_agent_task_run(&mut state, HeavyKind::Qm, "qm energy");
-        let ok_job = crate::frontend::dispatcher::begin_job_execution(
-            &mut state,
-            ok,
-            crate::backend::run_attempt::Placement::Local,
-            Some("qm-energy".to_string()),
-        );
-        crate::frontend::dispatcher::complete_local_job(
-            &mut state,
-            Some(ok_job),
-            TaskStatus::Completed,
-        );
-        assert_eq!(
-            state.tasks.task_run(ok).unwrap().status,
-            TaskStatus::Completed
-        );
-
-        let bad = register_agent_task_run(&mut state, HeavyKind::Md, "md run");
-        let bad_job = crate::frontend::dispatcher::begin_job_execution(
-            &mut state,
-            bad,
-            crate::backend::run_attempt::Placement::Local,
-            Some("md-run".to_string()),
-        );
-        crate::frontend::dispatcher::complete_local_job(
-            &mut state,
-            Some(bad_job),
-            TaskStatus::Failed,
-        );
-        assert_eq!(
-            state.tasks.task_run(bad).unwrap().status,
-            TaskStatus::Failed
-        );
-    }
-}
+mod tests;

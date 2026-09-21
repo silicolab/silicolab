@@ -14,7 +14,7 @@ mod mock;
 
 pub use loop_driver::{
     always_allow_command, always_allow_risk, approve_tool_call, cancel_agent, clear_stored_key,
-    delete_assistant_conversation, fetch_models, gated_pending, impact_hint,
+    delete_assistant_conversation, describe_call, fetch_models, gated_pending, impact_hint,
     new_assistant_conversation, poll_agent_jobs, poll_agent_turn, poll_model_fetch,
     refresh_key_status, reject_tool_call, remove_queued_agent_input, rename_assistant_conversation,
     send_agent_message, set_approval_mode, set_assistant_api_key, set_assistant_base_url,

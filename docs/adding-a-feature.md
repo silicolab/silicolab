@@ -33,6 +33,7 @@ under `src/`.
 | Execution evidence or confirmed task memory | `backend/records` + `frontend/dispatcher/records.rs` | See [Evidence and task memory](evidence-and-task-memory.md) for authority, retrieval and adapter contracts. |
 | New GUI interaction (no task) | an `AppAction` variant + arm in `dispatcher/mod.rs` + a handler in a `dispatcher/*.rs` | Widgets only emit actions; only `dispatch` mutates state. |
 | Expose a capability to the in-app assistant | — | Automatic via the `run_command` tool once a `.sls` verb exists. `Command::risk` controls approval; heavy-classify it in `agent/loop_driver/heavy.rs` if it is CPU-bound. |
+| Give the assistant a capability that is not a user command (it only feeds the model) | `agent/tools/pdf.rs` (`read_pdf`) | `tool_defs()` + `risk_of_call` in `agent/tools.rs`, `describe_call` + `PERSONA` in `agent/loop_driver.rs`. If it blocks (file or network IO), run it as a job: `jobs/pdf.rs` + the spawn/poll/cancel trio in `agent/loop_driver/heavy.rs` and the counts in `turn.rs::conversation_job_count` and `dispatcher/jobs/poll.rs`. |
 
 ## Background compute task — the full checklist
 

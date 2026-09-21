@@ -5,6 +5,8 @@ pub mod llm;
 pub mod online_structures;
 #[cfg(feature = "network")]
 pub mod pdb_fetch;
+#[cfg(feature = "pdf")]
+pub mod pdf;
 pub mod sdfrust_bridge;
 #[cfg(feature = "network")]
 pub mod self_update;

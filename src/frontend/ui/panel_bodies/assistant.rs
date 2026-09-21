@@ -107,7 +107,7 @@ pub(crate) fn render_assistant_panel(
             let footer_height = approval_height
                 + running_height
                 + queued_height
-                + ASSISTANT_COMPOSER_HEIGHT
+                + composer_height(state.ui.agent.attachments.len())
                 + toolbar_height
                 + 24.0
                 + COMPOSER_BOTTOM_PAD;
@@ -442,11 +442,7 @@ fn call_command_text(call: &crate::io::llm::types::ToolCall) -> String {
                 .unwrap_or("none; other constraints stay active")
         );
     }
-    call.input
-        .get("command")
-        .and_then(|value| value.as_str())
-        .unwrap_or(&call.name)
-        .to_string()
+    crate::frontend::agent::describe_call(call)
 }
 
 /// Height of one approval card: command lines, plus an impact line and the
