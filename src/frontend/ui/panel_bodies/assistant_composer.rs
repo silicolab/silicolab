@@ -38,6 +38,18 @@ pub(crate) fn queued_strip_height(queued: &[String]) -> f32 {
     (shown as f32 + overflow) * STRIP_ROW_HEIGHT + 6.0
 }
 
+const ATTACHMENT_CHIP_HEIGHT: f32 = 30.0;
+const ATTACHMENT_ROW_HEIGHT: f32 = ATTACHMENT_CHIP_HEIGHT + 8.0;
+
+/// Height of the input box, which grows by one row while PDFs are attached.
+pub(crate) fn composer_height(attachment_count: usize) -> f32 {
+    if attachment_count == 0 {
+        ASSISTANT_COMPOSER_HEIGHT
+    } else {
+        ASSISTANT_COMPOSER_HEIGHT + ATTACHMENT_ROW_HEIGHT
+    }
+}
+
 /// Render the assistant composer footer: the running-jobs strip, the queued
 /// type-ahead strip, and the input box with its Send/Stop buttons. The caller
 /// passes the per-frame `running_jobs`/`queued` snapshots and their reserved
@@ -144,7 +156,8 @@ pub(crate) fn render_assistant_composer(
     let mut send = false;
     let mut open_assistant_settings = false;
     let mut composer_rect = egui::Rect::NOTHING;
-    assistant_inset_row(ui, ASSISTANT_COMPOSER_HEIGHT, |ui| {
+    let composer_height = composer_height(state.ui.agent.attachments.len());
+    assistant_inset_row(ui, composer_height, |ui| {
         let content_width = ui.available_width().max(96.0);
         let frame_inner_width = (content_width - 16.0).max(80.0);
         let response = Frame::default()
@@ -154,6 +167,14 @@ pub(crate) fn render_assistant_composer(
             .inner_margin(Margin::symmetric(8, 8))
             .show(ui, |ui| {
                 ui.set_width(frame_inner_width);
+                if !state.ui.agent.attachments.is_empty() {
+                    render_attachment_chips(
+                        ui,
+                        pal,
+                        &mut state.ui.agent.attachments,
+                        frame_inner_width,
+                    );
+                }
                 let response = ui.add_sized(
                     [frame_inner_width, 42.0],
                     egui::TextEdit::multiline(&mut state.ui.agent.input)
@@ -253,7 +274,29 @@ pub(crate) fn render_assistant_composer(
                         ui.set_clip_rect(controls_rect);
                         ui.spacing_mut().item_spacing.x = CONTROL_GAP;
                         ui.spacing_mut().interact_size.y = BUTTON_SIZE;
-                        let controls_width = controls_rect.width();
+                        if controls_rect.width() >= BUTTON_SIZE + CONTROL_GAP + 96.0 {
+                            let attach = Button::new(
+                                RichText::new(egui_phosphor::regular::PAPERCLIP)
+                                    .color(pal.text_primary),
+                            )
+                            .fill(pal.neutral_overlay(12))
+                            .corner_radius(CornerRadius::same(inner_radius))
+                            .min_size(egui::vec2(BUTTON_SIZE, BUTTON_SIZE));
+                            if ui
+                                .add(attach)
+                                .on_hover_text("Add a PDF for the assistant to read")
+                                .clicked()
+                                && let Some(paths) = rfd::FileDialog::new()
+                                    .add_filter("PDF", &["pdf"])
+                                    .pick_files()
+                            {
+                                crate::frontend::agent::tools::pdf::attach(
+                                    &mut state.ui.agent.attachments,
+                                    paths,
+                                );
+                            }
+                        }
+                        let controls_width = ui.available_width();
                         if controls_width <= 1.0 {
                             return;
                         }
@@ -306,13 +349,107 @@ pub(crate) fn render_assistant_composer(
             .request_repaint_after(std::time::Duration::from_millis(500));
     }
     if can_submit && send {
-        let message = state.ui.agent.input.trim().to_string();
+        let message = crate::frontend::agent::tools::pdf::message_with_attachments(
+            &state.ui.agent.input,
+            &state.ui.agent.attachments,
+        );
         if !message.is_empty() {
             actions.push(AppAction::SendAgentMessage(message));
             state.ui.agent.input.clear();
+            state.ui.agent.attachments.clear();
         }
     }
     open_assistant_settings
+}
+
+/// One row of attached-PDF chips above the text. Hovering a chip reveals a
+/// remove button on its top-right corner.
+fn render_attachment_chips(
+    ui: &mut egui::Ui,
+    pal: &Palette,
+    attachments: &mut Vec<std::path::PathBuf>,
+    row_width: f32,
+) {
+    const GAP: f32 = 6.0;
+    const REMOVE_RADIUS: f32 = 8.0;
+    let count = attachments.len() as f32;
+    let chip_width = ((row_width - GAP * (count - 1.0)) / count).clamp(44.0, 168.0);
+    let (row_rect, _) = ui.allocate_exact_size(
+        egui::vec2(row_width, ATTACHMENT_ROW_HEIGHT),
+        egui::Sense::hover(),
+    );
+    let mut removed = None;
+    for (index, path) in attachments.iter().enumerate() {
+        let chip_rect = egui::Rect::from_min_size(
+            egui::pos2(
+                row_rect.left() + index as f32 * (chip_width + GAP),
+                row_rect.top() + 4.0,
+            ),
+            egui::vec2(chip_width, ATTACHMENT_CHIP_HEIGHT),
+        );
+        if chip_rect.right() > row_rect.right() + 0.5 {
+            break;
+        }
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string());
+        let chip = ui
+            .interact(
+                chip_rect,
+                ui.id().with(("assistant-attachment", index)),
+                egui::Sense::hover(),
+            )
+            .on_hover_text(path.display().to_string());
+        ui.painter().rect(
+            chip_rect,
+            CornerRadius::same(radius::CONTROL),
+            pal.neutral_overlay(14),
+            Stroke::new(1.0_f32, pal.hairline),
+            egui::StrokeKind::Inside,
+        );
+        ui.scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(chip_rect.shrink2(egui::vec2(8.0, 0.0)))
+                .layout(Layout::left_to_right(Align::Center)),
+            |ui| {
+                ui.spacing_mut().item_spacing.x = 5.0;
+                ui.label(RichText::new(egui_phosphor::regular::FILE_PDF).color(pal.accent));
+                ui.add(
+                    egui::Label::new(RichText::new(name).small().color(pal.text_primary))
+                        .truncate(),
+                );
+            },
+        );
+
+        let remove_center = egui::pos2(chip_rect.right() - 2.0, chip_rect.top() + 2.0);
+        let remove_rect =
+            egui::Rect::from_center_size(remove_center, egui::Vec2::splat(REMOVE_RADIUS * 2.0));
+        if chip.hovered() || ui.rect_contains_pointer(remove_rect) {
+            let remove = ui
+                .interact(
+                    remove_rect,
+                    ui.id().with(("assistant-attachment-remove", index)),
+                    egui::Sense::click(),
+                )
+                .on_hover_text("Remove");
+            ui.painter()
+                .circle_filled(remove_center, REMOVE_RADIUS, pal.text_primary);
+            ui.painter().text(
+                remove_center,
+                egui::Align2::CENTER_CENTER,
+                egui_phosphor::regular::X,
+                egui::FontId::proportional(10.0),
+                pal.input_fill,
+            );
+            if remove.clicked() {
+                removed = Some(index);
+            }
+        }
+    }
+    if let Some(index) = removed {
+        attachments.remove(index);
+    }
 }
 
 /// Compact, point-of-action permission control inspired by agent-first IDEs.

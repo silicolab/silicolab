@@ -63,6 +63,35 @@ pub fn parse_request(input: &Value, project_root: Option<&Path>) -> Result<PdfRe
     })
 }
 
+pub const MAX_ATTACHMENTS: usize = 5;
+
+/// Add dropped or picked files to a draft's attachments, keeping only PDFs,
+/// skipping repeats, and stopping at [`MAX_ATTACHMENTS`].
+pub fn attach(attachments: &mut Vec<PathBuf>, paths: impl IntoIterator<Item = PathBuf>) {
+    for path in paths {
+        let is_pdf = path
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"));
+        if is_pdf && !attachments.contains(&path) && attachments.len() < MAX_ATTACHMENTS {
+            attachments.push(path);
+        }
+    }
+}
+
+/// The message as the model receives it: the user's text, then each attachment
+/// named by path so the model can `read_pdf` it. Backticks keep a path with
+/// spaces in one piece.
+pub fn message_with_attachments(text: &str, attachments: &[PathBuf]) -> String {
+    let mut message = text.trim().to_string();
+    for path in attachments {
+        if !message.is_empty() {
+            message.push('\n');
+        }
+        message.push_str(&format!("Attached PDF: `{}`", path.display()));
+    }
+    message
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,5 +130,41 @@ mod tests {
     fn a_relative_path_without_a_project_is_rejected() {
         assert!(parse_request(&json!({ "path": "paper.pdf" }), None).is_err());
         assert!(parse_request(&json!({ "path": "/abs/paper.pdf" }), None).is_ok());
+    }
+
+    #[test]
+    fn attaching_keeps_distinct_pdfs_up_to_the_cap() {
+        let mut attachments = vec![PathBuf::from("/a/paper.pdf")];
+        attach(
+            &mut attachments,
+            [
+                PathBuf::from("/a/paper.pdf"),
+                PathBuf::from("/a/structure.cif"),
+                PathBuf::from("/a/SI.PDF"),
+            ],
+        );
+        assert_eq!(
+            attachments,
+            [PathBuf::from("/a/paper.pdf"), PathBuf::from("/a/SI.PDF")]
+        );
+        attach(
+            &mut attachments,
+            (0..10).map(|i| PathBuf::from(format!("/a/{i}.pdf"))),
+        );
+        assert_eq!(attachments.len(), MAX_ATTACHMENTS);
+    }
+
+    #[test]
+    fn the_sent_message_names_each_attachment_by_path() {
+        let attachments = [PathBuf::from("/a/my paper.pdf")];
+        assert_eq!(
+            message_with_attachments(" summarize ", &attachments),
+            "summarize\nAttached PDF: `/a/my paper.pdf`"
+        );
+        assert_eq!(
+            message_with_attachments("", &attachments),
+            "Attached PDF: `/a/my paper.pdf`"
+        );
+        assert_eq!(message_with_attachments("hi", &[]), "hi");
     }
 }

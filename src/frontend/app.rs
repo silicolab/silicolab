@@ -326,7 +326,22 @@ impl SilicoLabApp {
             return;
         }
 
-        dispatcher::open_paths(&mut self.state, dropped_paths);
+        let (pdfs, structures): (Vec<_>, Vec<_>) = dropped_paths.into_iter().partition(|path| {
+            path.extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+        });
+        if !structures.is_empty() {
+            dispatcher::open_paths(&mut self.state, structures);
+        }
+        if pdfs.is_empty() {
+            return;
+        }
+        if self.state.config.assistant.enabled {
+            crate::frontend::agent::tools::pdf::attach(&mut self.state.ui.agent.attachments, pdfs);
+        } else {
+            self.state
+                .status_warning("A PDF is not a structure file; enable the Assistant to read it.");
+        }
     }
 
     fn show_file_drop_overlay(&self, ctx: &egui::Context) {

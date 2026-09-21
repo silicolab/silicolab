@@ -129,6 +129,9 @@ pub struct AssistantConversation {
     pub transcript: Vec<TranscriptEntry>,
     /// The assistant input box.
     pub input: String,
+    /// PDFs attached to the draft message. Like `input` they are draft state,
+    /// but are not persisted: a path may not survive to the next session.
+    pub attachments: Vec<std::path::PathBuf>,
     pub phase: AgentPhase,
     /// Model turns spent on the current user message (loop bound).
     pub iterations: usize,
@@ -180,6 +183,7 @@ impl AssistantConversation {
             history: Vec::new(),
             transcript: Vec::new(),
             input: String::new(),
+            attachments: Vec::new(),
             phase: AgentPhase::Idle,
             iterations: 0,
             session_usage: Usage::default(),

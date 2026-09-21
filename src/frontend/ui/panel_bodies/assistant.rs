@@ -107,7 +107,7 @@ pub(crate) fn render_assistant_panel(
             let footer_height = approval_height
                 + running_height
                 + queued_height
-                + ASSISTANT_COMPOSER_HEIGHT
+                + composer_height(state.ui.agent.attachments.len())
                 + toolbar_height
                 + 24.0
                 + COMPOSER_BOTTOM_PAD;
