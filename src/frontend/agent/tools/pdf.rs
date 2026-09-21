@@ -15,17 +15,17 @@ use crate::io::pdf::parse_page_spec;
 const READ_BUDGET_CHARS: usize = 16_000;
 
 /// Whether the call's `path` may leave the project folder. Judged from the path
-/// text alone so approval gating needs no workspace access: only a relative
-/// path with no `..` is certain to stay inside.
+/// text alone so approval gating needs no workspace access: only a path made
+/// purely of plain names is certain to stay inside. `is_relative` is not that
+/// test — on Windows a rooted path with no drive (`\Windows\x.pdf`, `/x.pdf`)
+/// is "relative" yet escapes the project.
 pub fn reads_outside_project(input: &Value) -> bool {
     let Some(path) = input.get("path").and_then(Value::as_str) else {
         return false;
     };
-    let path = Path::new(path);
-    !path.is_relative()
-        || path
-            .components()
-            .any(|part| matches!(part, Component::ParentDir | Component::Prefix(_)))
+    !Path::new(path)
+        .components()
+        .all(|part| matches!(part, Component::Normal(_) | Component::CurDir))
 }
 
 pub fn parse_request(input: &Value, project_root: Option<&Path>) -> Result<PdfReadRequest, String> {
@@ -36,7 +36,7 @@ pub fn parse_request(input: &Value, project_root: Option<&Path>) -> Result<PdfRe
         .filter(|path| !path.is_empty())
         .ok_or("read_pdf requires a `path` string.")?;
     let path = PathBuf::from(raw);
-    let path = if path.is_absolute() {
+    let path = if path.is_absolute() || path.has_root() {
         path
     } else {
         project_root
@@ -111,6 +111,21 @@ mod tests {
                 "{outside}"
             );
         }
+    }
+
+    // Backslashes and drive letters are ordinary file-name characters elsewhere.
+    #[cfg(windows)]
+    #[test]
+    fn windows_rooted_and_drive_paths_leave_the_project() {
+        for outside in ["\\Windows\\paper.pdf", "C:\\paper.pdf", "C:paper.pdf"] {
+            assert!(
+                reads_outside_project(&json!({ "path": outside })),
+                "{outside}"
+            );
+        }
+        assert!(!reads_outside_project(
+            &json!({ "path": "refs\\paper.pdf" })
+        ));
     }
 
     #[test]
