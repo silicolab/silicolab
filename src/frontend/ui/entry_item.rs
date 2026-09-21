@@ -74,7 +74,7 @@ pub(crate) fn render_entry_list_item(
         // which produces no entry of its own, still marks the structure it was
         // computed from. Provenance wins the one chip slot; a QM report on an MD or
         // docking entry stays reachable through the context menu.
-        let has_qm_run = crate::frontend::dispatcher::entry_qm_run_dir(state, entry_id).is_some();
+        let has_qm_run = state.tasks.latest_qm_run_for_entry(entry_id).is_some();
         let chip_label = state
             .entries
             .entry(entry_id)

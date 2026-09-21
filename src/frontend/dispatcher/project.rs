@@ -349,10 +349,14 @@ pub(crate) fn create_project_action(state: &mut AppState) {
             assistant: state.ui.agent.project_snapshot(),
             warnings: Vec::new(),
         });
-        let snapshot = ProjectSnapshot {
+        let mut snapshot = ProjectSnapshot {
             name: project.name.clone(),
             ..snapshot
         };
+        crate::backend::records::artifacts::copy_registered_runs(
+            &mut snapshot.tasks,
+            &project.root,
+        )?;
         save_project_session(&project, &snapshot, true)?;
         Ok((project, snapshot))
     }) {

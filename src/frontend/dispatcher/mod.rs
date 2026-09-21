@@ -66,6 +66,8 @@ mod heavy_render;
 mod image_export;
 mod jobs;
 mod project;
+mod records;
+pub(crate) use records::*;
 mod ptm;
 mod remote_jobs;
 mod selection;

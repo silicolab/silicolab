@@ -84,6 +84,14 @@ pub(crate) fn start_remote_engine(
         },
         Some(task.controller_id.to_string()),
     );
+    if let crate::wire::Engine::Qm(request) = &engine {
+        capture_qm_input(state, &job_id.to_string(), request.clone());
+    }
+    let local_run_dir = if matches!(&engine, crate::wire::Engine::Qm(_)) {
+        local_run_dir.join("jobs").join(job_id.to_string())
+    } else {
+        local_run_dir
+    };
     let handle = crate::frontend::remote_jobs::spawn_remote_submit(
         host.clone(),
         engine,
@@ -323,8 +331,10 @@ fn apply_remote_observation(
     }
     match outcome {
         RemoteJobOutcome::Done(engine_outcome, _) => {
-            if let Some(row) = conn.and_then(|conn| registry::get(conn, run_uuid).ok().flatten()) {
-                apply_remote_outcome(state, &row, *engine_outcome);
+            if let Some(row) = conn.and_then(|conn| registry::get(conn, run_uuid).ok().flatten())
+                && let Err(error) = apply_remote_outcome(state, &row, *engine_outcome)
+            {
+                state.report_unscoped_remote_error(format!("Remote result rejected: {error}"));
             }
         }
         RemoteJobOutcome::OutcomeUnreadable(error, _) => {
@@ -482,9 +492,9 @@ fn apply_remote_outcome(
     state: &mut AppState,
     row: &registry::RemoteJob,
     outcome: crate::wire::EngineOutcome,
-) {
+) -> anyhow::Result<()> {
     match outcome {
-        crate::wire::EngineOutcome::Qm(qm) => apply_remote_qm_outcome(state, row, qm),
+        crate::wire::EngineOutcome::Qm(qm) => apply_remote_qm_outcome(state, row, qm)?,
         crate::wire::EngineOutcome::Docking(docking) => {
             apply_remote_docking_outcome(state, row, docking)
         }
@@ -492,6 +502,7 @@ fn apply_remote_outcome(
             apply_remote_gromacs_outcome(state, row, gromacs)
         }
     }
+    Ok(())
 }
 
 /// Apply a retrieved remote QM outcome: log the report, save it beside the run,
@@ -502,35 +513,21 @@ fn apply_remote_qm_outcome(
     state: &mut AppState,
     row: &registry::RemoteJob,
     outcome: crate::engines::qm::QmOutcome,
-) {
-    let job_id: Option<crate::job::JobId> = row.job_id.parse().ok();
-    if job_id.is_none() {
-        state.report_unscoped_remote_error(format!(
-            "Remote QM result has invalid job id `{}`",
-            row.job_id
-        ));
+) -> anyhow::Result<()> {
+    if !outcome_belongs_to_current_workspace(state, row) {
+        return Ok(());
     }
-    if let Some(job_id) = job_id {
-        for line in outcome.summary.lines() {
-            state.append_job_log(job_id, LogLevel::Info, line);
-        }
-    }
-    let run_dir = PathBuf::from(&row.local_run_dir);
-    let result = save_qm_artifacts(state, &run_dir, &outcome);
-    state.tasks.runs.set_qm_result(&row.job_id, result.clone());
-
-    let belongs_here = outcome_belongs_to_current_workspace(state, row);
+    let job_id: crate::job::JobId = row.job_id.parse()?;
     let already = outcome_already_materialized(state, &row.job_id);
     let task_id = state.tasks.runs.task_run_id_for_job(&row.job_id);
-    if belongs_here && !task_id.is_some_and(|id| state.tasks.task_run(id).is_some()) {
-        state.report_unscoped_remote_error(format!(
-            "Cannot import remote result {}: missing task identity",
-            row.job_id
-        ));
-        return;
-    }
+    anyhow::ensure!(
+        task_id.is_some_and(|id| state.tasks.task_run(id).is_some()),
+        "Cannot import remote result {}: missing task identity",
+        row.job_id
+    );
+    let result = save_qm_execution(state, &row.job_id, &outcome)?;
 
-    if belongs_here && !already {
+    if !already {
         match outcome.optimized_structure {
             Some(optimized) => {
                 let save_path = structure_io::default_structure_save_path(&optimized, None);
@@ -560,14 +557,17 @@ fn apply_remote_qm_outcome(
         mark_task_status(state, task_id, TaskStatus::Completed);
         state.ui.task_chart_thumbnails.remove(&task_id);
     }
-    if let Some(job_id) = job_id {
-        let summary = format!("Remote QM execution complete: {}", result.summary());
-        if result.needs_diagnosis() {
-            state.job_notice(job_id, summary);
-        } else {
-            state.job_succeeded(job_id, summary);
-        }
+    let summary = format!(
+        "Remote QM execution complete; {}; diagnostics coverage partial: inspect raw report; {}",
+        evidence_notice(state, &row.job_id),
+        result.summary()
+    );
+    if result.needs_diagnosis() {
+        state.job_notice(job_id, summary);
+    } else {
+        state.job_succeeded(job_id, summary);
     }
+    Ok(())
 }
 
 fn mark_remote_task(state: &mut AppState, job_id: &str, status: TaskStatus) {
@@ -608,18 +608,66 @@ pub(crate) fn import_completed_remote_jobs(state: &mut AppState, rows: Vec<regis
     let mut pending = 0usize;
     for row in rows {
         let already = outcome_already_materialized(state, &row.job_id);
-        let repair = state
-            .tasks
-            .runs
-            .execution(&row.job_id)
-            .and_then(|e| e.qm_result.as_ref())
-            .is_some_and(|r| !r.artifacts_complete());
+        let repair = state.tasks.runs.execution(&row.job_id).is_some_and(|e| {
+            let record_id = format!("qm:{}", row.job_id);
+            let has_facts = state.tasks.runs.records.get(&record_id).is_some();
+            let is_qm = e.job_kind.as_deref().is_some_and(|k| k.starts_with("qm-"))
+                || has_facts
+                || state
+                    .tasks
+                    .runs
+                    .records
+                    .unavailable
+                    .contains_key(&record_id)
+                || state
+                    .tasks
+                    .runs
+                    .unavailable_qm_results
+                    .contains_key(&row.job_id);
+            e.qm_result
+                .as_ref()
+                .is_some_and(|r| !r.artifacts_complete())
+                || (is_qm && (e.qm_result.is_none() || !has_facts))
+        });
         if already && !repair {
             continue;
         }
-        match read_local_outcome(&row.local_run_dir) {
-            Some(outcome) => {
-                apply_remote_outcome(state, &row, outcome);
+        let task_id = state.tasks.runs.task_run_id_for_job(&row.job_id);
+        let ambiguous_legacy =
+            task_id
+                .and_then(|id| state.tasks.task_run(id))
+                .is_some_and(|task| {
+                    task.kind.is_qm()
+                        && task
+                            .run_dir
+                            .as_ref()
+                            .is_some_and(|dir| dir == Path::new(&row.local_run_dir))
+                        && state
+                            .tasks
+                            .runs
+                            .executions()
+                            .iter()
+                            .filter(|e| {
+                                state.tasks.runs.task_run_id_for_job(&e.job_id.to_string())
+                                    == task_id
+                            })
+                            .count()
+                            > 1
+                });
+        if ambiguous_legacy {
+            state.report_unscoped_remote_error(format!("Cannot recover QM evidence for {}: legacy task outcome is shared by multiple executions; retrieve this job's original remote outcome", row.job_id));
+            if !already {
+                state.tasks.runs.set_import_state(
+                    &row.job_id,
+                    crate::backend::run_attempt::ResultImport::PendingRecovery,
+                );
+            }
+            continue;
+        }
+        match read_local_outcome(&row.local_run_dir)
+            .and_then(|outcome| apply_remote_outcome(state, &row, outcome))
+        {
+            Ok(()) => {
                 if outcome_already_materialized(state, &row.job_id) {
                     recovered += 1;
                 } else {
@@ -630,13 +678,13 @@ pub(crate) fn import_completed_remote_jobs(state: &mut AppState, rows: Vec<regis
                     );
                 }
             }
-            None if already => {
+            Err(error) if already => {
                 state.report_unscoped_remote_error(format!(
-                    "Cannot repair QM artifacts for {}: outcome file missing",
+                    "Cannot repair QM evidence for {}: {error}",
                     row.job_id
                 ));
             }
-            None => {
+            Err(error) => {
                 pending += 1;
                 // Record the pending-recovery durably on the execution, so it
                 // survives a restart and the UI can surface it, not just a log line.
@@ -649,7 +697,7 @@ pub(crate) fn import_completed_remote_jobs(state: &mut AppState, rows: Vec<regis
                     LogLevel::Warn,
                     format!(
                         "remote job {} finished but its result is pending recovery \
-                         (outcome file missing); it will retry on the next Refresh Remote",
+                         (structured outcome unavailable: {error}); it will retry on the next Refresh Remote",
                         short_uuid(&row.job_id)
                     ),
                 );
@@ -659,10 +707,17 @@ pub(crate) fn import_completed_remote_jobs(state: &mut AppState, rows: Vec<regis
     if recovered > 0 {
         // Persist the imported entries + ledger atomically now rather than waiting
         // for the debounced autosave, so the recovery is durable from open.
-        let _ = persist_project(state, false);
-        state.status_success(format!(
-            "Recovered {recovered} remote result(s) for this project"
-        ));
+        match persist_project(state, false) {
+            Ok(()) if state.workspace.project().is_some() => state.status_success(format!(
+                "Recovered and committed {recovered} remote result(s) for this project"
+            )),
+            Ok(()) => state.status_neutral(format!(
+                "Recovered {recovered} remote result(s) in memory; save project to persist"
+            )),
+            Err(error) => state.status_error(format!(
+                "Recovered {recovered} result(s) in memory, but project commit failed: {error}"
+            )),
+        }
     }
     if pending > 0 {
         state.status_neutral(format!(
@@ -674,11 +729,12 @@ pub(crate) fn import_completed_remote_jobs(state: &mut AppState, rows: Vec<regis
 /// Read and parse a completed remote job's already-downloaded `outcome.json` from
 /// its local run directory. `None` when the file is absent or unreadable — the
 /// pending-recovery signal, kept local (no SSH) so open never blocks on the network.
-fn read_local_outcome(local_run_dir: &str) -> Option<crate::wire::EngineOutcome> {
+fn read_local_outcome(local_run_dir: &str) -> anyhow::Result<crate::wire::EngineOutcome> {
+    use anyhow::Context;
     let path =
         std::path::Path::new(local_run_dir).join(crate::engines::remote::launcher::OUTCOME_FILE);
-    let bytes = std::fs::read(path).ok()?;
-    serde_json::from_slice(&bytes).ok()
+    let bytes = std::fs::read(&path).with_context(|| format!("read {}", path.display()))?;
+    serde_json::from_slice(&bytes).context("decode structured remote outcome")
 }
 
 /// Remove a remote job's scratch dir over SSH (a quick, bounded `rm -rf` of the

@@ -137,7 +137,10 @@ impl QmResult {
         let artifact = |status: &ArtifactStatus| match status {
             ArtifactStatus::Saved => "saved".to_string(),
             ArtifactStatus::NotApplicable => "not applicable".to_string(),
-            ArtifactStatus::Failed(error) => format!("save failed: {error}"),
+            ArtifactStatus::Failed(error) => format!(
+                "save failed: {}",
+                error.chars().take(240).collect::<String>()
+            ),
         };
         format!(
             "engine reports {}; {}; report: {}; numerical series: {}",
@@ -147,7 +150,7 @@ impl QmResult {
                 "not converged"
             },
             if self.artifacts_complete() {
-                "evidence saved"
+                "artifacts saved (project commit tracked separately)"
             } else {
                 "evidence incomplete"
             },
@@ -180,6 +183,8 @@ pub struct JobExecution {
 /// resolves a `JobId` back to its owning task. Persisted alongside the task rows.
 #[derive(Debug, Clone, Default)]
 pub struct RunGraph {
+    pub records: crate::backend::records::RecordStore,
+    pub unavailable_qm_results: std::collections::BTreeMap<String, String>,
     attempts: Vec<RunAttempt>,
     executions: Vec<JobExecution>,
     next_run_attempt_id: u64,
@@ -197,6 +202,8 @@ impl RunGraph {
             .max()
             .unwrap_or(1);
         Self {
+            records: Default::default(),
+            unavailable_qm_results: Default::default(),
             attempts,
             executions,
             next_run_attempt_id,
@@ -213,10 +220,11 @@ impl RunGraph {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.dirty
+        self.dirty || self.records.is_dirty()
     }
 
     pub fn mark_saved(&mut self) {
+        self.records.mark_saved();
         self.dirty = false;
     }
 
@@ -293,6 +301,7 @@ impl RunGraph {
     }
 
     pub fn set_qm_result(&mut self, job_id: &str, result: QmResult) {
+        self.unavailable_qm_results.remove(job_id);
         if let Some(execution) = self
             .executions
             .iter_mut()

@@ -140,6 +140,39 @@ pub fn spawn_next_turn(state: &mut AppState, ctx: &egui::Context) {
     if state.ui.agent.qm_diagnostic_only {
         cfg.system.push_str("\nQM diagnosis only. Explain the problem, available evidence and recommended next steps, then wait for a new user instruction. Do not rerun, repair files or accept an unconverged result. Only inspect, list_jobs and recommend_method are allowed.");
     }
+    if let Some(goal) = state
+        .ui
+        .agent
+        .transcript
+        .iter()
+        .rev()
+        .find_map(|entry| match entry {
+            TranscriptEntry::User(text) => Some(text),
+            _ => None,
+        })
+    {
+        cfg.system.push_str(
+            "\nCurrent user instruction (bounded; complete message remains in conversation):\n",
+        );
+        cfg.system.extend(goal.chars().take(1000));
+        if goal.chars().count() > 1000 {
+            cfg.system
+                .push_str("\nUser instruction truncated by context budget; inspect view=intent retrieves the full original with detail_offset.");
+        }
+    }
+    cfg.system
+        .push_str("\nProject working context (user authority, not model inference):\n");
+    cfg.system.push_str(
+        &state.tasks.runs.records.context(
+            state.active_task_run,
+            state
+                .active_task_run
+                .and_then(|id| state.tasks.task_run(id))
+                .map(|t| t.run_uuid.as_str()),
+            state.ui.agent.active_conversation.raw(),
+            2400,
+        ),
+    );
     let history = state.ui.agent.history.clone();
 
     state.ui.agent.iterations += 1;
@@ -402,6 +435,7 @@ fn begin_job_followup(
 
 /// The synthetic user message handed to the model when a background job finishes.
 fn job_followup_text(label: &str, summary: &str, is_error: bool) -> String {
+    let summary = tools::clamp_result(summary);
     let verb = if is_error { "failed" } else { "finished" };
     format!(
         "[Background job] The `{label}` task {verb}. Result:\n{summary}\n\n\

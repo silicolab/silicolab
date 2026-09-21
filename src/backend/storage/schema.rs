@@ -4,6 +4,10 @@ use rusqlite::{Connection, OptionalExtension, params};
 pub(crate) fn create_project_schema(db: &Connection) -> Result<()> {
     db.execute_batch(
         "
+        create table if not exists knowledge_records (
+            id text primary key,
+            envelope_json text not null
+        );
         create table if not exists project_meta (
             key text primary key,
             value text not null

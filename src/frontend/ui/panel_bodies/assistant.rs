@@ -424,11 +424,29 @@ fn assistant_toolbar(
     });
 }
 
-fn call_command_text(call: &crate::io::llm::types::ToolCall) -> &str {
+fn call_command_text(call: &crate::io::llm::types::ToolCall) -> String {
+    if call.name == "save_constraint" {
+        return format!(
+            "Confirm constraint in this project / current conversation, task {}: {}\nExplicitly replaces: {}",
+            call.input
+                .get("task")
+                .map(|v| v.to_string())
+                .unwrap_or_else(|| "all tasks in this conversation".into()),
+            call.input
+                .get("text")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(missing text)"),
+            call.input
+                .get("replaces")
+                .and_then(|v| v.as_str())
+                .unwrap_or("none; other constraints stay active")
+        );
+    }
     call.input
         .get("command")
         .and_then(|value| value.as_str())
         .unwrap_or(&call.name)
+        .to_string()
 }
 
 /// Height of one approval card: command lines, plus an impact line and the
@@ -445,7 +463,9 @@ fn approval_card_height(call: &crate::io::llm::types::ToolCall, panel_width: f32
     if crate::frontend::agent::impact_hint(call).is_some() {
         height += 18.0;
     }
-    if crate::frontend::agent::tools::risk_of_call(call) != RiskLevel::Destructive {
+    if call.name != "save_constraint"
+        && crate::frontend::agent::tools::risk_of_call(call) != RiskLevel::Destructive
+    {
         height += 28.0; // the "always allow" button row
     }
     height
@@ -514,7 +534,7 @@ fn render_approval_card(
                 });
                 ui.add_space(2.0);
                 ui.add(
-                    egui::Label::new(assistant_text(command).color(pal.text_primary))
+                    egui::Label::new(assistant_text(&command).color(pal.text_primary))
                         .wrap_mode(egui::TextWrapMode::Wrap),
                 );
                 if let Some(inputs) = inputs {
@@ -545,7 +565,7 @@ fn render_approval_card(
                         actions.push(AppAction::RejectToolCall(call.id.clone()));
                     }
                 });
-                if risk != RiskLevel::Destructive {
+                if call.name != "save_constraint" && risk != RiskLevel::Destructive {
                     ui.add_space(4.0);
                     ui.horizontal(|ui| {
                         let verb = crate::frontend::agent::tools::call_allow_key(call);

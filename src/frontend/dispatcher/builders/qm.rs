@@ -137,6 +137,7 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
         // job registry and the opt-in refresh — not the in-process worker.
         Some(host) => start_remote_qm(state, job, host, prompt.prefs.job_resources()),
         None => {
+            let evidence_request = job.clone();
             let running = crate::frontend::jobs::spawn_qm_job_with_launches(
                 job,
                 Some(qm_thread_count(state, &prompt.prefs)),
@@ -155,6 +156,12 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
             state.jobs.set_qm(running);
             if let Some(task_run_id) = state.active_task_run {
                 begin_local_job(state, crate::frontend::jobs::LocalJobSlot::Qm, task_run_id);
+                if let Some(job_id) = state
+                    .jobs
+                    .local_execution(crate::frontend::jobs::LocalJobSlot::Qm)
+                {
+                    capture_qm_input(state, &job_id.to_string(), evidence_request);
+                }
                 mark_task_status(state, task_run_id, TaskStatus::Running);
             }
             dismiss_submitted_compute_prompt(state);

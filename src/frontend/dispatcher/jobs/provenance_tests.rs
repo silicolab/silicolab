@@ -55,7 +55,7 @@ fn qm_artifacts_follow_bound_identity_for_every_outcome_kind() {
             opt_trace: Vec::new(),
             frequencies: vec![42.0],
         };
-        apply_qm_outcome(&mut state, &cx, outcome);
+        apply_qm_outcome(&mut state, &cx, outcome).unwrap();
         let run = state.tasks.task_run(task).unwrap();
         assert_eq!(run.source_entry_id, Some(a));
         assert_eq!(run.inputs.as_ref().unwrap()[0].revision, 1);
@@ -65,13 +65,20 @@ fn qm_artifacts_follow_bound_identity_for_every_outcome_kind() {
         assert_eq!(state.active_task_run, Some(other));
         assert!(state.tasks.task_run(other).unwrap().run_dir.is_none());
         assert!(
-            std::fs::read_to_string(dir.join(QM_OUTPUT_FILE))
-                .unwrap()
-                .contains("report for A")
+            std::fs::read_to_string(
+                dir.join("jobs")
+                    .join(cx.job_id.unwrap().to_string())
+                    .join(QM_OUTPUT_FILE)
+            )
+            .unwrap()
+            .contains("report for A")
         );
-        let series =
-            crate::backend::runs::load_qm_series_file(&dir.join(crate::backend::runs::SERIES_FILE))
-                .unwrap();
+        let series = crate::backend::runs::load_qm_series_file(
+            &dir.join("jobs")
+                .join(cx.job_id.unwrap().to_string())
+                .join(crate::backend::runs::SERIES_FILE),
+        )
+        .unwrap();
         assert_eq!(series.scf_trace, vec![-0.5, -1.0]);
         assert!(
             state
@@ -194,7 +201,8 @@ fn missing_identity_does_not_import_into_active_task() {
             opt_trace: Vec::new(),
             frequencies: Vec::new(),
         },
-    );
+    )
+    .unwrap_err();
     assert_eq!(state.entries.records.len(), 1);
     assert!(!dir.join(QM_OUTPUT_FILE).exists());
     assert!(

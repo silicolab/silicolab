@@ -90,7 +90,8 @@ fn qm_optimize_creates_new_entry() {
         "new entry title should mark the optimization: {}",
         state.structure().title
     );
-    assert!(summary.contains("geometry optimization"));
+    assert!(summary.contains("evidence qm:"));
+    assert!(summary.contains("coverage partial"));
 }
 
 #[test]

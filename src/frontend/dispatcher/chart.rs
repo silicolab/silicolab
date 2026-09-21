@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 
 use super::*;
-use crate::backend::runs::{QmSeries, SERIES_FILE, load_qm_series_file};
+#[cfg(test)]
+use crate::backend::runs::SERIES_FILE;
+use crate::backend::runs::{QmSeries, load_qm_series_file};
 use crate::frontend::actions::{ChartAxis, ChartTarget};
 use crate::frontend::state::{ChartExportDraft, ChartState, LogLevel, StaticView, SystemSubsystem};
 use crate::plot::spec::{
@@ -59,14 +61,14 @@ pub(crate) fn datasets_from_series(series: &QmSeries) -> Vec<ChartSpec> {
 /// ever been an input to a non-QM run.
 pub(crate) fn entry_series_path(state: &AppState, entry_id: u64) -> Option<(String, PathBuf)> {
     let name = state.entries.entry(entry_id)?.name.clone();
-    let run_dir = super::entry_qm_run_dir(state, entry_id)?;
-    Some((name, run_dir.join(SERIES_FILE)))
+    let path = entry_qm_artifact_path(state, entry_id, QmArtifact::Series)?;
+    Some((name, path))
 }
 
 fn task_series_path(state: &AppState, task_run_id: u64) -> Option<(String, PathBuf)> {
     let task = state.tasks.task_run(task_run_id)?;
-    let run_dir = task.run_dir.as_ref()?;
-    Some((task.title.clone(), run_dir.join(SERIES_FILE)))
+    let path = task_qm_artifact_path(state, task_run_id, QmArtifact::Series)?;
+    Some((task.title.clone(), path))
 }
 
 pub(crate) fn open_chart(state: &mut AppState, target: ChartTarget, ctx: &egui::Context) {
