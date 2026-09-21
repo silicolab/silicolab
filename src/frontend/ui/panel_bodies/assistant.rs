@@ -424,11 +424,8 @@ fn assistant_toolbar(
     });
 }
 
-fn call_command_text(call: &crate::io::llm::types::ToolCall) -> &str {
-    call.input
-        .get("command")
-        .and_then(|value| value.as_str())
-        .unwrap_or(&call.name)
+fn call_command_text(call: &crate::io::llm::types::ToolCall) -> String {
+    crate::frontend::agent::describe_call(call)
 }
 
 /// Height of one approval card: command lines, plus an impact line and the

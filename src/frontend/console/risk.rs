@@ -8,6 +8,9 @@ use super::{Command, JobsAction};
 pub(crate) enum RiskLevel {
     /// View/inspection and additive, low-stakes building; safe to auto-run.
     ReadOnly,
+    /// Reads a file outside the project and sends its text to the model
+    /// provider; nothing is changed, but the user did not put that file in scope.
+    ExternalRead,
     /// Edits the active structure in memory (reversible by reloading).
     Mutating,
     /// Writes a file to disk, which may overwrite an existing one — not
@@ -25,6 +28,7 @@ impl RiskLevel {
     pub(crate) fn label(self) -> &'static str {
         match self {
             RiskLevel::ReadOnly => "read-only",
+            RiskLevel::ExternalRead => "outside-project read",
             RiskLevel::Mutating => "structure edit",
             RiskLevel::FileWrite => "file write",
             RiskLevel::Expensive => "compute",

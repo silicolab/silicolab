@@ -96,6 +96,52 @@ pub fn spawn_agent_online_structure_search(
     Some(true)
 }
 
+pub fn spawn_agent_pdf_read(
+    state: &mut AppState,
+    call: &ToolCall,
+    ctx: &egui::Context,
+) -> Option<bool> {
+    if call.name != "read_pdf" {
+        return None;
+    }
+    let project_root = state
+        .workspace
+        .project()
+        .map(|project| project.root.clone());
+    let request = match crate::frontend::agent::tools::pdf::parse_request(
+        &call.input,
+        project_root.as_deref(),
+    ) {
+        Ok(request) => request,
+        Err(reason) => {
+            record_result(state, call, reason, true);
+            return Some(false);
+        }
+    };
+    let id = state.jobs.next_agent_job_id;
+    state.jobs.next_agent_job_id += 1;
+    let label = describe_call(call);
+    state
+        .jobs
+        .agent_pdf_reads
+        .push(crate::frontend::jobs::TrackedAgentPdfJob {
+            id,
+            conversation: state.ui.agent.active_conversation,
+            label: label.clone(),
+            running: crate::frontend::jobs::spawn_pdf_read(request),
+        });
+    record_result(
+        state,
+        call,
+        format!(
+            "Started background PDF read #{id} ({label}). The text will be returned when it finishes."
+        ),
+        false,
+    );
+    ctx.request_repaint_after(AGENT_POLL);
+    Some(true)
+}
+
 /// A short cost/impact hint for an approval card, or `None` when the call has no
 /// special cost (only heavy commands, which run off-thread one at a time, have one).
 pub fn impact_hint(call: &ToolCall) -> Option<String> {
@@ -295,6 +341,7 @@ pub fn spawn_heavy(
 /// completion the queue is pumped, so an idle agent auto-continues the workflow.
 pub fn poll_agent_jobs(state: &mut AppState, ctx: &egui::Context) {
     poll_agent_online_structure_jobs(state, ctx);
+    poll_agent_pdf_jobs(state, ctx);
     if state.jobs.agent_jobs.is_empty() {
         return;
     }
@@ -383,6 +430,50 @@ fn poll_agent_online_structure_jobs(state: &mut AppState, ctx: &egui::Context) {
     }
 }
 
+fn poll_agent_pdf_jobs(state: &mut AppState, ctx: &egui::Context) {
+    if state.jobs.agent_pdf_reads.is_empty() {
+        return;
+    }
+    let jobs = std::mem::take(&mut state.jobs.agent_pdf_reads);
+    let mut survivors = Vec::with_capacity(jobs.len());
+    let mut completed = false;
+    for tracked in jobs {
+        let (summary, is_error) = match tracked.running.receiver.try_recv() {
+            Ok(Ok(text)) => (text, false),
+            Ok(Err(error)) => (error.to_string(), true),
+            Err(std::sync::mpsc::TryRecvError::Empty) => {
+                survivors.push(tracked);
+                continue;
+            }
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                ("the PDF reader stopped unexpectedly".to_string(), true)
+            }
+        };
+        if let Some(conversation) = state.ui.agent.conversation_mut(tracked.conversation) {
+            conversation
+                .transcript
+                .push(TranscriptEntry::Notice(format!(
+                    "Background PDF read #{} {}.",
+                    tracked.id,
+                    if is_error { "failed" } else { "finished" }
+                )));
+            conversation.queued.push_back(PendingTurn::JobDone {
+                label: tracked.label,
+                summary,
+                is_error,
+            });
+        }
+        completed = true;
+    }
+    state.jobs.agent_pdf_reads = survivors;
+    if !state.jobs.agent_pdf_reads.is_empty() {
+        ctx.request_repaint_after(AGENT_POLL);
+    }
+    if completed {
+        pump_queue(state, ctx);
+    }
+}
+
 /// Cancel and remove every background job belonging to `conversation`, returning
 /// how many were stopped. Used when the user Stops the agent or deletes a chat, so
 /// detached workers and their orphaned results don't linger.
@@ -405,6 +496,16 @@ pub fn cancel_conversation_jobs(
         .jobs
         .agent_online_structures
         .retain(|job| job.conversation != conversation);
+    let mut cancelled_reads = 0;
+    state.jobs.agent_pdf_reads.retain(|job| {
+        if job.conversation == conversation {
+            job.running.cancel();
+            cancelled_reads += 1;
+            false
+        } else {
+            true
+        }
+    });
     for job_id in &cancelled_jobs {
         crate::frontend::dispatcher::complete_local_job(
             state,
@@ -412,7 +513,7 @@ pub fn cancel_conversation_jobs(
             TaskStatus::Cancelled,
         );
     }
-    cancelled_jobs.len() + before - state.jobs.agent_online_structures.len()
+    cancelled_jobs.len() + before - state.jobs.agent_online_structures.len() + cancelled_reads
 }
 
 /// Route a finished job to the conversation that launched it: a transcript

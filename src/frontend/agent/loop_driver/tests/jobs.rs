@@ -371,3 +371,97 @@ fn errored_backlog_turn_clears_backlog() {
 
     assert!(state.ui.agent.current_backlog.is_none());
 }
+
+fn read_pdf_call(input: serde_json::Value) -> ToolCall {
+    ToolCall {
+        id: "p1".into(),
+        name: "read_pdf".into(),
+        input,
+    }
+}
+
+#[test]
+fn read_pdf_runs_in_the_background_and_reports_back_to_its_conversation() {
+    let mut state = enabled_state();
+    let ctx = egui::Context::default();
+    let missing = std::env::temp_dir().join("silicolab-agent-missing.pdf");
+    let call = read_pdf_call(json!({ "path": missing.display().to_string() }));
+
+    assert!(dispatch_call(&mut state, &call, &ctx));
+    assert_eq!(state.jobs.agent_pdf_reads.len(), 1);
+    let started = state.ui.agent.collected_results.iter().any(|block| {
+        matches!(block, ContentBlock::ToolResult { content, is_error: false, .. }
+            if content.contains("Started background PDF read"))
+    });
+    assert!(started, "the tool result hands control straight back");
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !state.jobs.agent_pdf_reads.is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the read never finished"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        poll_agent_jobs(&mut state, &ctx);
+    }
+    let reported = state.ui.agent.transcript.iter().any(|entry| {
+        matches!(entry, TranscriptEntry::Notice(text) if text.contains("PDF read #") && text.contains("failed"))
+    });
+    assert!(
+        reported,
+        "a missing file surfaces as a failed read, not a panic"
+    );
+}
+
+#[test]
+fn read_pdf_with_bad_arguments_fails_without_spawning() {
+    let mut state = enabled_state();
+    let ctx = egui::Context::default();
+    for input in [
+        json!({}),
+        json!({ "path": "/tmp/paper.pdf", "pages": "7-3" }),
+        json!({ "path": "relative-without-a-project.pdf" }),
+    ] {
+        assert!(!dispatch_call(&mut state, &read_pdf_call(input), &ctx));
+    }
+    assert!(state.jobs.agent_pdf_reads.is_empty());
+}
+
+#[test]
+fn stopping_a_conversation_cancels_its_pdf_reads() {
+    let mut state = enabled_state();
+    let ctx = egui::Context::default();
+    let call = read_pdf_call(json!({ "path": "/tmp/silicolab-agent-missing.pdf" }));
+    dispatch_call(&mut state, &call, &ctx);
+    let conversation = state.ui.agent.active_conversation;
+    assert_eq!(cancel_conversation_jobs(&mut state, conversation), 1);
+    assert!(state.jobs.agent_pdf_reads.is_empty());
+}
+
+#[test]
+fn a_pdf_the_user_named_needs_no_approval_but_one_a_document_named_does() {
+    let mut state = enabled_state();
+    state.config.assistant.approval_mode = crate::backend::config::ApprovalMode::AutoSafe;
+    let call = read_pdf_call(json!({ "path": "/Users/me/Downloads/paper.pdf" }));
+    state.ui.agent.pending_calls = vec![call].into();
+    state.ui.agent.phase = AgentPhase::AwaitingApproval;
+    assert_eq!(
+        gated_pending(&state).len(),
+        1,
+        "an unmentioned outside path is gated"
+    );
+
+    state.ui.agent.transcript.push(TranscriptEntry::Notice(
+        "see /Users/me/Downloads/paper.pdf".into(),
+    ));
+    assert_eq!(
+        gated_pending(&state).len(),
+        1,
+        "only the user's own words count"
+    );
+
+    state.ui.agent.transcript.push(TranscriptEntry::User(
+        "read `/Users/me/Downloads/paper.pdf` please".into(),
+    ));
+    assert!(gated_pending(&state).is_empty());
+}

@@ -314,6 +314,12 @@ fn conversation_job_count(state: &AppState) -> usize {
             .iter()
             .filter(|job| job.conversation == active)
             .count()
+        + state
+            .jobs
+            .agent_pdf_reads
+            .iter()
+            .filter(|job| job.conversation == active)
+            .count()
 }
 
 /// Dispatch the next queued follow-up when the agent is at rest. One at a time:

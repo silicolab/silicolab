@@ -15,6 +15,7 @@ use super::engine_verify::RunningEngineVerify;
 use super::metrics::RunningMetricsSampler;
 use super::online_structures::{RunningOnlineStructureJob, TrackedAgentOnlineStructureJob};
 use super::optimization::RunningOptimization;
+use super::pdf::TrackedAgentPdfJob;
 use super::qm::RunningQmJob;
 use super::remote::{RunningRemoteGpuMonitor, RunningRemoteHardwareFetch, RunningRemoteProbe};
 use super::update::{RunningModelFetch, RunningSelfUpdate, RunningUpdateCheck};
@@ -51,6 +52,7 @@ pub struct JobManager {
     /// model through the queue.
     pub agent_jobs: Vec<TrackedAgentJob>,
     pub agent_online_structures: Vec<TrackedAgentOnlineStructureJob>,
+    pub agent_pdf_reads: Vec<TrackedAgentPdfJob>,
     /// Monotonic id source for `agent_jobs`.
     pub next_agent_job_id: u64,
     /// In-flight live model-list fetch for the active provider's `/models`

@@ -14,6 +14,7 @@ use serde_json::{Value, json};
 
 use crate::backend::config::ApprovalMode;
 mod inspection;
+pub mod pdf;
 use crate::frontend::console::{RiskLevel, command_risk};
 use crate::frontend::state::{AppState, LogLevel};
 use crate::io::llm::types::{ToolCall, ToolDef};
@@ -181,6 +182,36 @@ pub fn tool_defs() -> Vec<ToolDef> {
                 "additionalProperties": false
             }),
         },
+        ToolDef {
+            name: "read_pdf".to_string(),
+            description: "Read the text of a PDF (a paper, SI, or manual) page by page, or search \
+                it. Runs in the background; the text arrives in a follow-up message. Give `path` \
+                relative to the project folder when the file is inside it; an absolute path needs \
+                the user's approval. Without `pages` it starts at page 1 and returns as many whole \
+                pages as fit, then names the `pages` value that continues. For a long document, \
+                call with `query` first to find which pages mention a term, then read those \
+                pages. Scanned PDFs have no text layer and return nothing."
+                .to_string(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "Path to the .pdf file."
+                    },
+                    "pages": {
+                        "type": "string",
+                        "description": "A 1-based page like `4` or an inclusive range like `4-9`."
+                    },
+                    "query": {
+                        "type": "string",
+                        "description": "Case-insensitive text to search for; returns matching pages with context instead of page text."
+                    }
+                },
+                "required": ["path"],
+                "additionalProperties": false
+            }),
+        },
     ]
 }
 
@@ -197,6 +228,7 @@ pub fn risk_of_call(call: &ToolCall) -> RiskLevel {
     match call.name.as_str() {
         "save_skill" => RiskLevel::FileWrite,
         "cancel_job" => RiskLevel::Destructive,
+        "read_pdf" if pdf::reads_outside_project(&call.input) => RiskLevel::ExternalRead,
         "run_command" => {
             let command = call
                 .input
@@ -242,7 +274,10 @@ pub fn needs_confirmation(
     }
     match mode {
         ApprovalMode::Manual => risk != RiskLevel::ReadOnly,
-        ApprovalMode::AutoSafe => matches!(risk, RiskLevel::FileWrite | RiskLevel::Expensive),
+        ApprovalMode::AutoSafe => matches!(
+            risk,
+            RiskLevel::ExternalRead | RiskLevel::FileWrite | RiskLevel::Expensive
+        ),
         // Auto and Plan return false here only because Destructive is handled
         // above and Plan never reaches execution (the batch driver short-circuits).
         ApprovalMode::Auto | ApprovalMode::Plan => false,

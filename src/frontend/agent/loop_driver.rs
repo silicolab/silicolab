@@ -51,6 +51,8 @@ in the console). One command per call.
 - `inspect` returns a read-only view of the current workspace.
 - `list_jobs` returns local, assistant, and remote jobs from the unified job control plane.
 - `cancel_job` requests cancellation for a job id returned by `list_jobs`.
+- `read_pdf` reads or searches the text of a PDF (paper, SI, manual) in the background; use it \
+when the user points at a PDF, and cite page numbers for parameters you take from it.
 - `save_skill` saves a reusable, discoverable skill (a named set of `.sls` command steps) so a \
 workflow can be found again via `recommend_method` and replayed with placeholders filled in.
 
@@ -128,7 +130,7 @@ fn persist(state: &mut AppState) {
 }
 
 /// A one-line description of a tool call for the transcript.
-fn describe_call(call: &crate::io::llm::types::ToolCall) -> String {
+pub fn describe_call(call: &crate::io::llm::types::ToolCall) -> String {
     match call.name.as_str() {
         "run_command" => call
             .input
@@ -156,6 +158,17 @@ fn describe_call(call: &crate::io::llm::types::ToolCall) -> String {
             .and_then(|value| value.as_str())
             .map(|name| format!("save_skill {name}"))
             .unwrap_or_else(|| "save_skill".to_string()),
+        "read_pdf" => {
+            let text = |key: &str| call.input.get(key).and_then(|value| value.as_str());
+            let mut line = format!("read_pdf {}", text("path").unwrap_or_default());
+            if let Some(pages) = text("pages") {
+                line.push_str(&format!(" pages={pages}"));
+            }
+            if let Some(query) = text("query") {
+                line.push_str(&format!(" query={query:?}"));
+            }
+            line
+        }
         other => other.to_string(),
     }
 }
