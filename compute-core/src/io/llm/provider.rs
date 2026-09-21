@@ -19,6 +19,9 @@ pub struct ProviderCaps {
     pub supports_thinking: bool,
     pub supports_prompt_cache: bool,
     pub supports_streaming: bool,
+    /// The endpoint accepts a PDF as native input. Off means attachments reach
+    /// the model as extracted text.
+    pub supports_pdf_input: bool,
 }
 
 pub trait LlmProvider: Send {

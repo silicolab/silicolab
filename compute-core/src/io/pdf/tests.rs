@@ -3,7 +3,7 @@ use super::*;
 use pdf_extract::content::{Content, Operation};
 use pdf_extract::{Dictionary, Object, Stream};
 
-fn pdf_bytes(pages: &[&str]) -> Vec<u8> {
+pub(crate) fn pdf_bytes(pages: &[&str]) -> Vec<u8> {
     let mut document = Document::with_version("1.5");
     let pages_id = document.new_object_id();
     let mut font = Dictionary::new();
@@ -57,10 +57,10 @@ fn pdf_bytes(pages: &[&str]) -> Vec<u8> {
     bytes
 }
 
-struct TempPdf(PathBuf);
+pub(crate) struct TempPdf(pub(crate) PathBuf);
 
 impl TempPdf {
-    fn new(name: &str, bytes: &[u8]) -> Self {
+    pub(crate) fn new(name: &str, bytes: &[u8]) -> Self {
         let path =
             std::env::temp_dir().join(format!("silicolab-pdf-{}-{name}.pdf", uuid::Uuid::new_v4()));
         std::fs::write(&path, bytes).unwrap();

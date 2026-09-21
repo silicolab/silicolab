@@ -9,6 +9,31 @@ use crate::frontend::jobs::spawn_model_fetch;
 use crate::frontend::state::{AppState, SystemSubsystem};
 use crate::io::llm::types::Effort;
 
+/// Attach PDFs to the active conversation's draft message.
+pub fn attach_agent_documents(state: &mut AppState, paths: Vec<std::path::PathBuf>) {
+    if !state.config.assistant.enabled {
+        state.status_warning("A PDF is not a structure file; enable the Assistant to read it.");
+        return;
+    }
+    state
+        .ui
+        .layout
+        .dock
+        .reveal_static(crate::frontend::state::StaticView::Assistant);
+    let problems =
+        crate::frontend::agent::tools::pdf::attach(&mut state.ui.agent.attachments, paths);
+    for problem in problems {
+        notice(state, &problem);
+    }
+}
+
+pub fn remove_agent_attachment(state: &mut AppState, index: usize) {
+    let attachments = &mut state.ui.agent.attachments;
+    if index < attachments.len() {
+        attachments.remove(index);
+    }
+}
+
 pub fn new_assistant_conversation(state: &mut AppState) {
     let selection = state.config.assistant.default_selection.clone();
     state.ui.agent.start_new_conversation(selection);

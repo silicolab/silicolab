@@ -336,22 +336,22 @@ impl SilicoLabApp {
         if pdfs.is_empty() {
             return;
         }
-        if self.state.config.assistant.enabled {
-            crate::frontend::agent::tools::pdf::attach(&mut self.state.ui.agent.attachments, pdfs);
-        } else {
-            self.state
-                .status_warning("A PDF is not a structure file; enable the Assistant to read it.");
-        }
+        dispatcher::dispatch(&mut self.state, AppAction::AttachAgentDocuments(pdfs), ctx);
     }
 
     fn show_file_drop_overlay(&self, ctx: &egui::Context) {
-        let hovered_count = ctx.input(|input| {
-            input
+        let (hovered_count, all_pdfs) = ctx.input(|input| {
+            let paths: Vec<_> = input
                 .raw
                 .hovered_files
                 .iter()
-                .filter(|file| file.path.is_some())
-                .count()
+                .filter_map(|file| file.path.as_deref())
+                .collect();
+            let all_pdfs = paths.iter().all(|path| {
+                path.extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
+            });
+            (paths.len(), all_pdfs)
         });
         if hovered_count == 0 {
             return;
@@ -365,10 +365,14 @@ impl SilicoLabApp {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.set_max_width(260.0);
                     ui.vertical_centered(|ui| {
-                        ui.heading("Drop to open");
-                        if hovered_count == 1 {
+                        if all_pdfs {
+                            ui.heading("Drop to attach");
+                            ui.label("Release to attach to the Assistant");
+                        } else if hovered_count == 1 {
+                            ui.heading("Drop to open");
                             ui.label("Release to open the structure file");
                         } else {
+                            ui.heading("Drop to open");
                             ui.label(format!("Release to open {hovered_count} structure files"));
                         }
                     });

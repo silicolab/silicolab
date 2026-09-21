@@ -5,18 +5,20 @@ use std::sync::atomic::Ordering;
 use eframe::egui;
 
 use crate::frontend::agent::registry;
-use crate::frontend::agent::session::{AgentPhase, PendingTurn, TranscriptEntry};
+use crate::frontend::agent::session::{AgentPhase, PendingTurn, TranscriptEntry, UserMessage};
 use crate::frontend::agent::tools;
 use crate::frontend::jobs::{AgentTurnEvent, spawn_agent_turn};
 use crate::frontend::state::{AppState, LogLevel};
 use crate::io::llm::types::{AssistantTurn, ChatMessage, LlmConfig, LlmError, StopReason};
+
+const TEXT_FALLBACK_NOTICE: &str = "This model does not take PDFs directly, so it receives the      attachment's extracted text. Figures and scanned pages are not included.";
 
 /// Handle a user message. Idle → start a turn immediately; busy or paused on
 /// approval → queue it (type-ahead) so `pump_queue` sends it once the agent is
 /// free, instead of dropping it.
 pub fn send_agent_message(state: &mut AppState, text: &str, ctx: &egui::Context) {
     let text = text.trim();
-    if text.is_empty() {
+    if text.is_empty() && state.ui.agent.attachments.is_empty() {
         return;
     }
     if !state.config.assistant.enabled {
@@ -39,6 +41,10 @@ pub fn send_agent_message(state: &mut AppState, text: &str, ctx: &egui::Context)
         state.ui.agent.phase = AgentPhase::Idle;
         state.ui.agent.qm_diagnostic_only = false;
     }
+    let message = UserMessage {
+        text: text.to_string(),
+        attachments: std::mem::take(&mut state.ui.agent.attachments),
+    };
     // Busy, paused on approval, or a follow-up is already queued (e.g. a finished
     // job's wake): enqueue so FIFO order holds, then pump in case we are idle.
     if state.ui.agent.is_busy()
@@ -49,23 +55,35 @@ pub fn send_agent_message(state: &mut AppState, text: &str, ctx: &egui::Context)
             .ui
             .agent
             .queued
-            .push_back(PendingTurn::UserMessage(text.to_string()));
+            .push_back(PendingTurn::UserMessage(message));
         pump_queue(state, ctx);
         return;
     }
-    begin_user_turn(state, text, ctx);
+    begin_user_turn(state, message, ctx);
 }
 
 /// Record a user message into history + transcript and spawn its first model
 /// turn. Shared by the immediate send and the queue pump; surfaces a missing
 /// key / bad provider without mutating history.
-fn begin_user_turn(state: &mut AppState, text: &str, ctx: &egui::Context) {
+fn begin_user_turn(state: &mut AppState, message: UserMessage, ctx: &egui::Context) {
     // Surface a missing key / bad provider up front, before recording the turn.
-    if let Err(reason) =
-        registry::build_provider(&state.config.assistant, &state.ui.agent.selection)
+    let provider =
+        match registry::build_provider(&state.config.assistant, &state.ui.agent.selection) {
+            Ok(provider) => provider,
+            Err(reason) => {
+                notice(state, &reason);
+                return;
+            }
+        };
+    let is_api_model = registry::provider_spec(&state.ui.agent.selection.provider)
+        .is_some_and(|spec| !matches!(spec.kind, registry::ProviderKind::ExternalAgent(_)));
+    if !message.attachments.is_empty()
+        && is_api_model
+        && !provider.caps().supports_pdf_input
+        && !state.ui.agent.text_fallback_noted
     {
-        notice(state, &reason);
-        return;
+        state.ui.agent.text_fallback_noted = true;
+        notice(state, TEXT_FALLBACK_NOTICE);
     }
 
     // Keep the replayed history valid if a prior exchange was interrupted.
@@ -73,13 +91,20 @@ fn begin_user_turn(state: &mut AppState, text: &str, ctx: &egui::Context) {
         .ui
         .agent
         .recover_interrupted("continuing the conversation");
-    state.ui.agent.maybe_title_from_first_user_message(text);
-    state.ui.agent.history.push(ChatMessage::user_text(text));
+    let title_source = match message.attachments.first() {
+        Some(document) if message.text.is_empty() => document.name.as_str(),
+        _ => message.text.as_str(),
+    };
+    state
+        .ui
+        .agent
+        .maybe_title_from_first_user_message(title_source);
+    state.ui.agent.history.push(message.to_chat_message());
     state
         .ui
         .agent
         .transcript
-        .push(TranscriptEntry::User(text.to_string()));
+        .push(TranscriptEntry::User(message));
     state.ui.agent.iterations = 0;
     spawn_next_turn(state, ctx);
 }
@@ -147,7 +172,7 @@ pub fn spawn_next_turn(state: &mut AppState, ctx: &egui::Context) {
         .iter()
         .rev()
         .find_map(|entry| match entry {
-            TranscriptEntry::User(text) => Some(text),
+            TranscriptEntry::User(message) if !message.text.is_empty() => Some(&message.text),
             _ => None,
         })
     {
@@ -396,10 +421,13 @@ pub fn pump_queue(state: &mut AppState, ctx: &egui::Context) {
                 begin_job_followup(state, &format!("QM {job_id}"), &summary, false, ctx);
             }
         }
-        PendingTurn::UserMessage(text) => {
+        PendingTurn::UserMessage(message) => {
             let baseline = conversation_job_count(state);
-            state.ui.agent.note_backlog_start(text.clone(), baseline);
-            begin_user_turn(state, &text, ctx);
+            state
+                .ui
+                .agent
+                .note_backlog_start(message.text.clone(), baseline);
+            begin_user_turn(state, message, ctx);
         }
         PendingTurn::JobDone {
             label,

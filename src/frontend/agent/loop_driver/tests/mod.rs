@@ -442,7 +442,7 @@ fn busy_send_enqueues_instead_of_dropping() {
     assert_eq!(state.ui.agent.queued.len(), 1, "busy send should enqueue");
     assert!(matches!(
         state.ui.agent.queued.front(),
-        Some(PendingTurn::UserMessage(text)) if text == "do this next"
+        Some(PendingTurn::UserMessage(text)) if text.text == "do this next"
     ));
     // Not sent yet: history is untouched while busy.
     assert_eq!(state.ui.agent.history.len(), history_before);
@@ -572,7 +572,7 @@ fn remove_queued_drops_the_indexed_item() {
     assert_eq!(state.ui.agent.queued.len(), 1);
     assert!(matches!(
         state.ui.agent.queued.front(),
-        Some(PendingTurn::UserMessage(text)) if text == "second"
+        Some(PendingTurn::UserMessage(text)) if text.text == "second"
     ));
 }
 

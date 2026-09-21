@@ -667,6 +667,7 @@ fn assistant_history_survives_save_and_load() {
             transcript: vec![
                 PersistedTranscriptEntry::User {
                     text: "prepare 1ubq".to_string(),
+                    attachments: Vec::new(),
                 },
                 PersistedTranscriptEntry::Assistant {
                     text: "Loaded it.".to_string(),

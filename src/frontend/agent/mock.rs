@@ -72,6 +72,7 @@ impl LlmProvider for MockProvider {
             supports_thinking: true,
             supports_prompt_cache: true,
             supports_streaming: false,
+            supports_pdf_input: false,
         }
     }
 }

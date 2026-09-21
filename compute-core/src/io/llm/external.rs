@@ -210,6 +210,7 @@ impl LlmProvider for ExternalAgent {
             supports_thinking: false,
             supports_prompt_cache: false,
             supports_streaming: true,
+            supports_pdf_input: false,
         }
     }
 }
@@ -265,6 +266,10 @@ fn render_block(block: &ContentBlock) -> Value {
             json!({"type":"tool_result","tool_use_id":tool_use_id,"content":content,"is_error":is_error})
         }
         ContentBlock::OpaqueReasoning(_) => json!({"type":"reasoning"}),
+        ContentBlock::Document(document) => json!({
+            "type": "text",
+            "text": format!("[attached PDF: {} — read it from disk]", document.path.display()),
+        }),
     }
 }
 
@@ -463,6 +468,26 @@ fn prefer_windows_executable(path: &std::path::Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn attached_pdf_is_rendered_as_a_path_to_read() {
+        let block = ContentBlock::Document(crate::io::llm::types::DocumentRef {
+            path: "/papers/si.pdf".into(),
+            name: "si.pdf".into(),
+            bytes: 1,
+            modified_ms: 0,
+            pages: 1,
+        });
+        let rendered = render_block(&block);
+        assert_eq!(rendered["type"], "text");
+        assert!(
+            rendered["text"]
+                .as_str()
+                .unwrap()
+                .contains("/papers/si.pdf")
+        );
+    }
+
     #[test]
     fn parses_structured_output_and_usage() {
         let mut events = Vec::new();

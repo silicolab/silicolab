@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
+use super::documents::{self, DocMode, Resolved};
 use super::provider::{LlmProvider, ProviderCaps};
 use super::types::{
     AssistantTurn, ChatMessage, ContentBlock, Effort, LlmConfig, LlmError, ReasoningBlob, Role,
@@ -52,13 +53,26 @@ impl AnthropicProvider {
         cfg: &LlmConfig,
         tools: &[ToolDef],
         history: &[ChatMessage],
-    ) -> Value {
-        let mut messages: Vec<Value> = history.iter().map(message_to_json).collect();
+        cancel: &AtomicBool,
+    ) -> Result<Value, LlmError> {
+        let mode = if self.caps.supports_pdf_input {
+            DocMode::Native(documents::ANTHROPIC_LIMITS)
+        } else {
+            DocMode::ExtractedText
+        };
+        let resolved = documents::resolve(history, mode, cancel)?;
+        let mut messages: Vec<Value> = resolved
+            .messages
+            .iter()
+            .map(|message| message_to_json(message, &resolved))
+            .collect();
         // Rolling cache breakpoint on the last block of the last message, so the
         // growing transcript caches turn-over-turn (the static tools+system
-        // breakpoint below covers the prefix). Up to 4 breakpoints are allowed;
-        // we use 2.
+        // breakpoint below covers the prefix). A third sits on the newest PDF so
+        // a tool loop re-reads it from cache instead of re-billing every page.
+        // Up to 4 breakpoints are allowed.
         if self.caps.supports_prompt_cache {
+            add_cache_control_to_last_document(&mut messages);
             add_cache_control_to_last_block(&mut messages);
         }
 
@@ -95,7 +109,7 @@ impl AnthropicProvider {
         if cfg.stream {
             body["stream"] = json!(true);
         }
-        body
+        Ok(body)
     }
 }
 
@@ -113,7 +127,7 @@ impl LlmProvider for AnthropicProvider {
             return Err(LlmError::Cancelled);
         }
 
-        let body = self.build_request_body(cfg, tools, history);
+        let body = self.build_request_body(cfg, tools, history, cancel)?;
         // Serialize the JSON ourselves and send raw bytes: ureq's `send_json`
         // lives behind its `json` feature, which this crate does not enable.
         let payload = serde_json::to_vec(&body)
@@ -196,6 +210,7 @@ pub fn caps_for_model(model: &str) -> ProviderCaps {
         supports_thinking: adaptive,
         supports_prompt_cache: true,
         supports_streaming: true,
+        supports_pdf_input: true,
     }
 }
 
@@ -228,7 +243,7 @@ fn anthropic_effort(effort: Effort) -> &'static str {
 /// Render a neutral message into Anthropic's `{role, content:[blocks]}` shape.
 /// `Tool` results map to a `user` message of `tool_result` blocks; foreign
 /// reasoning blobs are stripped (Anthropic only understands its own `thinking`).
-fn message_to_json(message: &ChatMessage) -> Value {
+fn message_to_json(message: &ChatMessage, resolved: &Resolved) -> Value {
     let role = match message.role {
         Role::Assistant => "assistant",
         // Anthropic has only user/assistant turns; tool results ride in a user
@@ -265,6 +280,21 @@ fn message_to_json(message: &ChatMessage) -> Value {
                 }
                 // Any non-Anthropic blob is silently dropped on this wire.
             }
+            ContentBlock::Document(document) => blocks.push(match resolved.payload(document) {
+                Some(data) => json!({
+                    "type": "document",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "application/pdf",
+                        "data": data,
+                    },
+                    "title": document.name,
+                    // The path is what `read_pdf` takes if the model wants to
+                    // search the file rather than reread it.
+                    "context": format!("Attached from `{}`", document.path.display()),
+                }),
+                None => json!({ "type": "text", "text": documents::stale_note(document) }),
+            }),
         }
     }
 
@@ -295,6 +325,18 @@ fn add_cache_control_to_last_block(messages: &mut [Value]) {
     if let Some(last_block) = blocks.last_mut()
         && let Some(object) = last_block.as_object_mut()
     {
+        object.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
+    }
+}
+
+fn add_cache_control_to_last_document(messages: &mut [Value]) {
+    let last_document = messages
+        .iter_mut()
+        .rev()
+        .filter_map(|message| message.get_mut("content").and_then(Value::as_array_mut))
+        .flat_map(|blocks| blocks.iter_mut().rev())
+        .find(|block| block.get("type").and_then(Value::as_str) == Some("document"));
+    if let Some(object) = last_document.and_then(Value::as_object_mut) {
         object.insert("cache_control".to_string(), json!({ "type": "ephemeral" }));
     }
 }
