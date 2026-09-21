@@ -138,6 +138,7 @@ pub fn describe_call(call: &crate::io::llm::types::ToolCall) -> String {
             .and_then(|value| value.as_str())
             .map(|command| command.to_string())
             .unwrap_or_else(|| "run_command".to_string()),
+        "save_constraint" => format!("save_constraint {}", call.input),
         "inspect" => "inspect".to_string(),
         "list_jobs" => "list_jobs".to_string(),
         "cancel_job" => call

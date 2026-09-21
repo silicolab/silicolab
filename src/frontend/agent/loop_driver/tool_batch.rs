@@ -39,8 +39,8 @@ pub fn run_tool_batch(state: &mut AppState, ctx: &egui::Context) {
             ctx.request_repaint();
             return;
         }
-        state.ui.agent.approved_ids.remove(&call.id);
         let succeeded = dispatch_call(state, &call, ctx);
+        state.ui.agent.approved_ids.remove(&call.id);
         state.ui.agent.pending_calls.pop_front();
         if !succeeded {
             stop_batch(state, &call.id, "failed", ctx);
@@ -118,7 +118,7 @@ fn propose_in_plan_mode(state: &mut AppState, ctx: &egui::Context) {
     while let Some(call) = state.ui.agent.pending_calls.pop_front() {
         if matches!(
             call.name.as_str(),
-            "run_command" | "save_skill" | "cancel_job"
+            "run_command" | "save_skill" | "save_constraint" | "cancel_job"
         ) {
             push_tool_call_entry(state, &call);
             let summary = format!(

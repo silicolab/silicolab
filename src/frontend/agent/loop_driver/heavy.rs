@@ -41,6 +41,7 @@ pub fn heavy_kind_of(call: &ToolCall) -> Option<HeavyKind> {
                 "energy"
                     | "sp"
                     | "single-point"
+                    | "periodic"
                     | "optimize"
                     | "opt"
                     | "freq"
@@ -241,6 +242,7 @@ pub fn spawn_heavy(
             .kind;
         crate::frontend::dispatcher::ensure_task_run_dir(state, task_id, task_kind, None)
     };
+    let mut evidence_request = None;
     let spawned: Result<AgentHeavyJob, String> = match kind {
         HeavyKind::Qm => crate::frontend::qm_commands::build_agent_qm_request(state, args)
             .and_then(|job| {
@@ -256,6 +258,7 @@ pub fn spawn_heavy(
                     launches.insert(crate::engines::registry::EngineId::ORCA, launch);
                 }
                 prepare(state)?;
+                evidence_request = Some(job.clone());
                 Ok(AgentHeavyJob::Qm(
                     crate::frontend::jobs::spawn_qm_job_with_launches(job, None, launches)?,
                 ))
@@ -295,6 +298,9 @@ pub fn spawn_heavy(
                 crate::backend::run_attempt::Placement::Local,
                 job_kind,
             );
+            if let Some(request) = evidence_request {
+                crate::frontend::dispatcher::capture_qm_input(state, &job_id.to_string(), request);
+            }
             state.jobs.agent_jobs.push(TrackedAgentJob {
                 id,
                 conversation,
@@ -525,6 +531,7 @@ fn finish_agent_job(
     summary: String,
     is_error: bool,
 ) {
+    let summary = crate::frontend::agent::tools::clamp_result(&summary);
     let cancelled = matches!(&tracked.job, AgentHeavyJob::Qm(job) if job.cancel_requested);
     let status = if cancelled {
         TaskStatus::Cancelled
@@ -669,12 +676,21 @@ fn drain_qm(
                 if running.cancel_requested {
                     return Some(("QM calculation cancelled".to_string(), true));
                 }
-                let summary = outcome.summary.clone();
+                let summary =
+                    crate::backend::records::qm::completion(&job_id.to_string(), &outcome);
                 let cx = crate::frontend::dispatcher::JobContext {
                     job_id: Some(job_id),
                     task_run_id: Some(task_run_id),
                 };
-                crate::frontend::dispatcher::apply_qm_outcome(state, &cx, *outcome);
+                if let Err(error) =
+                    crate::frontend::dispatcher::apply_qm_outcome(state, &cx, *outcome)
+                {
+                    return Some((format!("QM result rejected: {error}"), true));
+                }
+                let summary = format!(
+                    "{summary}; {}",
+                    crate::frontend::dispatcher::evidence_notice(state, &job_id.to_string())
+                );
                 return Some((summary, false));
             }
             Ok(QmWorkerMessage::Failed(error)) => {

@@ -74,7 +74,21 @@ fn finished_job_posts_notice_and_clears_the_registry() {
     })))
     .unwrap();
     drop(tx);
-    state.jobs.agent_jobs.push(fake_qm_job(7, conversation, rx));
+    let root = std::env::temp_dir().join(format!("silicolab-agent-done-{}", uuid::Uuid::new_v4()));
+    let task = state
+        .tasks
+        .create_task_run(*crate::backend::tasks::task_controller_by_id("qm-optimize").unwrap());
+    state.tasks.set_run_dir(task, root.clone());
+    let job = state.tasks.runs.begin_execution(
+        task,
+        crate::backend::run_attempt::Placement::Local,
+        Some("qm-optimize".into()),
+        1,
+    );
+    let mut running = fake_qm_job(7, conversation, rx);
+    running.task_run_id = task;
+    running.job_id = job;
+    state.jobs.agent_jobs.push(running);
 
     poll_agent_jobs(&mut state, &ctx);
 
@@ -88,6 +102,35 @@ fn finished_job_posts_notice_and_clears_the_registry() {
             |entry| matches!(entry, TranscriptEntry::Notice(text) if text.contains("finished")),
         );
     assert!(finished);
+    assert!(state.materializations.contains(&job.to_string()));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn unowned_qm_result_reports_rejection_without_success_notice() {
+    let mut state = enabled_state();
+    let (tx, rx) = std::sync::mpsc::channel();
+    tx.send(QmWorkerMessage::Finished(Box::new(QmOutcome {
+        energy_hartree: -1.0,
+        converged: true,
+        optimized_structure: Some(crate::domain::Structure::empty()),
+        summary: "unowned report".into(),
+        scf_trace: vec![],
+        opt_trace: vec![],
+        frequencies: vec![],
+    })))
+    .unwrap();
+    let conversation = state.ui.agent.active_conversation;
+    state.jobs.agent_jobs.push(fake_qm_job(7, conversation, rx));
+    poll_agent_jobs(&mut state, &egui::Context::default());
+    assert!(state.jobs.agent_jobs.is_empty());
+    assert!(state.ui.agent.transcript.iter().any(|entry| {
+        matches!(entry, TranscriptEntry::Notice(text) if text.contains("QM result rejected"))
+    }));
+    assert!(!state.ui.agent.transcript.iter().any(|entry| {
+        matches!(entry, TranscriptEntry::Notice(text) if text.contains("finished"))
+    }));
+    assert_eq!(state.materializations.len(), 0);
 }
 
 #[test]

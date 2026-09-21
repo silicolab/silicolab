@@ -88,9 +88,21 @@ impl QmSeries {
 }
 
 pub fn save_qm_series_file(run_dir: &Path, series: &QmSeries) -> Result<PathBuf> {
+    if series
+        .scf_trace
+        .iter()
+        .chain(&series.opt_trace)
+        .chain(&series.frequencies)
+        .any(|value| !value.is_finite())
+    {
+        bail!(
+            "numerical series contains non-finite values; compact evidence records their counts, but JSON chart data cannot represent them"
+        );
+    }
     let path = run_dir.join(SERIES_FILE);
     let json = serde_json::to_string_pretty(series).context("serialize QM series")?;
-    fs::write(&path, json).with_context(|| format!("write {}", path.display()))?;
+    crate::backend::records::artifacts::write_atomic(&path, json.as_bytes())
+        .with_context(|| format!("write {}", path.display()))?;
     Ok(path)
 }
 

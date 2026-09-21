@@ -26,7 +26,6 @@ use crate::{
         QmTsEndpoints, QmTsGuess, periodic,
     },
     frontend::state::AppState,
-    io::structure_paths::default_structure_save_path,
     workflows::qm::run_qm_calculation,
 };
 
@@ -296,6 +295,12 @@ pub fn build_agent_qm_request(state: &AppState, args: &[String]) -> Result<QmJob
     let Some(sub) = args.first().map(String::as_str) else {
         bail!("usage: qm <energy|optimize|freq> [options]");
     };
+    if sub == "periodic" {
+        return Ok(QmJob::periodic(assemble_periodic_request(
+            state,
+            &args[1..],
+        )?));
+    }
     let kind = match sub {
         "energy" | "sp" | "single-point" => QmKind::SinglePoint,
         "optimize" | "opt" => QmKind::Optimize,
@@ -347,51 +352,117 @@ fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
         }
     }
 
+    let cx = begin_command_evidence(
+        state,
+        &job,
+        kind,
+        &std::iter::once(kind_keyword(kind).to_string())
+            .chain(args.iter().cloned())
+            .collect::<Vec<_>>(),
+    )?;
     // Synchronous: a throwaway cancel flag and a no-op progress sink.
     let cancel = Arc::new(AtomicBool::new(false));
     let cores = Some(match job.engine {
         QmEngine::Hartree => state.config.compute_core_count.max(1),
         QmEngine::Orca => 1,
     });
-    let outcome = match job.engine {
-        QmEngine::Hartree => run_qm_calculation(job, cores, cancel, |_| {})?.outcome,
-        QmEngine::Orca => {
-            let launch = crate::backend::engine_launch::resolve_engine_launch(
-                crate::backend::engine_launch::LaunchTarget::Local(&state.config.engine_overrides),
-                crate::engines::registry::EngineId::ORCA,
-            )?
-            .launch;
-            let QmCalculation::Molecular(request) = job.calculation else {
-                unreachable!("ORCA command built a periodic job");
-            };
-            crate::engines::orca::run_orca(request, launch, cores, cancel, |_| {})?
-        }
-    };
-
-    // A QM run is a heavy calculation; surface its optimized geometry as a new
-    // entry (the original is preserved), matching the GUI task and MD commands.
-    if let Some(optimized) = outcome.optimized_structure {
-        let save_path = default_structure_save_path(&optimized, None);
-        let entry_id = state.entries.add_entry(optimized, None, save_path);
-        state.show_entry(entry_id);
-    }
-
-    Ok(outcome.summary)
+    let outcome = (|| -> Result<crate::engines::qm::QmOutcome> {
+        Ok(match job.engine {
+            QmEngine::Hartree => run_qm_calculation(job, cores, cancel, |_| {})?.outcome,
+            QmEngine::Orca => {
+                let launch = crate::backend::engine_launch::resolve_engine_launch(
+                    crate::backend::engine_launch::LaunchTarget::Local(
+                        &state.config.engine_overrides,
+                    ),
+                    crate::engines::registry::EngineId::ORCA,
+                )?
+                .launch;
+                let QmCalculation::Molecular(request) = job.calculation else {
+                    unreachable!("ORCA command built a periodic job");
+                };
+                crate::engines::orca::run_orca(request, launch, cores, cancel, |_| {})?
+            }
+        })
+    })();
+    finish_command_evidence(state, &cx, outcome)
 }
 
 /// `qm periodic [options]`: a periodic (crystalline) single point on the active
 /// unit cell. Runs synchronously, like the molecular subcommands; periodic v1
 /// has no geometry relaxation, so it never creates a new entry.
 fn run_periodic_command(state: &mut AppState, args: &[String]) -> Result<String> {
-    let request = assemble_periodic_request(state, args)?;
-    let cancel = Arc::new(AtomicBool::new(false));
-    let result = run_qm_calculation(
-        QmJob::periodic(request),
+    let job = QmJob::periodic(assemble_periodic_request(state, args)?);
+    let cx = begin_command_evidence(state, &job, QmKind::SinglePoint, &["periodic".into()])?;
+    let outcome = run_qm_calculation(
+        job,
         Some(state.config.compute_core_count.max(1)),
-        cancel,
+        Arc::new(AtomicBool::new(false)),
         |_| {},
-    )?;
-    Ok(result.outcome.summary)
+    )
+    .map(|r| r.outcome);
+    finish_command_evidence(state, &cx, outcome)
+}
+
+fn begin_command_evidence(
+    state: &mut AppState,
+    job: &QmJob,
+    kind: QmKind,
+    args: &[String],
+) -> Result<crate::frontend::dispatcher::JobContext> {
+    use crate::frontend::dispatcher::*;
+    let name = match kind {
+        QmKind::SinglePoint => "qm-energy",
+        QmKind::Optimize => "qm-optimize",
+        QmKind::Frequencies => "qm-frequencies",
+        QmKind::TransitionState => "qm-transition-state",
+    };
+    let controller = crate::backend::tasks::task_controller_by_id(name)
+        .ok_or_else(|| anyhow!("QM task controller missing"))?;
+    let inputs = agent_qm_inputs(state, args)?;
+    let task = state.tasks.create_task_run(*controller);
+    bind_task_inputs(state, task, inputs)?;
+    ensure_task_run_dir(state, task, controller.kind, None)?;
+    let id = begin_job_execution(
+        state,
+        task,
+        crate::backend::run_attempt::Placement::Local,
+        Some(name.into()),
+    );
+    capture_qm_input(state, &id.to_string(), job.clone());
+    Ok(JobContext {
+        job_id: Some(id),
+        task_run_id: Some(task),
+    })
+}
+
+fn finish_command_evidence(
+    state: &mut AppState,
+    cx: &crate::frontend::dispatcher::JobContext,
+    outcome: Result<crate::engines::qm::QmOutcome>,
+) -> Result<String> {
+    use crate::backend::tasks::TaskStatus;
+    use crate::frontend::dispatcher::*;
+    match outcome {
+        Ok(outcome) => {
+            let id = cx
+                .job_id
+                .ok_or_else(|| anyhow!("QM execution identity missing"))?;
+            let summary = crate::backend::records::qm::completion(&id.to_string(), &outcome);
+            let applied = apply_qm_outcome(state, cx, outcome);
+            complete_local_job(state, cx.job_id, TaskStatus::Completed);
+            if let Some(task) = cx.task_run_id {
+                mark_task_status(state, task, TaskStatus::Completed);
+            }
+            applied.map(|()| summary)
+        }
+        Err(error) => {
+            complete_local_job(state, cx.job_id, TaskStatus::Failed);
+            if let Some(task) = cx.task_run_id {
+                mark_task_status(state, task, TaskStatus::Failed);
+            }
+            Err(error)
+        }
+    }
 }
 
 /// Assemble a [`PeriodicQmRequest`] from the active structure and `--flags`.

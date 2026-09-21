@@ -108,7 +108,8 @@ fn qm_issue_stops_old_turn_approval_and_queue_even_when_diagnosis_disabled() {
         assert!(history.contains("Created methane"));
         assert!(history.contains("Not executed: QM issue requires read-only diagnosis"));
         assert!(history.contains(&job_id.to_string()));
-        assert!(history.contains("raw evidence"));
+        assert!(!history.contains("raw evidence"));
+        assert!(history.contains("coverage partial"));
         assert!(history.contains("not converged"));
         assert!(history.contains("Evidence directory"));
         assert_eq!(
@@ -263,7 +264,8 @@ fn qm_restriction_survives_snapshot_switch_and_other_completion_until_new_user_m
     assert!(!state.ui.agent.qm_diagnostic_only);
     let history = format!("{:?}", state.ui.agent.history);
     assert!(history.contains("original goal"));
-    assert!(history.contains("raw evidence"));
+    assert!(!history.contains("raw evidence"));
+    assert!(history.contains("coverage partial"));
     assert!(history.contains("Wait for user."));
     assert!(
         !state
@@ -366,7 +368,12 @@ fn qm_converged_result_with_report_failure_still_requires_diagnosis() {
     let mut state = offline_state();
     state.config.assistant.auto_diagnose_qm_issues = false;
     let (job, dir) = completed_job(&mut state, true);
-    std::fs::create_dir_all(dir.join(crate::frontend::dispatcher::QM_OUTPUT_FILE)).unwrap();
+    std::fs::create_dir_all(
+        dir.join("jobs")
+            .join(job.to_string())
+            .join(crate::frontend::dispatcher::QM_OUTPUT_FILE),
+    )
+    .unwrap();
     poll_agent_jobs(&mut state, &egui::Context::default());
     assert!(state.ui.agent.qm_diagnostic_only);
     let execution = state.tasks.runs.execution(&job.to_string()).unwrap();

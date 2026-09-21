@@ -49,6 +49,7 @@ pub(crate) fn load_run_graph(db: &Connection) -> Result<RunGraph> {
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
     let mut executions = Vec::with_capacity(rows.len());
+    let mut unavailable_qm_results = std::collections::BTreeMap::new();
     for (
         job_id,
         run_attempt_id,
@@ -71,6 +72,16 @@ pub(crate) fn load_run_graph(db: &Connection) -> Result<RunGraph> {
         ) else {
             continue;
         };
+        let qm_result = match qm_result_json {
+            Some(json) => match serde_json::from_str(&json) {
+                Ok(result) => Some(result),
+                Err(_) => {
+                    unavailable_qm_results.insert(job_id.to_string(), json);
+                    None
+                }
+            },
+            None => None,
+        };
         executions.push(JobExecution {
             job_id,
             run_attempt_id,
@@ -82,19 +93,37 @@ pub(crate) fn load_run_graph(db: &Connection) -> Result<RunGraph> {
                 .unwrap_or(ResultImport::NotRequired),
             created_at_ms,
             finished_at_ms,
-            qm_result: qm_result_json
-                .map(|json| serde_json::from_str(&json))
-                .transpose()?,
+            qm_result,
         });
     }
 
-    Ok(RunGraph::from_rows(attempts, executions))
+    let mut graph = RunGraph::from_rows(attempts, executions);
+    graph.unavailable_qm_results = unavailable_qm_results;
+    let mut stmt = db.prepare("select id, envelope_json from knowledge_records order by id")?;
+    for row in stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+        let (id, json) = row?;
+        graph.records.restore(id, json);
+    }
+    Ok(graph)
 }
 
 /// Rewrite the attempt/execution rows inside the caller's transaction. The tables
 /// are tiny (one row per attempt/job), so a full rewrite is cheap; children are
 /// deleted before parents and re-inserted parent-first to satisfy the foreign key.
 pub(crate) fn write_run_graph(conn: &Connection, runs: &RunGraph) -> Result<()> {
+    conn.execute("delete from knowledge_records", [])?;
+    for record in runs.records.all() {
+        conn.execute(
+            "insert into knowledge_records values (?1, ?2)",
+            params![record.id, serde_json::to_string(record)?],
+        )?;
+    }
+    for (id, (json, _)) in &runs.records.unavailable {
+        conn.execute(
+            "insert into knowledge_records values (?1, ?2)",
+            params![id, json],
+        )?;
+    }
     conn.execute("delete from job_executions", [])?;
     conn.execute("delete from run_attempts", [])?;
     for attempt in runs.attempts() {
@@ -132,7 +161,11 @@ pub(crate) fn write_run_graph(conn: &Connection, runs: &RunGraph) -> Result<()> 
                     .qm_result
                     .as_ref()
                     .map(serde_json::to_string)
-                    .transpose()?,
+                    .transpose()?
+                    .or_else(|| runs
+                        .unavailable_qm_results
+                        .get(&execution.job_id.to_string())
+                        .cloned()),
             ],
         )?;
     }
@@ -143,6 +176,109 @@ pub(crate) fn write_run_graph(conn: &Connection, runs: &RunGraph) -> Result<()> 
 mod tests {
     use super::*;
     use crate::backend::storage::create_project_schema;
+
+    #[test]
+    fn damaged_qm_status_is_local_and_preserved_on_save() {
+        let db = Connection::open_in_memory().unwrap();
+        create_project_schema(&db).unwrap();
+        let mut graph = RunGraph::default();
+        let job = graph.begin_execution(1, Placement::Local, None, 1);
+        write_run_graph(&db, &graph).unwrap();
+        db.execute(
+            "update job_executions set qm_result_json = 'future status'",
+            [],
+        )
+        .unwrap();
+        let loaded = load_run_graph(&db).unwrap();
+        assert!(
+            loaded
+                .execution(&job.to_string())
+                .unwrap()
+                .qm_result
+                .is_none()
+        );
+        assert_eq!(
+            loaded.unavailable_qm_results[&job.to_string()],
+            "future status"
+        );
+        write_run_graph(&db, &loaded).unwrap();
+        assert_eq!(
+            db.query_row("select qm_result_json from job_executions", [], |r| r
+                .get::<_, String>(0))
+                .unwrap(),
+            "future status"
+        );
+    }
+
+    #[test]
+    fn record_rows_survive_job_rewrites_and_transaction_rollback() {
+        use crate::backend::records::{Category, Content, Record, Scope, Source};
+        let mut db = Connection::open_in_memory().unwrap();
+        create_project_schema(&db).unwrap();
+        db.pragma_update(None, "foreign_keys", true).unwrap();
+        let mut graph = RunGraph::default();
+        let job = graph.begin_execution(1, Placement::Local, None, 1);
+        graph
+            .records
+            .insert(Record {
+                id: "constraint:test".into(),
+                category: Category::Memory,
+                storage_version: 1,
+                content_version: 1,
+                revision: 1,
+                source: Source::UserApproval {
+                    session: 1,
+                    call: "approved-click".into(),
+                },
+                scope: Scope {
+                    task: Some(1),
+                    session: Some(1),
+                    run_uuid: None,
+                },
+                created_at_ms: 1,
+                supersedes: None,
+                invalidated: None,
+                brief: "Keep charge zero".into(),
+                input_entries: vec![],
+                result_entries: vec![],
+                artifacts: vec![],
+                content: Content::Constraint {
+                    text: "Keep charge zero".into(),
+                },
+            })
+            .unwrap();
+        graph
+            .records
+            .restore("unknown".into(), "{future version}".into());
+        for _ in 0..3 {
+            let tx = db.transaction().unwrap();
+            write_run_graph(&tx, &graph).unwrap();
+            tx.commit().unwrap();
+            graph = load_run_graph(&db).unwrap();
+            assert!(graph.execution(&job.to_string()).is_some());
+            assert!(
+                graph
+                    .records
+                    .context(Some(1), None, 1, 1000)
+                    .contains("Keep charge zero")
+            );
+            assert_eq!(graph.records.unavailable["unknown"].0, "{future version}");
+        }
+        let tx = db.transaction().unwrap();
+        write_run_graph(&tx, &RunGraph::default()).unwrap();
+        tx.rollback().unwrap();
+        assert_eq!(load_run_graph(&db).unwrap().records.all().count(), 1);
+    }
+
+    #[test]
+    fn legacy_database_gains_empty_record_catalog_idempotently() {
+        let db = Connection::open_in_memory().unwrap();
+        create_project_schema(&db).unwrap();
+        db.execute("drop table knowledge_records", []).unwrap();
+        create_project_schema(&db).unwrap();
+        create_project_schema(&db).unwrap();
+        assert_eq!(load_run_graph(&db).unwrap().records.all().count(), 0);
+    }
 
     #[test]
     fn existing_job_executions_gain_nullable_qm_results_idempotently() {

@@ -170,7 +170,8 @@ pub(crate) fn save_qm_artifacts(
         if !text.ends_with('\n') {
             text.push('\n');
         }
-        std::fs::write(&path, text).with_context(|| format!("write {}", path.display()))?;
+        crate::backend::records::artifacts::write_atomic(&path, text.as_bytes())
+            .with_context(|| format!("write {}", path.display()))?;
         Ok(())
     })());
     let series = crate::backend::runs::QmSeries::from_outcome(outcome);
@@ -208,19 +209,49 @@ pub(crate) fn set_qm_run_origin(state: &mut AppState, entry_id: u64) {
     state.entries.set_entry_origin(entry_id, EntryOrigin::QmRun);
 }
 
-/// The run directory of the newest completed QM run whose results belong to
-/// `entry_id` — the run that produced this geometry, or, when the run produced no
-/// geometry at all (a single-point energy, a frequency calculation), the run this
-/// structure was the input to. `None` when the entry has no QM results.
-///
-/// This is the one place the entry → QM artifact link is resolved; the report,
-/// the chart series, and the badge all go through it.
-pub(crate) fn entry_qm_run_dir(state: &AppState, entry_id: u64) -> Option<PathBuf> {
-    state
-        .tasks
-        .latest_qm_run_for_entry(entry_id)?
-        .run_dir
-        .clone()
+#[derive(Clone, Copy)]
+pub(crate) enum QmArtifact {
+    Report,
+    Series,
+}
+
+pub(crate) fn task_qm_artifact_path(
+    state: &AppState,
+    task_id: u64,
+    artifact: QmArtifact,
+) -> Option<PathBuf> {
+    let task = state.tasks.task_run(task_id)?;
+    let run_dir = task.run_dir.as_ref()?;
+    let (name, legacy_file) = match artifact {
+        QmArtifact::Report => ("report", QM_OUTPUT_FILE),
+        QmArtifact::Series => ("series", crate::backend::runs::SERIES_FILE),
+    };
+    if let Some(execution) = state.tasks.runs.latest_execution(task_id) {
+        let records = &state.tasks.runs.records;
+        let id = format!("qm:{}", execution.job_id);
+        if let Some(record) = records.get(&id) {
+            let artifact = record.artifacts.iter().find(|a| a.name == name)?;
+            return Some(run_dir.join(&artifact.relative));
+        }
+        if records.unavailable.contains_key(&id)
+            || records
+                .get(&format!("input:{}", execution.job_id))
+                .is_some()
+        {
+            return None;
+        }
+    }
+    // Only legacy executions may use shared task-level files.
+    Some(run_dir.join(legacy_file))
+}
+
+pub(crate) fn entry_qm_artifact_path(
+    state: &AppState,
+    entry_id: u64,
+    artifact: QmArtifact,
+) -> Option<PathBuf> {
+    let task = state.tasks.latest_qm_run_for_entry(entry_id)?;
+    task_qm_artifact_path(state, task.id, artifact)
 }
 
 /// Open the saved QM output report of `entry_id` in the shared text viewer.
@@ -232,7 +263,7 @@ pub(crate) fn show_qm_output(state: &mut AppState, entry_id: u64) {
         return;
     };
     let entry_name = entry.name.clone();
-    let Some(path) = entry_qm_run_dir(state, entry_id).map(|dir| dir.join(QM_OUTPUT_FILE)) else {
+    let Some(path) = entry_qm_artifact_path(state, entry_id, QmArtifact::Report) else {
         state.status_neutral("This entry has no saved QM output".to_string());
         return;
     };

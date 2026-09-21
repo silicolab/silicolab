@@ -409,7 +409,9 @@ impl AppState {
 
     pub fn scratch_has_unsaved_content(&self) -> bool {
         !self.workspace.is_project()
-            && (!self.entries.records.is_empty()
+            && (self.tasks.runs.records.all().next().is_some()
+                || !self.tasks.runs.records.unavailable.is_empty()
+                || !self.entries.records.is_empty()
                 || !self.tasks.tasks.is_empty()
                 || self.has_unsaved_workspace_drafts())
     }

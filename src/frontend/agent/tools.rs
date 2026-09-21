@@ -15,9 +15,11 @@ use serde_json::{Value, json};
 use crate::backend::config::ApprovalMode;
 mod inspection;
 pub mod pdf;
+mod records;
 use crate::frontend::console::{RiskLevel, command_risk};
 use crate::frontend::state::{AppState, LogLevel};
 use crate::io::llm::types::{ToolCall, ToolDef};
+#[cfg(test)]
 pub use inspection::inspect;
 
 /// How much of a tool result is replayed into history. Large md/qm/inspect
@@ -60,18 +62,26 @@ pub fn tool_defs() -> Vec<ToolDef> {
                 latest status, including a short running-jobs summary. Call this before acting so \
                 you know the current state. For detailed task control, use `list_jobs` and \
                 `cancel_job`; do not guess cancel/stop/kill/abort commands. Takes no required \
-                arguments."
+                arguments. For project records choose catalog or summary; filters combine with AND. Details requires id and uses detail_offset. Raw requires id plus registered artifact and byte_offset. Follow continuation offsets. Unavailable lists damaged/unknown records. Intent pages the latest original user instruction with detail_offset. save_constraint requires user approval."
                 .to_string(),
             input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Optional QM job id to inspect its result and report; otherwise shows recent QM results."
-                    }
-                },
-                "additionalProperties": false
+                "type":"object", "properties": {
+                    "view":{"type":"string","enum":["workspace","catalog","summary","details","raw","unavailable","intent"]},
+                    "query":{"type":"string","description":"Legacy workspace exact job selector; never reads reports"},
+                    "id":{"type":"string"},"job":{"type":"string"},"run_uuid":{"type":"string"},
+                    "input_entry":{"type":"integer"},"result_entry":{"type":"integer"},
+                    "category":{"type":"string","enum":["evidence","memory","derived"]},"content_type":{"type":"string"},
+                    "task":{"type":"integer"},"session":{"type":"integer"},
+                    "lifecycle":{"type":"string","enum":["active","superseded","invalidated","stale"]},
+                    "offset":{"type":"integer"},"limit":{"type":"integer"},
+                    "artifact":{"type":"string"},"byte_offset":{"type":"integer"},"detail_offset":{"type":"integer"}
+                },"additionalProperties":false
             }),
+        },
+        ToolDef {
+            name: "save_constraint".into(),
+            description: "Propose an exact user constraint for explicit one-call user approval. Always asks, even in auto mode. Scope is current project and session, optionally one task. Use replaces only for an explicit replacement. No inferred preferences. inspect remains read-only.".into(),
+            input_schema: json!({"type":"object","properties":{"text":{"type":"string"},"task":{"type":"integer"},"replaces":{"type":"string"}},"required":["text"],"additionalProperties":false}),
         },
         ToolDef {
             name: "list_jobs".to_string(),
@@ -226,7 +236,7 @@ pub struct ToolOutcome {
 /// declared once, next to each command; perception tools are read-only.
 pub fn risk_of_call(call: &ToolCall) -> RiskLevel {
     match call.name.as_str() {
-        "save_skill" => RiskLevel::FileWrite,
+        "save_skill" | "save_constraint" => RiskLevel::FileWrite,
         "cancel_job" => RiskLevel::Destructive,
         "read_pdf" if pdf::reads_outside_project(&call.input) => RiskLevel::ExternalRead,
         "run_command" => {
@@ -265,6 +275,9 @@ pub fn needs_confirmation(
     allowed_verbs: &HashSet<String>,
     allowed_risks: &HashSet<RiskLevel>,
 ) -> bool {
+    if call.name == "save_constraint" {
+        return true;
+    }
     let risk = risk_of_call(call);
     if risk == RiskLevel::Destructive {
         return true;
@@ -304,13 +317,26 @@ pub fn execute_tool(state: &mut AppState, call: &ToolCall) -> ToolOutcome {
                 is_error: true,
             },
         },
-        "inspect" => {
-            let query = call.input.get("query").and_then(Value::as_str);
-            ToolOutcome {
-                content: inspect(state, query),
+        "inspect" => match records::inspect(state, &call.input) {
+            Ok(content) => ToolOutcome {
+                content,
                 is_error: false,
-            }
-        }
+            },
+            Err(error) => ToolOutcome {
+                content: error.to_string(),
+                is_error: true,
+            },
+        },
+        "save_constraint" => match records::save_constraint(state, call) {
+            Ok(content) => ToolOutcome {
+                content,
+                is_error: false,
+            },
+            Err(error) => ToolOutcome {
+                content: error.to_string(),
+                is_error: true,
+            },
+        },
         "list_jobs" => ToolOutcome {
             content: list_jobs_tool(state),
             is_error: false,

@@ -184,13 +184,21 @@ fn save_qm_run_artifacts_writes_report_and_series_into_the_run_dir() {
     };
     ensure_task_run_dir(&mut state, task_id, TaskKind::RunQmEnergy, None).unwrap();
     state.active_task_run = None;
-    save_qm_run_artifacts(&mut state, Some(task_id), &outcome);
+    let job = state.tasks.runs.begin_execution(
+        task_id,
+        crate::backend::run_attempt::Placement::Local,
+        None,
+        0,
+    );
+    save_qm_execution(&mut state, &job.to_string(), &outcome).unwrap();
 
     let run_dir = state
         .tasks
         .task_run(task_id)
         .and_then(|task| task.run_dir.clone())
-        .expect("run dir created on demand");
+        .expect("run dir created on demand")
+        .join("jobs")
+        .join(job.to_string());
     let series = load_qm_series_file(&run_dir.join(SERIES_FILE)).expect("series saved");
     assert_eq!(series.scf_trace, vec![-74.1, -74.96]);
     let report = std::fs::read_to_string(run_dir.join(QM_OUTPUT_FILE)).expect("report saved");
@@ -208,12 +216,20 @@ fn save_qm_run_artifacts_writes_report_and_series_into_the_run_dir() {
         ..outcome
     };
     ensure_task_run_dir(&mut state, empty_task, TaskKind::RunQmEnergy, None).unwrap();
-    save_qm_run_artifacts(&mut state, Some(empty_task), &empty);
+    let empty_job = state.tasks.runs.begin_execution(
+        empty_task,
+        crate::backend::run_attempt::Placement::Local,
+        None,
+        0,
+    );
+    save_qm_execution(&mut state, &empty_job.to_string(), &empty).unwrap();
     let empty_dir = state
         .tasks
         .task_run(empty_task)
         .and_then(|task| task.run_dir.clone())
-        .expect("run dir created on demand");
+        .expect("run dir created on demand")
+        .join("jobs")
+        .join(empty_job.to_string());
     assert!(empty_dir.join(QM_OUTPUT_FILE).is_file());
     assert!(!empty_dir.join(SERIES_FILE).exists());
 }
@@ -233,7 +249,7 @@ fn single_point_entry_surfaces_its_report_and_chart() {
         .add_entry(crate::domain::Structure::empty(), None, PathBuf::new());
 
     // A structure nothing has been computed on carries no QM chip.
-    assert!(entry_qm_run_dir(&state, entry_id).is_none());
+    assert!(entry_qm_artifact_path(&state, entry_id, QmArtifact::Report).is_none());
     assert!(!entry_chart_available(&mut state, entry_id));
 
     let run_dir = std::env::temp_dir().join("silicolab-single-point-surface");
@@ -267,8 +283,8 @@ fn single_point_entry_surfaces_its_report_and_chart() {
     state.ui.chart_availability.clear();
 
     assert_eq!(
-        entry_qm_run_dir(&state, entry_id).as_deref(),
-        Some(&*run_dir)
+        entry_qm_artifact_path(&state, entry_id, QmArtifact::Report).as_deref(),
+        Some(run_dir.join(QM_OUTPUT_FILE).as_path())
     );
     assert!(
         entry_chart_available(&mut state, entry_id),
@@ -577,12 +593,6 @@ fn qm_artifact_status_matrix_and_repair_preserve_execution_and_geometry() {
                 std::fs::write(&dir, "blocked").unwrap();
             } else {
                 std::fs::create_dir_all(&dir).unwrap();
-                if blocked == "report" {
-                    std::fs::create_dir(dir.join(QM_OUTPUT_FILE)).unwrap();
-                }
-                if blocked == "series" {
-                    std::fs::create_dir(dir.join(SERIES_FILE)).unwrap();
-                }
             }
             let mut state = AppState::scratch(Default::default(), Vec::new());
             let task = state
@@ -595,6 +605,16 @@ fn qm_artifact_status_matrix_and_repair_preserve_execution_and_geometry() {
                 Some("qm-optimize".into()),
                 0,
             );
+            let artifact_dir = dir.join("jobs").join(job.to_string());
+            if blocked != "directory" {
+                std::fs::create_dir_all(&artifact_dir).unwrap();
+                if blocked == "report" {
+                    std::fs::create_dir(artifact_dir.join(QM_OUTPUT_FILE)).unwrap();
+                }
+                if blocked == "series" {
+                    std::fs::create_dir(artifact_dir.join(SERIES_FILE)).unwrap();
+                }
+            }
             let cx = JobContext {
                 job_id: Some(job),
                 task_run_id: Some(task),
@@ -608,7 +628,7 @@ fn qm_artifact_status_matrix_and_repair_preserve_execution_and_geometry() {
                 opt_trace: vec![],
                 frequencies: vec![],
             };
-            apply_qm_outcome(&mut state, &cx, outcome.clone());
+            apply_qm_outcome(&mut state, &cx, outcome.clone()).unwrap();
             complete_local_job(&mut state, Some(job), TaskStatus::Completed);
             let execution = state.tasks.runs.execution(&job.to_string()).unwrap();
             assert_eq!(
@@ -631,12 +651,12 @@ fn qm_artifact_status_matrix_and_repair_preserve_execution_and_geometry() {
                 std::fs::remove_file(&dir).unwrap();
             }
             if blocked == "report" {
-                std::fs::remove_dir(dir.join(QM_OUTPUT_FILE)).unwrap();
+                std::fs::remove_dir(artifact_dir.join(QM_OUTPUT_FILE)).unwrap();
             }
             if blocked == "series" {
-                std::fs::remove_dir(dir.join(SERIES_FILE)).unwrap();
+                std::fs::remove_dir(artifact_dir.join(SERIES_FILE)).unwrap();
             }
-            apply_qm_outcome(&mut state, &cx, outcome);
+            apply_qm_outcome(&mut state, &cx, outcome).unwrap();
             assert_eq!(state.entries.records.len(), 1);
             let result = state
                 .tasks
@@ -687,16 +707,18 @@ fn qm_single_point_inspection_checks_report_access_independently() {
             opt_trace: vec![],
             frequencies: vec![],
         },
-    );
+    )
+    .unwrap();
     complete_local_job(&mut state, Some(job), TaskStatus::Completed);
     assert_eq!(state.entries.records.len(), 1);
     let inspect = crate::frontend::agent::tools::inspect(&state, Some(&job.to_string()));
     assert!(inspect.contains("engine reports not converged"));
     assert!(inspect.contains("not applicable"));
-    assert!(inspect.contains("SCF exhausted"));
-    std::fs::remove_file(dir.join(QM_OUTPUT_FILE)).unwrap();
+    assert!(!inspect.contains("SCF exhausted"));
+    assert!(inspect.contains("Diagnostics coverage partial"));
+    std::fs::remove_file(dir.join("jobs").join(job.to_string()).join(QM_OUTPUT_FILE)).unwrap();
     let inspect = crate::frontend::agent::tools::inspect(&state, Some(&job.to_string()));
-    assert!(inspect.contains("missing or inaccessible"));
+    assert!(inspect.contains("explicit raw report"));
     assert!(!inspect.contains("provenance: QM-run output (report saved)"));
     std::fs::remove_dir_all(dir).unwrap();
 }
