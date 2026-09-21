@@ -438,6 +438,18 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
             crate::frontend::agent::set_assistant_api_key(state, &key)
         }
         AppAction::ClearStoredKey(id) => crate::frontend::agent::clear_stored_key(state, &id),
+        AppAction::NewEndpointProfile(name) => {
+            crate::frontend::agent::new_endpoint_profile(state, &name)
+        }
+        AppAction::SelectEndpointProfile(id) => {
+            crate::frontend::agent::select_endpoint_profile(state, &id)
+        }
+        AppAction::RenameEndpointProfile { id, name } => {
+            crate::frontend::agent::rename_endpoint_profile(state, &id, &name)
+        }
+        AppAction::DeleteEndpointProfile(id) => {
+            crate::frontend::agent::delete_endpoint_profile(state, &id)
+        }
         AppAction::RefreshModels => crate::frontend::agent::fetch_models(state, ctx),
         AppAction::SetComputeCoreCount(cores) => set_compute_core_count(state, cores),
         AppAction::SetThemeMode(mode) => set_theme_mode(state, mode, ctx),

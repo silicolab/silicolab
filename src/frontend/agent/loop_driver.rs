@@ -13,11 +13,13 @@ use crate::frontend::agent::session::TranscriptEntry;
 use crate::frontend::state::{AppState, SystemSubsystem};
 use crate::io::llm::types::{AssistantTurn, ChatMessage, ContentBlock, ReasoningBlob, Role};
 
+mod endpoint_profiles;
 mod heavy;
 mod settings;
 mod tool_batch;
 mod turn;
 
+pub use endpoint_profiles::*;
 pub use heavy::*;
 pub use settings::*;
 pub use tool_batch::*;

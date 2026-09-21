@@ -30,6 +30,7 @@
 mod accessors;
 mod catalog;
 mod custom;
+mod endpoint_profiles;
 pub(crate) mod hardware;
 mod render;
 mod schema;

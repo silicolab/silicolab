@@ -206,6 +206,7 @@ pub fn poll_jobs(state: &mut AppState, ctx: &egui::Context) {
     // Resolve the assistant key availability once (it reads env + the key store),
     // so the Assistant tab's per-frame render reads a cached flag instead.
     if state.ui.agent.key_available.is_none() {
+        crate::frontend::agent::ensure_endpoint_profiles(state);
         crate::frontend::agent::refresh_key_status(state);
     }
     poll_compute_jobs(state, ctx);

@@ -102,6 +102,7 @@ pub fn switch_provider_model(state: &mut AppState, provider: &str, model: &str) 
         provider: provider.to_string(),
         model: model.to_string(),
     };
+    state.config.assistant.capture_active_endpoint();
     if !state.ui.agent.has_activity() {
         switch_assistant_conversation_model(state, provider, model);
     }
@@ -142,6 +143,7 @@ pub fn set_assistant_effort_supported(state: &mut AppState, supported: bool) {
         .entry(selection.provider.clone())
         .or_default()
         .insert(selection.model.clone(), supported);
+    state.config.assistant.capture_active_endpoint();
     persist(state);
 }
 
@@ -158,6 +160,7 @@ pub fn set_assistant_base_url(state: &mut AppState, base_url: &str) {
             .base_urls
             .insert(provider, trimmed.to_string());
     }
+    state.config.assistant.capture_active_endpoint();
     state.ui.agent.model_fetch = ModelFetchStatus::Idle;
     persist(state);
 }
@@ -190,7 +193,9 @@ pub fn set_assistant_external_access(state: &mut AppState, access: ExternalAgent
 /// Store the default provider's API key in the app key store (never in config).
 pub fn set_assistant_api_key(state: &mut AppState, key: &str) {
     let provider = registry::default_provider(&state.config.assistant);
-    match crate::backend::secrets::set_stored_key(provider.id, key.trim()) {
+    let saved = crate::backend::secrets::set_stored_key(provider.id, key.trim())
+        .and_then(|()| mirror_key_to_active_endpoint(state, provider.id, key.trim()));
+    match saved {
         Ok(()) => state.status_success(format!("Saved the API key for {}.", provider.label)),
         Err(error) => state.report_system_error(
             SystemSubsystem::Settings,
@@ -207,7 +212,9 @@ pub fn clear_stored_key(state: &mut AppState, provider_id: &str) {
     let label = registry::provider_spec(provider_id)
         .map(|spec| spec.label)
         .unwrap_or(provider_id);
-    match crate::backend::secrets::clear_stored_key(provider_id) {
+    let cleared = crate::backend::secrets::clear_stored_key(provider_id)
+        .and_then(|()| mirror_key_to_active_endpoint(state, provider_id, ""));
+    match cleared {
         Ok(()) => state.status_success(format!("Removed the stored API key for {label}.")),
         Err(error) => state.report_system_error(
             SystemSubsystem::Settings,
