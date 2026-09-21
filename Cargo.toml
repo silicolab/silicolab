@@ -52,6 +52,9 @@ usvg = "0.45.1"
 # written (image's encoder does not expose it). Same version image 0.25
 # already locks.
 png = "0.18"
+# Locates Markdown tables in assistant replies so they can scroll sideways.
+# Same version egui_commonmark already locks.
+pulldown-cmark = { version = "0.13", default-features = false }
 rfd = "0.17"
 rusqlite = { version = "0.40.0", features = ["bundled"] }
 serde = { version = "1.0", features = ["derive"] }

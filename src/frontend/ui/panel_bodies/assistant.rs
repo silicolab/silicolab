@@ -144,7 +144,7 @@ pub(crate) fn render_assistant_panel(
                                 );
                             }
                             let mut agent_header_shown = false;
-                            for entry in &state.ui.agent.transcript {
+                            for (index, entry) in state.ui.agent.transcript.iter().enumerate() {
                                 let show_agent_header = match entry {
                                     TranscriptEntry::User(_) => {
                                         agent_header_shown = false;
@@ -158,14 +158,17 @@ pub(crate) fn render_assistant_panel(
                                     }
                                     TranscriptEntry::Notice(_) => false,
                                 };
-                                render_transcript_entry(
-                                    ui,
-                                    &pal,
-                                    &mut state.ui.markdown_cache,
-                                    entry,
-                                    transcript_content_width,
-                                    show_agent_header,
-                                );
+                                // Entries share a parent `Ui`; without this their table ids collide.
+                                ui.push_id(index, |ui| {
+                                    render_transcript_entry(
+                                        ui,
+                                        &pal,
+                                        &mut state.ui.markdown_cache,
+                                        entry,
+                                        transcript_content_width,
+                                        show_agent_header,
+                                    );
+                                });
                             }
                             // Live streaming preview of the in-flight assistant text.
                             if !state.ui.agent.streaming_text.is_empty() {
@@ -174,12 +177,14 @@ pub(crate) fn render_assistant_panel(
                                 } else {
                                     agent_message_header(ui, &pal);
                                 }
-                                render_markdown(
-                                    ui,
-                                    &pal,
-                                    &mut state.ui.markdown_cache,
-                                    &format!("{}...", state.ui.agent.streaming_text),
-                                );
+                                ui.push_id("streaming", |ui| {
+                                    render_markdown(
+                                        ui,
+                                        &pal,
+                                        &mut state.ui.markdown_cache,
+                                        &format!("{}...", state.ui.agent.streaming_text),
+                                    );
+                                });
                             }
                             if state.ui.agent.phase == AgentPhase::Done
                                 && !matches!(
@@ -346,32 +351,39 @@ fn assistant_toolbar(
                 let reserved_width =
                     3.0 * ASSISTANT_TOOLBAR_BUTTON_WIDTH + 3.0 * ASSISTANT_TOOLBAR_GAP;
                 let combo_width = (ui.available_width() - reserved_width).max(72.0);
-                let combo_response = egui::ComboBox::from_id_salt("assistant.conversation")
-                    .selected_text(assistant_text(active_title))
-                    .width(combo_width)
-                    .truncate()
-                    .show_ui(ui, |ui| {
-                        crate::frontend::theme::stabilize_selectable_rows(ui);
-                        ui.set_width(combo_width);
-                        for (id, title) in &conversations {
-                            let response = ui
-                                .add_enabled_ui(can_manage, |ui| {
-                                    ui.add_sized(
-                                        [combo_width, ASSISTANT_TOOLBAR_BUTTON_HEIGHT],
-                                        egui::Button::selectable(
-                                            *id == active_id,
-                                            assistant_text(title),
-                                        )
-                                        .truncate(),
-                                    )
-                                })
-                                .inner
-                                .on_hover_text(title);
-                            if response.clicked() {
-                                actions.push(AppAction::SwitchAssistantConversation(*id));
-                            }
-                        }
-                    });
+                // `ComboBox::truncate` clips against the ui's available width, not `width()`.
+                let combo_inner_width = combo_width - 2.0 * ui.spacing().button_padding.x;
+                let combo_response = ui
+                    .allocate_ui(egui::vec2(combo_inner_width, ui.available_height()), |ui| {
+                        ui.set_max_width(combo_inner_width);
+                        egui::ComboBox::from_id_salt("assistant.conversation")
+                            .selected_text(assistant_text(active_title))
+                            .width(combo_width)
+                            .truncate()
+                            .show_ui(ui, |ui| {
+                                crate::frontend::theme::stabilize_selectable_rows(ui);
+                                ui.set_width(combo_width);
+                                for (id, title) in &conversations {
+                                    let response = ui
+                                        .add_enabled_ui(can_manage, |ui| {
+                                            ui.add_sized(
+                                                [combo_width, ASSISTANT_TOOLBAR_BUTTON_HEIGHT],
+                                                egui::Button::selectable(
+                                                    *id == active_id,
+                                                    assistant_text(title),
+                                                )
+                                                .truncate(),
+                                            )
+                                        })
+                                        .inner
+                                        .on_hover_text(title);
+                                    if response.clicked() {
+                                        actions.push(AppAction::SwitchAssistantConversation(*id));
+                                    }
+                                }
+                            })
+                    })
+                    .inner;
                 combo_response.response.on_hover_text(active_title);
 
                 if ui

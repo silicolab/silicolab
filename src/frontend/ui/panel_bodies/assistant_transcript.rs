@@ -129,8 +129,62 @@ pub(super) fn render_markdown(
         // noninteractive stroke sets only the prose color; links and code keep
         // the colors the theme assigns them.
         style.visuals.widgets.noninteractive.fg_stroke.color = pal.text_primary;
-        egui_commonmark::CommonMarkViewer::new().show(ui, cache, text);
+
+        // The viewer's tables do not wrap, so each one scrolls sideways on its own.
+        let width = ui.available_width();
+        let block_gap = ui.text_style_height(&egui::TextStyle::Body) * 0.5;
+        for (index, (segment, is_table)) in markdown_segments(text).into_iter().enumerate() {
+            if index > 0 {
+                ui.add_space(block_gap);
+            }
+            // The viewer restarts its table ids on every `show`.
+            ui.push_id(index, |ui| {
+                if is_table {
+                    egui::ScrollArea::horizontal()
+                        .max_width(width)
+                        .auto_shrink([false, true])
+                        .show(ui, |ui| {
+                            ui.set_max_width(width);
+                            egui_commonmark::CommonMarkViewer::new().show(ui, cache, segment);
+                        });
+                } else {
+                    egui_commonmark::CommonMarkViewer::new().show(ui, cache, segment);
+                }
+            });
+        }
     });
+}
+
+/// Splits `text` into slices, flagging top-level tables; nested ones stay in place.
+fn markdown_segments(text: &str) -> Vec<(&str, bool)> {
+    use pulldown_cmark::{Event, Options, Parser, Tag};
+
+    if !text.contains('|') {
+        return vec![(text, false)];
+    }
+    let mut segments = Vec::new();
+    let mut cursor = 0;
+    let mut depth = 0usize;
+    for (event, span) in Parser::new_ext(text, Options::ENABLE_TABLES).into_offset_iter() {
+        match event {
+            Event::Start(tag) => {
+                if depth == 0 && matches!(tag, Tag::Table(_)) && span.start >= cursor {
+                    if !text[cursor..span.start].trim().is_empty() {
+                        segments.push((&text[cursor..span.start], false));
+                    }
+                    segments.push((&text[span.clone()], true));
+                    cursor = span.end;
+                }
+                depth += 1;
+            }
+            Event::End(_) => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    if segments.is_empty() || !text[cursor..].trim().is_empty() {
+        segments.push((&text[cursor..], false));
+    }
+    segments
 }
 
 pub(super) fn render_tool_block(
@@ -218,4 +272,27 @@ pub(super) fn completed_badge(ui: &mut egui::Ui, pal: &crate::frontend::theme::P
                 .color(pal.status_green),
         );
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::markdown_segments;
+
+    #[test]
+    fn splits_top_level_tables_from_prose() {
+        let text = "Intro\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\nOutro";
+        let segments = markdown_segments(text);
+        assert_eq!(segments.len(), 3);
+        assert_eq!(segments[0], ("Intro\n\n", false));
+        assert!(segments[1].1 && segments[1].0.starts_with("| a | b |"));
+        assert_eq!(segments[2].0.trim(), "Outro");
+    }
+
+    #[test]
+    fn leaves_pipes_in_code_and_nested_tables_alone() {
+        let fenced = "```\n| a | b |\n|---|---|\n```";
+        assert_eq!(markdown_segments(fenced), vec![(fenced, false)]);
+        let nested = "- item\n\n  | a | b |\n  |---|---|\n  | 1 | 2 |\n";
+        assert_eq!(markdown_segments(nested), vec![(nested, false)]);
+    }
 }
