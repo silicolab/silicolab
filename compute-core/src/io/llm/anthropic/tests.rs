@@ -29,7 +29,14 @@ fn haiku_request_omits_thinking_and_effort() {
         stream: false,
         system: "sys".into(),
     };
-    let body = provider.build_request_body(&cfg, &[], &[ChatMessage::user_text("hi")]);
+    let body = provider
+        .build_request_body(
+            &cfg,
+            &[],
+            &[ChatMessage::user_text("hi")],
+            &AtomicBool::new(false),
+        )
+        .unwrap();
     assert!(body.get("thinking").is_none());
     assert!(body.get("output_config").is_none());
     // Sampling params are never sent.
@@ -47,7 +54,14 @@ fn opus_request_sends_adaptive_thinking_and_effort() {
         stream: false,
         system: "sys".into(),
     };
-    let body = provider.build_request_body(&cfg, &[], &[ChatMessage::user_text("hi")]);
+    let body = provider
+        .build_request_body(
+            &cfg,
+            &[],
+            &[ChatMessage::user_text("hi")],
+            &AtomicBool::new(false),
+        )
+        .unwrap();
     assert_eq!(body["thinking"]["type"], "adaptive");
     assert_eq!(body["output_config"]["effort"], "xhigh");
     // Cache breakpoints: static system + rolling last message.
@@ -100,7 +114,7 @@ fn thinking_replays_before_text() {
         usage: Usage::default(),
     };
     let message = encode_assistant(&turn);
-    let rendered = message_to_json(&message);
+    let rendered = message_to_json(&message, &Resolved::default());
     let blocks = rendered["content"].as_array().unwrap();
     assert_eq!(blocks[0]["type"], "thinking");
     assert_eq!(blocks[1]["type"], "text");
@@ -156,7 +170,14 @@ fn streaming_request_sets_stream_flag() {
         stream: true,
         system: "sys".into(),
     };
-    let body = provider.build_request_body(&cfg, &[], &[ChatMessage::user_text("hi")]);
+    let body = provider
+        .build_request_body(
+            &cfg,
+            &[],
+            &[ChatMessage::user_text("hi")],
+            &AtomicBool::new(false),
+        )
+        .unwrap();
     assert_eq!(body["stream"], true);
     assert!(caps_for_model("claude-sonnet-4-6").supports_streaming);
 }
@@ -196,7 +217,7 @@ fn empty_assistant_turn_renders_nonempty_content() {
         stop: StopReason::EndTurn,
         usage: Usage::default(),
     };
-    let rendered = message_to_json(&encode_assistant(&empty));
+    let rendered = message_to_json(&encode_assistant(&empty), &Resolved::default());
     let blocks = rendered["content"].as_array().unwrap();
     assert!(!blocks.is_empty(), "content array must never be empty");
     assert_eq!(rendered["role"], "assistant");
@@ -249,7 +270,9 @@ fn interrupted_exchange_keeps_reasoning_and_pairs_results_before_continuation() 
         system: "system".into(),
         working_dir: None,
     };
-    let body = provider.build_request_body(&cfg, &[], &history);
+    let body = provider
+        .build_request_body(&cfg, &[], &history, &AtomicBool::new(false))
+        .unwrap();
     let messages = body["messages"].as_array().unwrap();
     assert_eq!(messages.len(), 4);
     assert_eq!(messages[0]["content"][0]["text"], "original goal");
@@ -262,4 +285,91 @@ fn interrupted_exchange_keeps_reasoning_and_pairs_results_before_continuation() 
     assert_eq!(messages[2]["content"][0]["is_error"], false);
     assert_eq!(messages[2]["content"][1]["is_error"], true);
     assert_eq!(messages[3]["content"][0]["text"], "continue");
+}
+
+#[cfg(feature = "pdf")]
+mod pdf_documents {
+    use super::*;
+    use crate::io::pdf::tests::{TempPdf, pdf_bytes};
+
+    fn cfg() -> LlmConfig {
+        LlmConfig {
+            working_dir: None,
+            model: "claude-opus-4-8".into(),
+            effort: Effort::High,
+            max_output_tokens: 1000,
+            stream: false,
+            system: "sys".into(),
+        }
+    }
+
+    fn attached(file: &TempPdf) -> ChatMessage {
+        ChatMessage {
+            role: Role::User,
+            content: vec![
+                ContentBlock::Document(documents::describe(&file.0).unwrap()),
+                ContentBlock::Text("which functional?".into()),
+            ],
+        }
+    }
+
+    fn body_for(provider: &AnthropicProvider, history: &[ChatMessage]) -> Value {
+        provider
+            .build_request_body(&cfg(), &[], history, &AtomicBool::new(false))
+            .unwrap()
+    }
+
+    #[test]
+    fn document_block_precedes_the_text_and_carries_the_file() {
+        let file = TempPdf::new("anthropic", &pdf_bytes(&["B3LYP"]));
+        let provider = AnthropicProvider::new("k".into(), "claude-opus-4-8".into());
+        let body = body_for(&provider, &[attached(&file)]);
+        let blocks = body["messages"][0]["content"].as_array().unwrap();
+        assert_eq!(blocks[0]["type"], "document");
+        assert_eq!(blocks[0]["source"]["type"], "base64");
+        assert_eq!(blocks[0]["source"]["media_type"], "application/pdf");
+        assert!(!blocks[0]["source"]["data"].as_str().unwrap().is_empty());
+        assert_eq!(blocks[1]["text"], "which functional?");
+    }
+
+    #[test]
+    fn newest_document_gets_its_own_cache_breakpoint() {
+        let file = TempPdf::new("cache", &pdf_bytes(&["B3LYP"]));
+        let provider = AnthropicProvider::new("k".into(), "claude-opus-4-8".into());
+        let history = [
+            attached(&file),
+            ChatMessage::user_text("and the basis set?"),
+        ];
+        let body = body_for(&provider, &history);
+        let document = &body["messages"][0]["content"][0];
+        assert_eq!(document["cache_control"]["type"], "ephemeral");
+        let breakpoints = body.to_string().matches("cache_control").count();
+        assert_eq!(breakpoints, 3);
+    }
+
+    #[test]
+    fn no_document_breakpoint_without_prompt_cache() {
+        let file = TempPdf::new("nocache", &pdf_bytes(&["B3LYP"]));
+        let mut provider = AnthropicProvider::new("k".into(), "claude-opus-4-8".into());
+        provider.caps.supports_prompt_cache = false;
+        let body = body_for(&provider, &[attached(&file)]);
+        assert!(!body.to_string().contains("cache_control"));
+    }
+
+    #[test]
+    fn missing_file_replays_as_a_text_placeholder() {
+        let file = TempPdf::new("missing", &pdf_bytes(&["B3LYP"]));
+        let history = [attached(&file)];
+        std::fs::remove_file(&file.0).unwrap();
+        let provider = AnthropicProvider::new("k".into(), "claude-opus-4-8".into());
+        let body = body_for(&provider, &history);
+        let first = &body["messages"][0]["content"][0];
+        assert_eq!(first["type"], "text");
+        assert!(
+            first["text"]
+                .as_str()
+                .unwrap()
+                .contains("no longer available")
+        );
+    }
 }

@@ -33,7 +33,7 @@ pub(super) fn render_transcript_entry(
     use crate::frontend::agent::TranscriptEntry;
     use crate::frontend::theme::radius;
     match entry {
-        TranscriptEntry::User(text) => {
+        TranscriptEntry::User(message) => {
             ui.set_width(content_width);
             ui.add_space(10.0);
             // The user's turn reads as a soft bubble so it stands apart from the
@@ -45,10 +45,21 @@ pub(super) fn render_transcript_entry(
                 .inner_margin(Margin::symmetric(10, 8))
                 .show(ui, |ui| {
                     ui.set_width(frame_inner_width);
-                    ui.add(
-                        egui::Label::new(assistant_text(text).color(pal.text_primary))
-                            .wrap_mode(egui::TextWrapMode::Wrap),
-                    );
+                    if !message.attachments.is_empty() {
+                        super::assistant_composer::render_attachment_chips(
+                            ui,
+                            pal,
+                            &message.attachments,
+                            frame_inner_width,
+                            false,
+                        );
+                    }
+                    if !message.text.is_empty() {
+                        ui.add(
+                            egui::Label::new(assistant_text(&message.text).color(pal.text_primary))
+                                .wrap_mode(egui::TextWrapMode::Wrap),
+                        );
+                    }
                 });
         }
         TranscriptEntry::Assistant(text) => {

@@ -374,6 +374,12 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SendAgentMessage(text) => {
             crate::frontend::agent::send_agent_message(state, &text, ctx)
         }
+        AppAction::AttachAgentDocuments(paths) => {
+            crate::frontend::agent::attach_agent_documents(state, paths)
+        }
+        AppAction::RemoveAgentAttachment(index) => {
+            crate::frontend::agent::remove_agent_attachment(state, index)
+        }
         AppAction::NewAssistantConversation => {
             crate::frontend::agent::new_assistant_conversation(state)
         }

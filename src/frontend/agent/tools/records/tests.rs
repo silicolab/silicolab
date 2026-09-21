@@ -265,7 +265,7 @@ fn budget_omitted_user_intent_is_still_explicitly_retrievable() {
         .agent
         .transcript
         .push(crate::frontend::agent::TranscriptEntry::User(
-            original.clone(),
+            original.clone().into(),
         ));
     let mut restored = String::new();
     let mut offset = 0;

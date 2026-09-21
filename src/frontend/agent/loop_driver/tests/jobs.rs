@@ -177,7 +177,7 @@ fn idle_send_drains_queued_jobdone_first() {
     assert_eq!(state.ui.agent.queued.len(), 1);
     assert!(matches!(
         state.ui.agent.queued.front(),
-        Some(PendingTurn::UserMessage(t)) if t == "and now this"
+        Some(PendingTurn::UserMessage(t)) if t.text == "and now this"
     ));
 }
 
@@ -507,4 +507,59 @@ fn a_pdf_the_user_named_needs_no_approval_but_one_a_document_named_does() {
         "read `/Users/me/Downloads/paper.pdf` please".into(),
     ));
     assert!(gated_pending(&state).is_empty());
+}
+
+fn attached_pdf(path: &str) -> crate::io::llm::types::DocumentRef {
+    crate::io::llm::types::DocumentRef {
+        path: path.into(),
+        name: "paper.pdf".into(),
+        bytes: 1,
+        modified_ms: 0,
+        pages: 1,
+    }
+}
+
+#[test]
+fn a_pdf_the_user_attached_needs_no_approval() {
+    let mut state = enabled_state();
+    state.config.assistant.approval_mode = crate::backend::config::ApprovalMode::AutoSafe;
+    let call = read_pdf_call(json!({ "path": "/Users/me/Downloads/paper.pdf" }));
+    state.ui.agent.pending_calls = vec![call].into();
+    state.ui.agent.phase = AgentPhase::AwaitingApproval;
+    assert_eq!(gated_pending(&state).len(), 1);
+
+    state.ui.agent.transcript.push(TranscriptEntry::User(
+        crate::frontend::agent::session::UserMessage {
+            text: "summarise".into(),
+            attachments: vec![attached_pdf("/Users/me/Downloads/paper.pdf")],
+        },
+    ));
+    assert!(gated_pending(&state).is_empty());
+}
+
+#[test]
+fn busy_send_queues_the_draft_attachments_and_clears_the_draft() {
+    let mut state = enabled_state();
+    let ctx = egui::Context::default();
+    state.ui.agent.phase = AgentPhase::AwaitingModel;
+    state.ui.agent.attachments = vec![attached_pdf("/a/paper.pdf")];
+
+    send_agent_message(&mut state, "", &ctx);
+
+    assert!(state.ui.agent.attachments.is_empty());
+    assert!(matches!(
+        state.ui.agent.queued.front(),
+        Some(PendingTurn::UserMessage(message))
+            if message.text.is_empty() && message.attachments.len() == 1
+    ));
+}
+
+#[test]
+fn a_disabled_assistant_keeps_the_draft_attachments() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    state.config.assistant.enabled = false;
+    let ctx = egui::Context::default();
+    state.ui.agent.attachments = vec![attached_pdf("/a/paper.pdf")];
+    send_agent_message(&mut state, "hi", &ctx);
+    assert_eq!(state.ui.agent.attachments.len(), 1);
 }

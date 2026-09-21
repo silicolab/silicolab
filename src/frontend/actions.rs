@@ -340,6 +340,9 @@ pub enum AppAction {
     RunConsoleCommand(String),
     /// Send a message to the in-app assistant, kicking off an agent turn.
     SendAgentMessage(String),
+    /// Attach PDFs (picked or dropped) to the assistant's draft message.
+    AttachAgentDocuments(Vec<std::path::PathBuf>),
+    RemoveAgentAttachment(usize),
     /// Create and switch to a new in-memory assistant conversation.
     NewAssistantConversation,
     /// Switch the Assistant panel to another in-memory conversation.

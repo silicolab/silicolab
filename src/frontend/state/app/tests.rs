@@ -99,7 +99,7 @@ fn project_saved_fingerprint_tracks_assistant_history() {
         .agent
         .transcript
         .push(crate::frontend::agent::TranscriptEntry::User(
-            "hello".to_string(),
+            "hello".into(),
         ));
 
     assert!(state.has_project_changes_to_save());

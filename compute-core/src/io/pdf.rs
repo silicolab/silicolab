@@ -374,4 +374,4 @@ fn guarded<T: Send>(work: impl FnOnce() -> Result<T, PdfError> + Send) -> Result
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

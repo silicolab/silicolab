@@ -3,14 +3,14 @@ use std::collections::HashMap;
 use crate::backend::config::AssistantModelSelection;
 use crate::backend::storage::{
     PersistedAssistantConversation, PersistedChatMessage, PersistedContentBlock,
-    PersistedReasoningBlob, PersistedRole, PersistedTranscriptEntry, PersistedUsage,
-    ProjectAssistantSnapshot,
+    PersistedDocumentRef, PersistedReasoningBlob, PersistedRole, PersistedTranscriptEntry,
+    PersistedUsage, ProjectAssistantSnapshot,
 };
-use crate::io::llm::types::{ChatMessage, ContentBlock, ReasoningBlob, Role, Usage};
+use crate::io::llm::types::{ChatMessage, ContentBlock, DocumentRef, ReasoningBlob, Role, Usage};
 
 use super::{
     AgentPhase, AgentSession, AssistantConversation, AssistantConversationId, ModelFetchStatus,
-    TranscriptEntry, normalize_title,
+    TranscriptEntry, UserMessage, normalize_title,
 };
 
 impl AgentSession {
@@ -198,6 +198,29 @@ fn persist_content_block(block: &ContentBlock) -> PersistedContentBlock {
         ContentBlock::OpaqueReasoning(reasoning) => PersistedContentBlock::OpaqueReasoning {
             reasoning: persist_reasoning(reasoning),
         },
+        ContentBlock::Document(document) => PersistedContentBlock::Document {
+            document: persist_document(document),
+        },
+    }
+}
+
+fn persist_document(document: &DocumentRef) -> PersistedDocumentRef {
+    PersistedDocumentRef {
+        path: document.path.clone(),
+        name: document.name.clone(),
+        bytes: document.bytes,
+        modified_ms: document.modified_ms,
+        pages: document.pages,
+    }
+}
+
+fn restore_document(document: PersistedDocumentRef) -> DocumentRef {
+    DocumentRef {
+        path: document.path,
+        name: document.name,
+        bytes: document.bytes,
+        modified_ms: document.modified_ms,
+        pages: document.pages,
     }
 }
 
@@ -219,6 +242,12 @@ fn restore_content_block(block: PersistedContentBlock) -> ContentBlock {
         PersistedContentBlock::OpaqueReasoning { reasoning } => {
             ContentBlock::OpaqueReasoning(restore_reasoning(reasoning))
         }
+        PersistedContentBlock::Document { document } => {
+            ContentBlock::Document(restore_document(document))
+        }
+        PersistedContentBlock::Unknown => ContentBlock::Text(
+            "[content saved by a newer SilicoLab version; not shown here]".to_string(),
+        ),
     }
 }
 
@@ -246,7 +275,10 @@ fn restore_reasoning(reasoning: PersistedReasoningBlob) -> ReasoningBlob {
 
 fn persist_transcript_entry(entry: &TranscriptEntry) -> PersistedTranscriptEntry {
     match entry {
-        TranscriptEntry::User(text) => PersistedTranscriptEntry::User { text: text.clone() },
+        TranscriptEntry::User(message) => PersistedTranscriptEntry::User {
+            text: message.text.clone(),
+            attachments: message.attachments.iter().map(persist_document).collect(),
+        },
         TranscriptEntry::Assistant(text) => {
             PersistedTranscriptEntry::Assistant { text: text.clone() }
         }
@@ -265,7 +297,12 @@ fn persist_transcript_entry(entry: &TranscriptEntry) -> PersistedTranscriptEntry
 
 fn restore_transcript_entry(entry: PersistedTranscriptEntry) -> TranscriptEntry {
     match entry {
-        PersistedTranscriptEntry::User { text } => TranscriptEntry::User(text),
+        PersistedTranscriptEntry::User { text, attachments } => {
+            TranscriptEntry::User(UserMessage {
+                text,
+                attachments: attachments.into_iter().map(restore_document).collect(),
+            })
+        }
         PersistedTranscriptEntry::Assistant { text } => TranscriptEntry::Assistant(text),
         PersistedTranscriptEntry::Tool {
             summary,
