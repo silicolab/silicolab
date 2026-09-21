@@ -103,6 +103,28 @@ pub enum PersistedContentBlock {
     OpaqueReasoning {
         reasoning: PersistedReasoningBlob,
     },
+    Document {
+        #[serde(flatten)]
+        document: PersistedDocumentRef,
+    },
+    /// A block type written by a newer version; keeps the rest of the
+    /// conversation readable.
+    #[serde(other)]
+    Unknown,
+}
+
+/// A PDF attachment by reference; the file's bytes are never stored.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PersistedDocumentRef {
+    pub path: std::path::PathBuf,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub bytes: u64,
+    #[serde(default)]
+    pub modified_ms: u64,
+    #[serde(default)]
+    pub pages: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -118,6 +140,8 @@ pub enum PersistedReasoningBlob {
 pub enum PersistedTranscriptEntry {
     User {
         text: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        attachments: Vec<PersistedDocumentRef>,
     },
     Assistant {
         text: String,
@@ -215,3 +239,6 @@ fn now_ms() -> i64 {
         .map(|duration| duration.as_millis() as i64)
         .unwrap_or(0)
 }
+
+#[cfg(test)]
+mod tests;

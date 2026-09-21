@@ -5,6 +5,7 @@
 //! wire JSON entirely inside [`complete`](super::provider::LlmProvider::complete).
 //! Adding a provider therefore never changes the loop or the tools.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -38,6 +39,21 @@ pub enum ContentBlock {
     /// Opaque, provider-owned reasoning. The loop NEVER inspects this; only the
     /// originating adapter knows how to render or strip it on replay.
     OpaqueReasoning(ReasoningBlob),
+    /// A PDF the user attached, held by reference. Adapters read the file at
+    /// request time via [`documents`](super::documents); history never holds
+    /// the bytes, so snapshots stay small.
+    Document(DocumentRef),
+}
+
+/// Pointer to an attached PDF plus the facts recorded when it was attached.
+/// `bytes` and `modified_ms` let a replay notice the file changed on disk.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DocumentRef {
+    pub path: PathBuf,
+    pub name: String,
+    pub bytes: u64,
+    pub modified_ms: u64,
+    pub pages: u32,
 }
 
 #[derive(Debug, Clone)]

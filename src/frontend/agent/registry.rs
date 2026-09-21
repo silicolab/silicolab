@@ -45,6 +45,9 @@ pub struct ProviderSpec {
     /// (DeepSeek thinking mode 400s otherwise). Harmless when the stored blob
     /// carries no reasoning.
     pub reasoning_replay: bool,
+    /// Whether the provider's own endpoint takes a PDF as native input. Everyone
+    /// else receives attachments as extracted text.
+    pub pdf_input: bool,
     pub models: &'static [ModelSpec],
 }
 
@@ -74,6 +77,7 @@ impl ProviderSpec {
                     // does not place vendor cache breakpoints.
                     supports_prompt_cache: false,
                     supports_streaming: false,
+                    supports_pdf_input: self.pdf_input,
                 }
             }
             ProviderKind::ExternalAgent(_) => ProviderCaps {
@@ -81,6 +85,7 @@ impl ProviderSpec {
                 supports_thinking: false,
                 supports_prompt_cache: false,
                 supports_streaming: true,
+                supports_pdf_input: false,
             },
         }
     }
@@ -97,6 +102,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         base_url: "",
         key_env: "",
         reasoning_replay: false,
+        pdf_input: false,
         models: &[],
     },
     ProviderSpec {
@@ -106,6 +112,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         base_url: "",
         key_env: "",
         reasoning_replay: false,
+        pdf_input: false,
         models: &[],
     },
     ProviderSpec {
@@ -115,6 +122,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         base_url: "https://api.anthropic.com/v1",
         key_env: "ANTHROPIC_API_KEY",
         reasoning_replay: false,
+        pdf_input: true,
         models: &[
             ModelSpec {
                 id: "claude-sonnet-4-6",
@@ -145,6 +153,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         base_url: "https://api.openai.com/v1",
         key_env: "OPENAI_API_KEY",
         reasoning_replay: false,
+        pdf_input: true,
         models: &[
             ModelSpec {
                 id: "gpt-5.5",
@@ -173,6 +182,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         base_url: "https://generativelanguage.googleapis.com/v1beta/openai",
         key_env: "GEMINI_API_KEY",
         reasoning_replay: false,
+        pdf_input: false,
         models: &[
             ModelSpec {
                 id: "gemini-3.5-flash",
@@ -198,6 +208,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         base_url: "https://api.deepseek.com",
         key_env: "DEEPSEEK_API_KEY",
         reasoning_replay: true,
+        pdf_input: false,
         models: &[
             ModelSpec {
                 id: "deepseek-v4-flash",
@@ -218,6 +229,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         base_url: "https://api.z.ai/api/openai/v1",
         key_env: "ZAI_API_KEY",
         reasoning_replay: false,
+        pdf_input: false,
         models: &[
             ModelSpec {
                 id: "glm-5.2",
@@ -243,6 +255,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         base_url: "https://openrouter.ai/api/v1",
         key_env: "OPENROUTER_API_KEY",
         reasoning_replay: false,
+        pdf_input: false,
         models: &[
             ModelSpec {
                 id: "anthropic/claude-opus-4.8",
@@ -263,6 +276,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         base_url: "https://api.example.com/v1",
         key_env: "SILICOLAB_CUSTOM_OPENAI_API_KEY",
         reasoning_replay: false,
+        pdf_input: false,
         models: &[ModelSpec {
             id: "gpt-5.5",
             label: "gpt-5.5",
@@ -279,6 +293,7 @@ pub const PROVIDERS: &[ProviderSpec] = &[
         // Keyless: a local server ignores the bearer token.
         key_env: "",
         reasoning_replay: false,
+        pdf_input: false,
         // A local server can expose any model. Never pretend a particular one
         // is installed; populate this provider from `/models` or free text.
         models: &[],
@@ -413,6 +428,11 @@ pub fn effective_caps(
     {
         caps.supports_effort = *supported;
         caps.supports_thinking = *supported;
+    }
+    // A base-URL override points at a gateway whose file support is unknown.
+    if spec.kind == ProviderKind::OpenAiCompat && effective_base_url(config, spec) != spec.base_url
+    {
+        caps.supports_pdf_input = false;
     }
     caps
 }
@@ -563,6 +583,37 @@ mod tests {
             .or_default()
             .insert(selection.model.clone(), true);
         assert!(effective_caps(&config, &selection, custom).supports_effort);
+    }
+
+    #[test]
+    fn only_anthropic_and_openai_take_native_pdfs() {
+        let config = AssistantConfig::default();
+        for spec in PROVIDERS {
+            let selection = AssistantModelSelection {
+                provider: spec.id.into(),
+                model: "any-model".into(),
+            };
+            assert_eq!(
+                effective_caps(&config, &selection, spec).supports_pdf_input,
+                matches!(spec.id, "anthropic" | "openai"),
+                "{}",
+                spec.id
+            );
+        }
+    }
+
+    #[test]
+    fn base_url_override_disables_native_pdf_input() {
+        let openai = provider_spec("openai").unwrap();
+        let selection = AssistantModelSelection {
+            provider: "openai".into(),
+            model: "gpt-5.5".into(),
+        };
+        let mut config = AssistantConfig::default();
+        config
+            .base_urls
+            .insert("openai".into(), "https://gateway.internal/v1".into());
+        assert!(!effective_caps(&config, &selection, openai).supports_pdf_input);
     }
 
     #[test]

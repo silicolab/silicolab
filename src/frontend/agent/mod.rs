@@ -13,13 +13,14 @@ pub mod tools;
 mod mock;
 
 pub use loop_driver::{
-    always_allow_command, always_allow_risk, approve_tool_call, cancel_agent, clear_stored_key,
-    delete_assistant_conversation, describe_call, fetch_models, gated_pending, impact_hint,
-    new_assistant_conversation, poll_agent_jobs, poll_agent_turn, poll_model_fetch,
-    refresh_key_status, reject_tool_call, remove_queued_agent_input, rename_assistant_conversation,
-    send_agent_message, set_approval_mode, set_assistant_api_key, set_assistant_base_url,
-    set_assistant_effort, set_assistant_effort_supported, set_assistant_enabled,
-    set_assistant_executable, set_assistant_external_access, switch_assistant_conversation,
+    always_allow_command, always_allow_risk, approve_tool_call, attach_agent_documents,
+    cancel_agent, clear_stored_key, delete_assistant_conversation, describe_call, fetch_models,
+    gated_pending, impact_hint, new_assistant_conversation, poll_agent_jobs, poll_agent_turn,
+    poll_model_fetch, refresh_key_status, reject_tool_call, remove_agent_attachment,
+    remove_queued_agent_input, rename_assistant_conversation, send_agent_message,
+    set_approval_mode, set_assistant_api_key, set_assistant_base_url, set_assistant_effort,
+    set_assistant_effort_supported, set_assistant_enabled, set_assistant_executable,
+    set_assistant_external_access, switch_assistant_conversation,
     switch_assistant_conversation_model, switch_provider_model,
 };
 pub use session::{AgentSession, AssistantConversationId, ModelFetchStatus, TranscriptEntry};

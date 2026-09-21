@@ -7,6 +7,8 @@ use std::path::{Component, Path, PathBuf};
 use serde_json::Value;
 
 use crate::frontend::jobs::PdfReadRequest;
+use crate::io::llm::documents;
+use crate::io::llm::types::DocumentRef;
 use crate::io::pdf::parse_page_spec;
 
 /// Text returned per call. Delivered as a follow-up message rather than a tool
@@ -65,31 +67,33 @@ pub fn parse_request(input: &Value, project_root: Option<&Path>) -> Result<PdfRe
 
 pub const MAX_ATTACHMENTS: usize = 5;
 
-/// Add dropped or picked files to a draft's attachments, keeping only PDFs,
-/// skipping repeats, and stopping at [`MAX_ATTACHMENTS`].
-pub fn attach(attachments: &mut Vec<PathBuf>, paths: impl IntoIterator<Item = PathBuf>) {
+/// Add dropped or picked files to a draft's attachments: PDFs only, repeats
+/// skipped, at most [`MAX_ATTACHMENTS`]. Returns what could not be attached,
+/// worded for the user.
+pub fn attach(
+    attachments: &mut Vec<DocumentRef>,
+    paths: impl IntoIterator<Item = PathBuf>,
+) -> Vec<String> {
+    let mut problems = Vec::new();
     for path in paths {
         let is_pdf = path
             .extension()
             .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"));
-        if is_pdf && !attachments.contains(&path) && attachments.len() < MAX_ATTACHMENTS {
-            attachments.push(path);
+        if !is_pdf || attachments.iter().any(|document| document.path == path) {
+            continue;
+        }
+        if attachments.len() >= MAX_ATTACHMENTS {
+            problems.push(format!(
+                "A message can carry at most {MAX_ATTACHMENTS} PDFs; the rest were not attached."
+            ));
+            break;
+        }
+        match documents::describe(&path) {
+            Ok(document) => attachments.push(document),
+            Err(error) => problems.push(format!("Could not attach {}: {error}", path.display())),
         }
     }
-}
-
-/// The message as the model receives it: the user's text, then each attachment
-/// named by path so the model can `read_pdf` it. Backticks keep a path with
-/// spaces in one piece.
-pub fn message_with_attachments(text: &str, attachments: &[PathBuf]) -> String {
-    let mut message = text.trim().to_string();
-    for path in attachments {
-        if !message.is_empty() {
-            message.push('\n');
-        }
-        message.push_str(&format!("Attached PDF: `{}`", path.display()));
-    }
-    message
+    problems
 }
 
 #[cfg(test)]
@@ -147,39 +151,48 @@ mod tests {
         assert!(parse_request(&json!({ "path": "/abs/paper.pdf" }), None).is_ok());
     }
 
+    fn attached(path: &str) -> DocumentRef {
+        DocumentRef {
+            path: path.into(),
+            name: path.rsplit('/').next().unwrap_or(path).into(),
+            bytes: 1,
+            modified_ms: 0,
+            pages: 1,
+        }
+    }
+
     #[test]
-    fn attaching_keeps_distinct_pdfs_up_to_the_cap() {
-        let mut attachments = vec![PathBuf::from("/a/paper.pdf")];
-        attach(
+    fn attaching_skips_repeats_and_other_file_types() {
+        let mut attachments = vec![attached("/a/paper.pdf")];
+        let problems = attach(
             &mut attachments,
             [
                 PathBuf::from("/a/paper.pdf"),
                 PathBuf::from("/a/structure.cif"),
-                PathBuf::from("/a/SI.PDF"),
             ],
         );
-        assert_eq!(
-            attachments,
-            [PathBuf::from("/a/paper.pdf"), PathBuf::from("/a/SI.PDF")]
-        );
-        attach(
-            &mut attachments,
-            (0..10).map(|i| PathBuf::from(format!("/a/{i}.pdf"))),
-        );
-        assert_eq!(attachments.len(), MAX_ATTACHMENTS);
+        assert!(problems.is_empty());
+        assert_eq!(attachments.len(), 1);
     }
 
     #[test]
-    fn the_sent_message_names_each_attachment_by_path() {
-        let attachments = [PathBuf::from("/a/my paper.pdf")];
-        assert_eq!(
-            message_with_attachments(" summarize ", &attachments),
-            "summarize\nAttached PDF: `/a/my paper.pdf`"
+    fn an_unreadable_pdf_is_reported_not_attached() {
+        let mut attachments = Vec::new();
+        let problems = attach(
+            &mut attachments,
+            [PathBuf::from("/definitely/missing/SI.PDF")],
         );
-        assert_eq!(
-            message_with_attachments("", &attachments),
-            "Attached PDF: `/a/my paper.pdf`"
-        );
-        assert_eq!(message_with_attachments("hi", &[]), "hi");
+        assert!(attachments.is_empty());
+        assert!(problems[0].contains("SI.PDF"), "{problems:?}");
+    }
+
+    #[test]
+    fn attaching_stops_at_the_cap_and_says_so() {
+        let mut attachments: Vec<DocumentRef> = (0..MAX_ATTACHMENTS)
+            .map(|index| attached(&format!("/a/{index}.pdf")))
+            .collect();
+        let problems = attach(&mut attachments, [PathBuf::from("/a/extra.pdf")]);
+        assert_eq!(attachments.len(), MAX_ATTACHMENTS);
+        assert!(problems[0].contains("at most"));
     }
 }

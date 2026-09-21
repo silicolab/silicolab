@@ -59,7 +59,7 @@ pub(super) fn inspect(state: &AppState, input: &Value) -> Result<String> {
             .iter()
             .rev()
             .find_map(|entry| match entry {
-                crate::frontend::agent::TranscriptEntry::User(text) => Some(text),
+                crate::frontend::agent::TranscriptEntry::User(message) => Some(&message.text),
                 _ => None,
             })
             .ok_or_else(|| anyhow::anyhow!("no user instruction in this conversation"))?;

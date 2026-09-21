@@ -71,7 +71,7 @@ fn gate_blocks(state: &AppState, call: &ToolCall) -> bool {
     )
 }
 
-/// A `read_pdf` of a path the user wrote (or dropped) into one of their own
+/// A `read_pdf` of a path the user wrote into, or attached to, one of their own
 /// messages is already in scope. Only typed user turns count: background-job
 /// text also enters history as a user message, and a PDF must not be able to
 /// name further files to read.
@@ -87,10 +87,16 @@ fn user_named_pdf(
     };
     let path = path.trim();
     !path.is_empty()
-        && conversation
-            .transcript
-            .iter()
-            .any(|entry| matches!(entry, TranscriptEntry::User(text) if text.contains(path)))
+        && conversation.transcript.iter().any(|entry| match entry {
+            TranscriptEntry::User(message) => {
+                message.text.contains(path)
+                    || message
+                        .attachments
+                        .iter()
+                        .any(|document| document.path == std::path::Path::new(path))
+            }
+            _ => false,
+        })
 }
 
 /// The pending calls awaiting a user decision (gated, not yet approved). Drives

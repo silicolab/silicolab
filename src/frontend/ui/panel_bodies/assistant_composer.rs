@@ -167,13 +167,16 @@ pub(crate) fn render_assistant_composer(
             .inner_margin(Margin::symmetric(8, 8))
             .show(ui, |ui| {
                 ui.set_width(frame_inner_width);
-                if !state.ui.agent.attachments.is_empty() {
-                    render_attachment_chips(
+                if !state.ui.agent.attachments.is_empty()
+                    && let Some(index) = render_attachment_chips(
                         ui,
                         pal,
-                        &mut state.ui.agent.attachments,
+                        &state.ui.agent.attachments,
                         frame_inner_width,
-                    );
+                        true,
+                    )
+                {
+                    actions.push(AppAction::RemoveAgentAttachment(index));
                 }
                 let response = ui.add_sized(
                     [frame_inner_width, 42.0],
@@ -290,10 +293,7 @@ pub(crate) fn render_assistant_composer(
                                     .add_filter("PDF", &["pdf"])
                                     .pick_files()
                             {
-                                crate::frontend::agent::tools::pdf::attach(
-                                    &mut state.ui.agent.attachments,
-                                    paths,
-                                );
+                                actions.push(AppAction::AttachAgentDocuments(paths));
                             }
                         }
                         let controls_width = ui.available_width();
@@ -349,27 +349,24 @@ pub(crate) fn render_assistant_composer(
             .request_repaint_after(std::time::Duration::from_millis(500));
     }
     if can_submit && send {
-        let message = crate::frontend::agent::tools::pdf::message_with_attachments(
-            &state.ui.agent.input,
-            &state.ui.agent.attachments,
-        );
-        if !message.is_empty() {
+        let message = state.ui.agent.input.trim().to_string();
+        if !message.is_empty() || !state.ui.agent.attachments.is_empty() {
             actions.push(AppAction::SendAgentMessage(message));
             state.ui.agent.input.clear();
-            state.ui.agent.attachments.clear();
         }
     }
     open_assistant_settings
 }
 
-/// One row of attached-PDF chips above the text. Hovering a chip reveals a
-/// remove button on its top-right corner.
-fn render_attachment_chips(
+/// One row of attached-PDF chips. With `removable`, hovering a chip reveals a
+/// remove button on its top-right corner; the clicked chip's index is returned.
+pub(super) fn render_attachment_chips(
     ui: &mut egui::Ui,
     pal: &Palette,
-    attachments: &mut Vec<std::path::PathBuf>,
+    attachments: &[crate::io::llm::types::DocumentRef],
     row_width: f32,
-) {
+    removable: bool,
+) -> Option<usize> {
     const GAP: f32 = 6.0;
     const REMOVE_RADIUS: f32 = 8.0;
     let count = attachments.len() as f32;
@@ -379,7 +376,7 @@ fn render_attachment_chips(
         egui::Sense::hover(),
     );
     let mut removed = None;
-    for (index, path) in attachments.iter().enumerate() {
+    for (index, document) in attachments.iter().enumerate() {
         let chip_rect = egui::Rect::from_min_size(
             egui::pos2(
                 row_rect.left() + index as f32 * (chip_width + GAP),
@@ -390,17 +387,17 @@ fn render_attachment_chips(
         if chip_rect.right() > row_rect.right() + 0.5 {
             break;
         }
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| path.display().to_string());
         let chip = ui
             .interact(
                 chip_rect,
                 ui.id().with(("assistant-attachment", index)),
                 egui::Sense::hover(),
             )
-            .on_hover_text(path.display().to_string());
+            .on_hover_text(format!(
+                "{}\n{} pages",
+                document.path.display(),
+                document.pages
+            ));
         ui.painter().rect(
             chip_rect,
             CornerRadius::same(radius::CONTROL),
@@ -416,8 +413,12 @@ fn render_attachment_chips(
                 ui.spacing_mut().item_spacing.x = 5.0;
                 ui.label(RichText::new(egui_phosphor::regular::FILE_PDF).color(pal.accent));
                 ui.add(
-                    egui::Label::new(RichText::new(name).small().color(pal.text_primary))
-                        .truncate(),
+                    egui::Label::new(
+                        RichText::new(&document.name)
+                            .small()
+                            .color(pal.text_primary),
+                    )
+                    .truncate(),
                 );
             },
         );
@@ -425,7 +426,7 @@ fn render_attachment_chips(
         let remove_center = egui::pos2(chip_rect.right() - 2.0, chip_rect.top() + 2.0);
         let remove_rect =
             egui::Rect::from_center_size(remove_center, egui::Vec2::splat(REMOVE_RADIUS * 2.0));
-        if chip.hovered() || ui.rect_contains_pointer(remove_rect) {
+        if removable && (chip.hovered() || ui.rect_contains_pointer(remove_rect)) {
             let remove = ui
                 .interact(
                     remove_rect,
@@ -447,9 +448,7 @@ fn render_attachment_chips(
             }
         }
     }
-    if let Some(index) = removed {
-        attachments.remove(index);
-    }
+    removed
 }
 
 /// Compact, point-of-action permission control inspired by agent-first IDEs.

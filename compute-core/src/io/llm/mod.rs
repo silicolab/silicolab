@@ -6,6 +6,7 @@
 //! vendor JSON entirely behind that boundary.
 
 pub mod anthropic;
+pub mod documents;
 pub mod external;
 pub mod openai_compat;
 pub mod provider;
