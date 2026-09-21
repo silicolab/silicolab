@@ -16,3 +16,5 @@ pub mod secrets;
 pub mod storage;
 pub mod structure_codec;
 pub mod tasks;
+
+pub mod records;

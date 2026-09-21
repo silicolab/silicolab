@@ -33,9 +33,6 @@ impl AgentSession {
         snapshot: ProjectAssistantSnapshot,
         default_selection: AssistantModelSelection,
     ) -> Self {
-        if snapshot.conversations.is_empty() {
-            return Self::with_selection(default_selection);
-        }
         let mut conversations: Vec<AssistantConversation> = snapshot
             .conversations
             .into_iter()
@@ -43,7 +40,14 @@ impl AgentSession {
             .map(restore_conversation)
             .collect();
         if conversations.is_empty() {
-            return Self::with_selection(default_selection);
+            let mut session = Self::with_selection(default_selection);
+            let id = AssistantConversationId::new(snapshot.next_conversation_id.max(1));
+            if let Some(conversation) = session.conversations.first_mut() {
+                conversation.id = id;
+            }
+            session.active_conversation = id;
+            session.next_conversation_id = id.raw().saturating_add(1);
+            return session;
         }
         conversations.sort_by_key(|conversation| conversation.id.raw());
         let active_conversation = conversations

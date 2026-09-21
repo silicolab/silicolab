@@ -30,6 +30,7 @@ under `src/`.
 | Inline edit task (no panel, acts on the active structure) | `add-hydrogens` / `recompute-bonds` | Executor runs the op and marks the task complete; no prompt state. |
 | New `.sls` command group | `frontend/qm_commands.rs` | Put the top-level verb in `console/grammar.rs::Command`, classify it in `Command::risk`, dispatch it there, and add it to `command_catalog()`. Defining it once makes it a CLI command too. |
 | New molecular file format | `io/formats/cif.rs` (single) / `mol2.rs`, `pdb.rs` (multi-record) | Plus 3 registry edits — see Traps. Declare whether records concatenate in `StructureFormat::multi_structure_file`. |
+| Execution evidence or confirmed task memory | `backend/records` + `frontend/dispatcher/records.rs` | See [Evidence and task memory](evidence-and-task-memory.md) for authority, retrieval and adapter contracts. |
 | New GUI interaction (no task) | an `AppAction` variant + arm in `dispatcher/mod.rs` + a handler in a `dispatcher/*.rs` | Widgets only emit actions; only `dispatch` mutates state. |
 | Expose a capability to the in-app assistant | — | Automatic via the `run_command` tool once a `.sls` verb exists. `Command::risk` controls approval; heavy-classify it in `agent/loop_driver/heavy.rs` if it is CPU-bound. |
 

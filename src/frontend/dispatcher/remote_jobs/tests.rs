@@ -64,7 +64,7 @@ fn remote_qm_report_records_once_and_creates_no_entry() {
         frequencies: Vec::new(),
     };
 
-    apply_remote_qm_outcome(&mut state, &row, outcome.clone());
+    apply_remote_qm_outcome(&mut state, &row, outcome.clone()).unwrap();
     assert!(
         state.entries.records.is_empty(),
         "an energy report creates no entry"
@@ -76,7 +76,7 @@ fn remote_qm_report_records_once_and_creates_no_entry() {
     assert!(record.primary_entry_id.is_none());
     assert!(record.entries.is_empty());
 
-    apply_remote_qm_outcome(&mut state, &row, outcome);
+    apply_remote_qm_outcome(&mut state, &row, outcome).unwrap();
     assert!(state.entries.records.is_empty());
     assert_eq!(state.materializations.len(), 1);
 }
@@ -309,9 +309,11 @@ fn qm_remote_artifact_repair_does_not_reimport_geometry() {
         "silicolab-remote-qm-repair-{}",
         uuid::Uuid::new_v4()
     ));
-    std::fs::create_dir_all(dir.join(QM_OUTPUT_FILE)).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
     let mut state = AppState::scratch(Default::default(), Vec::new());
     let job_id = bind_remote_task(&mut state, &dir);
+    let artifact_dir = dir.join("jobs").join(&job_id);
+    std::fs::create_dir_all(artifact_dir.join(QM_OUTPUT_FILE)).unwrap();
     let row = qm_remote_row(&job_id, &dir);
     let outcome = crate::wire::EngineOutcome::Qm(crate::engines::qm::QmOutcome {
         energy_hartree: -1.0,
@@ -334,7 +336,7 @@ fn qm_remote_artifact_repair_does_not_reimport_geometry() {
     assert_eq!(result.series, ArtifactStatus::Saved);
     assert_eq!(state.entries.records.len(), 1);
     assert_eq!(execution.import_state, ResultImport::Applied);
-    std::fs::remove_dir(dir.join(QM_OUTPUT_FILE)).unwrap();
+    std::fs::remove_dir(artifact_dir.join(QM_OUTPUT_FILE)).unwrap();
     import_completed_remote_jobs(&mut state, vec![row.clone()]);
     let execution = state.tasks.runs.execution(&job_id).unwrap();
     assert!(execution.qm_result.as_ref().unwrap().artifacts_complete());
@@ -343,4 +345,188 @@ fn qm_remote_artifact_repair_does_not_reimport_geometry() {
     import_completed_remote_jobs(&mut state, vec![row]);
     assert_eq!(state.entries.records.len(), 1);
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn gui_agent_and_remote_qm_paths_produce_identical_facts_without_report_history() {
+    use crate::frontend::jobs::{AgentHeavyJob, QmWorkerMessage, RunningQmJob, TrackedAgentJob};
+    use std::sync::{Arc, atomic::AtomicBool};
+    let root = std::env::temp_dir().join(format!("silicolab-three-paths-{}", uuid::Uuid::new_v4()));
+    let outcome = crate::engines::qm::QmOutcome {
+        energy_hartree: -2.0,
+        converged: false,
+        optimized_structure: None,
+        summary: "UNIQUE_RAW_METHOD_WARNING\n".repeat(5000),
+        scf_trace: vec![-1.0, -2.0],
+        opt_trace: vec![],
+        frequencies: vec![15.0, 30.0],
+    };
+    let mut facts = Vec::new();
+    for path in ["gui", "agent", "remote"] {
+        let mut state = AppState::scratch(Default::default(), vec![]);
+        state.ui.agent.selection.provider = "test-no-provider".into();
+        let dir = root.join(path);
+        let job = bind_remote_task(&mut state, &dir);
+        let task = state.tasks.runs.task_run_id_for_job(&job).unwrap();
+        match path {
+            "gui" => apply_qm_outcome(
+                &mut state,
+                &JobContext {
+                    job_id: Some(job.parse().unwrap()),
+                    task_run_id: Some(task),
+                },
+                outcome.clone(),
+            )
+            .unwrap(),
+            "remote" => {
+                let row = qm_remote_row(&job, &dir);
+                apply_remote_qm_outcome(&mut state, &row, outcome.clone()).unwrap();
+            }
+            _ => {
+                let (tx, rx) = std::sync::mpsc::channel();
+                tx.send(QmWorkerMessage::Finished(Box::new(outcome.clone())))
+                    .unwrap();
+                state.jobs.agent_jobs.push(TrackedAgentJob {
+                    id: 1,
+                    conversation: state.ui.agent.active_conversation,
+                    label: "qm energy".into(),
+                    task_run_id: task,
+                    job_id: job.parse().unwrap(),
+                    job: AgentHeavyJob::Qm(RunningQmJob {
+                        receiver: rx,
+                        cancel: crate::wire::JobCancelHandle::from_flag(Arc::new(AtomicBool::new(
+                            false,
+                        ))),
+                        latest_stage: None,
+                        cancel_requested: false,
+                    }),
+                });
+                crate::frontend::agent::poll_agent_jobs(&mut state, &egui::Context::default());
+                let history = format!("{:?}", state.ui.agent.history);
+                assert!(!history.contains("UNIQUE_RAW_METHOD_WARNING"));
+                assert!(history.contains("coverage partial"));
+                assert!(state.ui.agent.qm_diagnostic_only);
+            }
+        }
+        let record = state.tasks.runs.records.get(&format!("qm:{job}")).unwrap();
+        facts.push(serde_json::to_value(&record.content).unwrap());
+    }
+    assert_eq!(facts[0], facts[1]);
+    assert_eq!(facts[1], facts[2]);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn legacy_shared_outcome_is_not_attributed_to_an_old_job_during_recovery() {
+    use crate::backend::run_attempt::{Placement, ResultImport};
+    let dir = std::env::temp_dir().join(format!("silicolab-ambiguous-{}", uuid::Uuid::new_v4()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut state = AppState::scratch(Default::default(), vec![]);
+    let first = bind_remote_task(&mut state, &dir);
+    let task = state.tasks.runs.task_run_id_for_job(&first).unwrap();
+    state.tasks.runs.begin_execution(
+        task,
+        Placement::Remote { host: None },
+        Some("qm-energy".into()),
+        1,
+    );
+    let outcome = crate::wire::EngineOutcome::Qm(crate::engines::qm::QmOutcome {
+        energy_hartree: -2.0,
+        converged: true,
+        optimized_structure: None,
+        summary: "newest execution report".into(),
+        scf_trace: vec![],
+        opt_trace: vec![],
+        frequencies: vec![],
+    });
+    std::fs::write(
+        dir.join(crate::engines::remote::launcher::OUTCOME_FILE),
+        serde_json::to_vec(&outcome).unwrap(),
+    )
+    .unwrap();
+    import_completed_remote_jobs(&mut state, vec![qm_remote_row(&first, &dir)]);
+    assert_eq!(state.tasks.runs.records.all().count(), 0);
+    assert_eq!(
+        state.tasks.runs.execution(&first).unwrap().import_state,
+        ResultImport::PendingRecovery
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn remote_recovery_checks_preserved_facts_before_repairing_missing_status() {
+    use crate::backend::storage::{create_project_schema, load_run_graph, write_run_graph};
+    for status_json in [Some("damaged status"), None] {
+        let root = std::env::temp_dir().join(format!("silicolab-replay-{}", uuid::Uuid::new_v4()));
+        let mut state = AppState::scratch(Default::default(), vec![]);
+        let job = bind_remote_task(&mut state, &root);
+        let dir = root.join("jobs").join(&job);
+        let row = qm_remote_row(&job, &dir);
+        let original = crate::engines::qm::QmOutcome {
+            energy_hartree: -1.0,
+            converged: true,
+            optimized_structure: Some(Structure::empty()),
+            summary: "original report".into(),
+            scf_trace: vec![-0.5, -1.0],
+            opt_trace: vec![],
+            frequencies: vec![],
+        };
+        apply_remote_qm_outcome(&mut state, &row, original.clone()).unwrap();
+        let ledger = state.materializations.get(&job).unwrap().clone();
+        let db = rusqlite::Connection::open_in_memory().unwrap();
+        create_project_schema(&db).unwrap();
+        write_run_graph(&db, &state.tasks.runs).unwrap();
+        db.execute(
+            "update job_executions set qm_result_json = ?1",
+            [status_json],
+        )
+        .unwrap();
+        state.tasks.runs = load_run_graph(&db).unwrap();
+        let mut conflicting = original.clone();
+        conflicting.energy_hartree = -99.0;
+        conflicting.summary = "conflicting report".into();
+        let path = dir.join(crate::engines::remote::launcher::OUTCOME_FILE);
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&crate::wire::EngineOutcome::Qm(conflicting)).unwrap(),
+        )
+        .unwrap();
+        import_completed_remote_jobs(&mut state, vec![row.clone()]);
+        assert!(
+            state
+                .tasks
+                .runs
+                .execution(&job)
+                .unwrap()
+                .qm_result
+                .is_none()
+        );
+        assert_eq!(
+            std::fs::read_to_string(dir.join(QM_OUTPUT_FILE)).unwrap(),
+            "original report\n"
+        );
+        assert_eq!(state.materializations.get(&job), Some(&ledger));
+        assert_eq!(state.entries.records.len(), 1);
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&crate::wire::EngineOutcome::Qm(original)).unwrap(),
+        )
+        .unwrap();
+        import_completed_remote_jobs(&mut state, vec![row]);
+        assert!(
+            state
+                .tasks
+                .runs
+                .execution(&job)
+                .unwrap()
+                .qm_result
+                .as_ref()
+                .unwrap()
+                .artifacts_complete()
+        );
+        assert!(state.tasks.runs.unavailable_qm_results.is_empty());
+        assert_eq!(state.materializations.get(&job), Some(&ledger));
+        assert_eq!(state.entries.records.len(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

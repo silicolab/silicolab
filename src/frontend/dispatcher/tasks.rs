@@ -265,6 +265,7 @@ pub(crate) fn record_materialization(
     primary_entry_id: Option<u64>,
     entry_ids: &[u64],
 ) {
+    state.tasks.runs.records.bind_results(job_id, entry_ids);
     let applied_at_ms = crate::backend::storage::jobs::now_ms().max(0) as u64;
     let entries = entry_ids
         .iter()

@@ -7,6 +7,11 @@ pub fn inspect(state: &AppState, query: Option<&str>) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "workspace: {}", state.workspace_label());
 
+    if let Some(job) = query
+        && state.tasks.runs.execution(job.trim()).is_none()
+    {
+        return format!("job not found: {job}");
+    }
     let focused = query.and_then(|query| state.tasks.runs.execution(query.trim()));
     let focused_task =
         focused.and_then(|e| state.tasks.runs.task_run_id_for_job(&e.job_id.to_string()));
@@ -17,7 +22,7 @@ pub fn inspect(state: &AppState, query: Option<&str>) -> String {
         .rev()
         .filter(|task| task.kind.is_qm())
         .filter(|task| focused_task.is_none_or(|id| id == task.id))
-        .take(12)
+        .take(if query.is_some() { 1 } else { 0 })
     {
         if let Some(execution) = focused.or_else(|| state.tasks.runs.latest_execution(task.id)) {
             let result = execution
@@ -41,27 +46,25 @@ pub fn inspect(state: &AppState, query: Option<&str>) -> String {
                 task.id
             );
         }
-        if let Some(dir) = &task.run_dir {
-            let path = dir.join(crate::frontend::dispatcher::QM_OUTPUT_FILE);
-            match std::fs::read_to_string(&path) {
-                Ok(report) => {
-                    let _ = writeln!(
-                        out,
-                        "QM report accessible at {}:\n{}",
-                        path.display(),
-                        clamp_result(&report)
-                    );
-                }
-                Err(error) => {
-                    let _ = writeln!(
-                        out,
-                        "QM report missing or inaccessible at {}: {error}",
-                        path.display()
-                    );
-                }
+        if query.is_some()
+            && let Some(execution) = focused
+        {
+            let id = format!("qm:{}", execution.job_id);
+            if state.tasks.runs.records.get(&id).is_some() {
+                let _ = writeln!(
+                    out,
+                    "Evidence {id}; use inspect summary or explicit raw report. Diagnostics coverage partial: method warnings require report inspection."
+                );
+            } else if let Some(dir) = &task.run_dir {
+                let _ = writeln!(
+                    out,
+                    "No structured evidence; legacy task report {} has ambiguous execution ownership and is not registered for job raw reads",
+                    dir.join(crate::frontend::dispatcher::QM_OUTPUT_FILE)
+                        .display()
+                );
+            } else {
+                out.push_str("QM report location unknown\n");
             }
-        } else {
-            let _ = writeln!(out, "QM report location unknown");
         }
     }
 

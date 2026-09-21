@@ -62,7 +62,7 @@ pub fn load_project_snapshot(session: &ProjectSession) -> Result<ProjectSnapshot
     let view = load_project_view_settings(&project_db)?;
     let mut history = load_history(&project_db)?;
     history.set_active_entry(entries.active_entry_id());
-    let (assistant, warnings) = match load_assistant_state(&project_db) {
+    let (mut assistant, mut warnings) = match load_assistant_state(&project_db) {
         Ok(assistant) => (assistant, Vec::new()),
         Err(error) => (
             ProjectAssistantSnapshot::default(),
@@ -70,6 +70,26 @@ pub fn load_project_snapshot(session: &ProjectSession) -> Result<ProjectSnapshot
         ),
     };
 
+    if let Some(session) = tasks
+        .runs
+        .records
+        .all()
+        .filter_map(|r| r.scope.session)
+        .max()
+    {
+        assistant.next_conversation_id = assistant
+            .next_conversation_id
+            .max(session.saturating_add(1));
+    }
+    if !tasks.runs.unavailable_qm_results.is_empty() {
+        warnings.push(format!(
+            "{} QM status records damaged or unsupported; original data retained",
+            tasks.runs.unavailable_qm_results.len()
+        ));
+    }
+    if !tasks.runs.records.unavailable.is_empty() {
+        warnings.push(format!("{} evidence/memory records unavailable; inspect unavailable for reasons. Original data preserved.", tasks.runs.records.unavailable.len()));
+    }
     Ok(ProjectSnapshot {
         name,
         project_id,

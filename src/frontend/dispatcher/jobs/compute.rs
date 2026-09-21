@@ -4,37 +4,8 @@ use super::{JobContext, JobPoll, JobRuntime, drive};
 use crate::frontend::jobs::{
     EngineSuccess, LocalJobSlot, RunningEngineJob, RunningOptimization, RunningQmJob,
 };
-use crate::frontend::state::{LogLevel, SystemSubsystem};
+use crate::frontend::state::LogLevel;
 use crate::job::CancelSignal;
-
-pub(crate) fn save_qm_run_artifacts(
-    state: &mut AppState,
-    task_id: Option<u64>,
-    outcome: &crate::engines::qm::QmOutcome,
-) -> crate::backend::run_attempt::QmResult {
-    let run = task_id
-        .and_then(|id| state.tasks.task_run(id))
-        .and_then(|task| task.run_dir.clone().map(|dir| (task.id, dir)));
-    let Some((task_id, run_dir)) = run else {
-        state.report_system_error(
-            SystemSubsystem::Storage,
-            "missing QM run identity or directory".to_string(),
-        );
-        use crate::backend::run_attempt::{ArtifactStatus, QmResult};
-        return QmResult {
-            converged: outcome.converged,
-            report: ArtifactStatus::Failed("missing QM run directory".into()),
-            series: if crate::backend::runs::QmSeries::from_outcome(outcome).is_empty() {
-                ArtifactStatus::NotApplicable
-            } else {
-                ArtifactStatus::Failed("missing QM run directory".into())
-            },
-        };
-    };
-    let result = save_qm_artifacts(state, &run_dir, outcome);
-    state.ui.task_chart_thumbnails.remove(&task_id);
-    result
-}
 
 pub(crate) fn poll_engine_job(state: &mut AppState, ctx: &egui::Context) {
     let Some(running) = state.jobs.take_engine() else {
@@ -275,7 +246,12 @@ impl JobRuntime for RunningQmJob {
                         }
                         return JobPoll::Terminal(TaskStatus::Cancelled);
                     }
-                    apply_qm_outcome(state, cx, *outcome);
+                    if let Err(error) = apply_qm_outcome(state, cx, *outcome) {
+                        state.report_system_error(
+                            crate::frontend::state::SystemSubsystem::Storage,
+                            format!("QM result rejected: {error}"),
+                        );
+                    }
                     return JobPoll::Terminal(TaskStatus::Completed);
                 }
                 Ok(QmWorkerMessage::Failed(error)) => {
@@ -304,24 +280,17 @@ pub(crate) fn apply_qm_outcome(
     state: &mut AppState,
     cx: &JobContext,
     outcome: crate::engines::qm::QmOutcome,
-) {
+) -> anyhow::Result<()> {
     if !super::compute_identity_valid(state, cx) {
-        return;
+        anyhow::bail!("missing or inconsistent QM job/task identity");
     }
-    if let Some(job_id) = cx.job_id {
-        for line in outcome.summary.lines() {
-            state.append_job_log(job_id, LogLevel::Info, line);
-        }
-    }
+
     // Persist the raw report to the task's run directory before any new entry is
     // added, so the run's source entry is the input structure, not the result.
-    let result = save_qm_run_artifacts(state, cx.task_run_id, &outcome);
-    if let Some(job_id) = cx.job_id {
-        state
-            .tasks
-            .runs
-            .set_qm_result(&job_id.to_string(), result.clone());
-    }
+    let job_id = cx
+        .job_id
+        .ok_or_else(|| anyhow!("missing QM job identity"))?;
+    let result = save_qm_execution(state, &job_id.to_string(), &outcome)?;
     // A QM run's optimized geometry is surfaced as a new entry (the original is
     // preserved). A single-point energy or frequency run produces no entry but
     // still records a report in the ledger, so its outcome is durably applied.
@@ -358,9 +327,12 @@ pub(crate) fn apply_qm_outcome(
     // new geometry, or the input structure when there is none — so the memoized
     // per-entry chart availability is stale.
     state.ui.chart_availability.clear();
+    if let Some(task_id) = cx.task_run_id {
+        state.ui.task_chart_thumbnails.remove(&task_id);
+    }
     let summary = format!(
-        "QM execution complete: energy {:.6} Eh; {}",
-        outcome.energy_hartree,
+        "QM execution complete; {}; diagnostics coverage partial: inspect raw report; {}",
+        evidence_notice(state, &job_id.to_string()),
         result.summary()
     );
     match cx.job_id {
@@ -369,4 +341,5 @@ pub(crate) fn apply_qm_outcome(
         None if result.needs_diagnosis() => state.status_neutral(summary),
         None => state.status_success(summary),
     }
+    Ok(())
 }
