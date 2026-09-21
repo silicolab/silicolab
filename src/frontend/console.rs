@@ -13,6 +13,7 @@ mod export;
 mod grammar;
 mod loading;
 mod render;
+mod risk;
 
 pub(crate) use args::*;
 pub(crate) use editing::*;
@@ -20,6 +21,7 @@ pub(crate) use export::*;
 pub(crate) use grammar::*;
 pub(crate) use loading::*;
 pub(crate) use render::*;
+pub(crate) use risk::*;
 
 #[cfg(test)]
 mod tests;
