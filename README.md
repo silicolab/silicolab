@@ -42,6 +42,10 @@ prebuilt executable from [GitHub Releases](https://github.com/silicolab/silicola
 Download prebuilt executables from
 [GitHub Releases](https://github.com/silicolab/silicolab/releases).
 
+If Chinese characters appear as boxes on Linux or WSL, install a CJK font
+(for example, `sudo apt-get install fonts-noto-cjk` on Debian/Ubuntu) and restart
+SilicoLab.
+
 ### Build from source
 
 Install the [Rust toolchain](https://rustup.rs). On Debian or Ubuntu, install
