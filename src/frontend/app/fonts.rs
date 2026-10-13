@@ -213,11 +213,30 @@ pub(super) fn install_system_fonts(fonts: &mut egui::FontDefinitions) {
         );
     }
 
-    // epaint panics when a `FontFamily::Name` resolves to no fonts. The macOS
-    // and Windows blocks above bind the named families to system CJK faces;
-    // elsewhere they are still missing here (and a failed platform font read
-    // could leave one empty). Alias every unbound or empty named family to its
-    // default stack so layout always has real fonts and the app starts.
+    #[cfg(target_os = "linux")]
+    {
+        let mut database = usvg::fontdb::Database::new();
+        database.load_system_fonts();
+        let mut installed = install_linux_cjk_font(fonts, &database);
+        if !installed && super::is_wsl() {
+            installed = install_wsl_cjk_font(
+                fonts,
+                &mut database,
+                std::path::Path::new("/mnt/c/Windows/Fonts"),
+            );
+        }
+        if !installed {
+            eprintln!(
+                "No usable Chinese font found. Install a CJK font (e.g. fonts-noto-cjk) and restart SilicoLab."
+            );
+        }
+    }
+
+    bind_named_font_families(fonts);
+}
+
+fn bind_named_font_families(fonts: &mut egui::FontDefinitions) {
+    // Named families must remain bound even when no system CJK font is installed.
     for (name, base) in UI_NAMED_FONT_FAMILIES {
         let family = egui::FontFamily::Name((*name).into());
         if fonts
@@ -229,6 +248,79 @@ pub(super) fn install_system_fonts(fonts: &mut egui::FontDefinitions) {
             fonts.families.insert(family, fallback);
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn install_wsl_cjk_font(
+    fonts: &mut egui::FontDefinitions,
+    database: &mut usvg::fontdb::Database,
+    directory: &std::path::Path,
+) -> bool {
+    for filename in ["msyh.ttc", "simsun.ttc", "simhei.ttf"] {
+        let path = directory.join(filename);
+        match database.load_font_file(&path) {
+            Ok(()) => {
+                if install_linux_cjk_font(fonts, database) {
+                    return true;
+                }
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => eprintln!("Could not load WSL host font {}: {error}", path.display()),
+        }
+    }
+    false
+}
+
+#[cfg(target_os = "linux")]
+fn install_linux_cjk_font(
+    fonts: &mut egui::FontDefinitions,
+    database: &usvg::fontdb::Database,
+) -> bool {
+    use usvg::fontdb::{Style, Weight};
+
+    let preferred = [
+        "Noto Sans CJK SC",
+        "Noto Sans SC",
+        "Source Han Sans SC",
+        "WenQuanYi Micro Hei",
+        "WenQuanYi Zen Hei",
+    ];
+    let mut faces: Vec<_> = database.faces().collect();
+    faces.sort_by_key(|face| {
+        let preference = preferred
+            .iter()
+            .position(|name| face.families.iter().any(|(family, _)| family == name))
+            .unwrap_or(preferred.len());
+        (
+            face.style != Style::Normal,
+            face.weight.0.abs_diff(Weight::NORMAL.0),
+            preference,
+        )
+    });
+    for face in faces {
+        let data = database.with_face_data(face.id, |bytes, index| {
+            let parsed = ttf_parser::Face::parse(bytes, index).ok()?;
+            if !"中文你好".chars().all(|c| parsed.glyph_index(c).is_some()) {
+                return None;
+            }
+            let mut data = egui::FontData::from_owned(bytes.to_vec());
+            // CJK fonts commonly use collections; the matching face need not be index 0.
+            data.index = index;
+            Some(data)
+        });
+        let Some(Some(data)) = data else {
+            continue;
+        };
+        let name = "Linux CJK Fallback".to_owned();
+        fonts
+            .font_data
+            .insert(name.clone(), std::sync::Arc::new(data));
+        for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
+            fonts.families.entry(family).or_default().push(name.clone());
+        }
+        return true;
+    }
+    false
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -250,6 +342,97 @@ fn install_font(
             } else {
                 list.push(name.to_owned());
             }
+        }
+    }
+}
+
+#[cfg(all(test, target_os = "linux"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn linux_cjk_collection_renders_in_every_ui_family() {
+        let mut database = usvg::fontdb::Database::new();
+        database.load_font_data(
+            include_bytes!("../../../tests/fixtures/fonts/cjk-fallback.ttc").to_vec(),
+        );
+        let mut fonts = egui::FontDefinitions::default();
+        install_linux_cjk_font(&mut fonts, &database);
+        bind_named_font_families(&mut fonts);
+
+        assert_eq!(fonts.font_data["Linux CJK Fallback"].index, 1);
+        assert_chinese_glyphs(fonts);
+    }
+
+    #[test]
+    fn wsl_loads_host_collection_without_linux_cjk_fonts() {
+        let directory =
+            std::env::temp_dir().join(format!("silicolab-fonts-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        std::fs::write(
+            directory.join("msyh.ttc"),
+            include_bytes!("../../../tests/fixtures/fonts/cjk-fallback.ttc"),
+        )
+        .unwrap();
+        let mut database = usvg::fontdb::Database::new();
+        database.load_font_data(crate::plot::EXPORT_FONT.to_vec());
+        let mut fonts = egui::FontDefinitions::default();
+        let installed = install_wsl_cjk_font(&mut fonts, &mut database, &directory);
+        std::fs::remove_dir_all(directory).unwrap();
+
+        assert!(installed);
+        assert_eq!(fonts.font_data["Linux CJK Fallback"].index, 1);
+        bind_named_font_families(&mut fonts);
+        assert_chinese_glyphs(fonts);
+    }
+
+    #[test]
+    fn installed_wsl_host_font_renders_chinese() {
+        if !super::super::is_wsl()
+            || !std::path::Path::new("/mnt/c/Windows/Fonts/msyh.ttc").is_file()
+        {
+            return;
+        }
+        let mut fonts = egui::FontDefinitions::default();
+        egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+        install_system_fonts(&mut fonts);
+        assert_chinese_glyphs(fonts);
+    }
+
+    fn assert_chinese_glyphs(fonts: egui::FontDefinitions) {
+        let context = egui::Context::default();
+        context.set_fonts(fonts);
+        context.begin_pass(egui::RawInput::default());
+        context.fonts_mut(|fonts| {
+            for family in [
+                egui::FontFamily::Proportional,
+                egui::FontFamily::Monospace,
+                egui::FontFamily::Name(ASSISTANT_CJK_FONT.into()),
+                egui::FontFamily::Name(CONSOLE_CJK_MONO_FONT.into()),
+            ] {
+                assert!(
+                    fonts.has_glyphs(&egui::FontId::new(13.0, family.clone()), "中文你好繁體，。"),
+                    "missing Chinese glyphs in {family:?}",
+                );
+            }
+        });
+        let _ = context.end_pass();
+    }
+
+    #[test]
+    fn linux_does_not_treat_latin_fonts_as_cjk_fallbacks() {
+        let mut database = usvg::fontdb::Database::new();
+        database.load_font_data(crate::plot::EXPORT_FONT.to_vec());
+        let mut fonts = egui::FontDefinitions::default();
+        install_linux_cjk_font(&mut fonts, &database);
+        bind_named_font_families(&mut fonts);
+
+        assert!(!fonts.font_data.contains_key("Linux CJK Fallback"));
+        for (name, base) in UI_NAMED_FONT_FAMILIES {
+            assert_eq!(
+                fonts.families[&egui::FontFamily::Name((*name).into())],
+                fonts.families[base],
+            );
         }
     }
 }

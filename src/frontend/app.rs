@@ -213,8 +213,18 @@ fn low_power_wgpu_options() -> egui_wgpu::WgpuConfiguration {
     if let egui_wgpu::WgpuSetup::CreateNew(create_new) = &mut options.wgpu_setup {
         create_new.power_preference =
             wgpu::PowerPreference::from_env().unwrap_or(wgpu::PowerPreference::LowPower);
+        #[cfg(target_os = "linux")]
+        if is_wsl() && wgpu::Backends::from_env().is_none() {
+            // WSLg can fail EGL initialization even when Vulkan is usable.
+            create_new.instance_descriptor.backends = wgpu::Backends::VULKAN;
+        }
     }
     options
+}
+
+#[cfg(target_os = "linux")]
+fn is_wsl() -> bool {
+    std::env::var_os("WSL_DISTRO_NAME").is_some() || std::env::var_os("WSL_INTEROP").is_some()
 }
 
 /// Join startup notices into the one-message banner so an earlier warning (e.g.
