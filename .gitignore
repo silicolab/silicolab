@@ -45,3 +45,6 @@ target/
 
 # Generated application icon.
 /assets/icon/AppIcon.icns
+
+# Reproducible release packages and local validation evidence.
+/dist/

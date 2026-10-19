@@ -41,6 +41,10 @@ const MACOS_BIN_PATH_IN_ARCHIVE: &str = "silicolab.app/Contents/MacOS/silicolab"
 /// of the old one; the process is still running the *old* code until it is
 /// restarted (see [`restart_into_new_binary`]).
 pub fn perform_update() -> Result<String> {
+    anyhow::ensure!(
+        !requires_manual_bundle_update(),
+        "Install this update by replacing the complete SilicoLab.app from a new DMG; a binary-only update would invalidate its signature."
+    );
     let mut updater = self_update::backends::github::Update::configure();
     updater
         .repo_owner(REPO_OWNER)
@@ -91,6 +95,9 @@ pub fn is_self_update_supported() -> bool {
     // not move under us), and the UI may query it on every title-bar repaint.
     static SUPPORTED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *SUPPORTED.get_or_init(|| {
+        if requires_manual_bundle_update() {
+            return false;
+        }
         std::env::current_exe()
             .ok()
             .and_then(|exe| exe.parent().map(is_dir_writable))
@@ -109,5 +116,60 @@ fn is_dir_writable(dir: &std::path::Path) -> bool {
             true
         }
         Err(_) => false,
+    }
+}
+
+/// DMG bundles opt into whole-app replacement; existing archives keep their updater.
+pub fn requires_manual_bundle_update() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        static MANUAL: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *MANUAL.get_or_init(|| {
+            std::env::current_exe().is_ok_and(|exe| is_manual_bundle_executable(&exe))
+        })
+    }
+    #[cfg(not(target_os = "macos"))]
+    false
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn is_manual_bundle_executable(exe: &std::path::Path) -> bool {
+    let Some(macos) = exe.parent() else {
+        return false;
+    };
+    let Some(contents) = macos.parent() else {
+        return false;
+    };
+    let Some(bundle) = contents.parent() else {
+        return false;
+    };
+    macos.file_name().is_some_and(|name| name == "MacOS")
+        && contents.file_name().is_some_and(|name| name == "Contents")
+        && bundle
+            .extension()
+            .is_some_and(|extension| extension == "app")
+        && contents.join("Resources/manual-dmg-updates").is_file()
+}
+
+#[cfg(test)]
+mod packaging_tests {
+    use super::*;
+
+    #[test]
+    fn only_marked_dmg_bundles_disable_the_legacy_binary_updater() {
+        let root =
+            std::env::temp_dir().join(format!("silicolab-bundle-test-{}", uuid::Uuid::new_v4()));
+        let executable = root.join("Renamed.app/Contents/MacOS/silicolab");
+        let resources = root.join("Renamed.app/Contents/Resources");
+        std::fs::create_dir_all(&resources).unwrap();
+        assert!(!is_manual_bundle_executable(&executable));
+        std::fs::write(
+            resources.join("manual-dmg-updates"),
+            b"Replace the whole app.\n",
+        )
+        .unwrap();
+        assert!(is_manual_bundle_executable(&executable));
+        assert!(!is_manual_bundle_executable(&root.join("silicolab")));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

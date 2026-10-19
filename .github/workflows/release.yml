@@ -1,0 +1,160 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_INCREMENTAL: '0'
+
+jobs:
+  version:
+    runs-on: ubuntu-22.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      prerelease: ${{ steps.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup-rust
+      - id: version
+        env:
+          TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: python scripts/release_metadata.py
+
+  applications:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - runner: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+          - runner: macos-15
+            target: aarch64-apple-darwin
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup-rust
+        with:
+          targets: ${{ matrix.target }}
+          linux-deps: 'true'
+          cache: 'true'
+      - name: Install macOS packaging tools
+        if: runner.os == 'macOS'
+        run: python -m pip install -r scripts/requirements-packaging.txt
+      - name: Build and validate application packages
+        run: python scripts/package_release.py --target '${{ matrix.target }}'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-app-${{ matrix.target }}
+          path: |
+            dist/silicolab-*.zip
+            dist/silicolab-*.dmg
+          if-no-files-found: error
+          compression-level: 0
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'macOS'
+        with:
+          name: macos-verification-${{ matrix.target }}
+          path: dist/macos-validation-*.json
+          if-no-files-found: error
+
+  worker:
+    needs: version
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: ./.github/actions/setup-rust
+        with:
+          targets: x86_64-unknown-linux-musl
+          cache: 'true'
+      - name: Build and validate production worker and checksum
+        run: python scripts/package_release.py --worker
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-worker
+          path: |
+            dist/silicolab-compute-x86_64-unknown-linux-musl
+            dist/silicolab-compute-x86_64-unknown-linux-musl.sha256
+          if-no-files-found: error
+          compression-level: 0
+
+  collect:
+    needs: [version, applications, worker]
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Require all application archives, DMGs and worker assets
+        run: |
+          python scripts/collect_release.py dist '${{ needs.version.outputs.version }}'
+          cd dist && sha256sum --check SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: validated-release
+          path: dist/*
+          if-no-files-found: error
+          compression-level: 0
+
+  draft:
+    if: github.event_name == 'push'
+    needs: [version, collect]
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TAG: ${{ github.ref_name }}
+      VERSION: ${{ needs.version.outputs.version }}
+      PRERELEASE: ${{ needs.version.outputs.prerelease }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: validated-release
+          path: dist
+      - name: Verify assets and attach to release draft
+        run: |
+          (cd dist && sha256sum --check SHA256SUMS)
+          if gh release view "$TAG" --json isDraft > release.json; then
+            jq -e '.isDraft == true' release.json
+          else
+            flags=()
+            if [ "$PRERELEASE" = true ]; then flags+=(--prerelease); fi
+            gh release create "$TAG" --verify-tag --draft --title "SilicoLab $VERSION" --generate-notes "${flags[@]}"
+          fi
+          gh release upload "$TAG" dist/* --clobber

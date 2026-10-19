@@ -85,6 +85,13 @@ jobs:
           components: rustfmt
           linux-deps: ${{ needs.changes.outputs.code }}
           cache: 'true'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Validate release packaging contracts
+        run: |
+          python -m pip install -r scripts/requirements-packaging.txt
+          cargo xtask check-packaging
       - name: Validate repository documentation
         run: cargo xtask check-docs
       - name: Format

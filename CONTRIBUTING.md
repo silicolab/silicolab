@@ -59,6 +59,24 @@ unpublished source changes. See
 prerequisites, artifact overrides, IDE setup, deployment identities, and the
 opt-in SSH integration tests.
 
+## macOS packaging
+
+For application bundles, separate architecture DMGs, preserved legacy archives
+and the production worker/checksum contract, follow [RELEASING.md](RELEASING.md).
+That document owns the commands, version mapping and signing limitations.
+Packaging changes also need `cargo xtask check-packaging`; select its isolated
+Python environment as described there. The ordinary `cargo pr-check` command
+keeps its existing Rust-only prerequisites.
+
+Test the actual DMG: copy the app into an isolated acceptance folder, eject the
+image and launch through Finder. Check the real large-icon/arrow window, create
+or open a synthetic project, import a structure, modify/save/reopen it, and check
+a malformed structure's normal error feedback. Preserve existing close/Quit
+behavior and keep `.sls` scripts on their existing explicit CLI/in-app path.
+Do not replace an installed app, read user credentials, run external engines or
+submit remote jobs for packaging acceptance. Record the actual OS/architecture;
+cross-build checks do not establish runtime acceptance on another architecture.
+
 ## Commit discipline
 
 All changes land through a pull request targeting `main`; there is no long-lived

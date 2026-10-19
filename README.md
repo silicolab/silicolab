@@ -39,8 +39,13 @@ prebuilt executable from [GitHub Releases](https://github.com/silicolab/silicola
 
 ### Prebuilt executables
 
-Download prebuilt executables from
+Download packages from
 [GitHub Releases](https://github.com/silicolab/silicolab/releases).
+On macOS, open the DMG for Apple Silicon or Intel, drag SilicoLab onto Applications,
+eject the image, and launch from Applications. Current DMGs are ad-hoc signed and
+unnotarized; see the [installation guide](https://docs.silicolab.nmrtist.space/getting-started/installation/)
+for first-launch limitations. Windows/Linux and existing updater-compatible
+archives retain their portable layout.
 
 If Chinese characters appear as boxes on Linux or WSL, install a CJK font
 (for example, `sudo apt-get install fonts-noto-cjk` on Debian/Ubuntu) and restart

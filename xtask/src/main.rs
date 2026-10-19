@@ -7,6 +7,8 @@ use std::{
 };
 
 mod dev_worker;
+#[cfg(feature = "macos-packaging")]
+mod packaging;
 
 fn main() {
     if let Err(error) = run() {
@@ -18,11 +20,53 @@ fn main() {
 fn run() -> Result<(), String> {
     let mut args = env::args().skip(1);
     match args.next().as_deref() {
+        #[cfg(feature = "macos-packaging")]
+        Some("render-svg") => {
+            let source = args
+                .next()
+                .ok_or("usage: render-svg <source> <width> <output>")?;
+            let width = args
+                .next()
+                .ok_or("missing SVG width")?
+                .parse::<u32>()
+                .map_err(|error| error.to_string())?;
+            let output = args.next().ok_or("missing SVG output")?;
+            if args.next().is_some() {
+                return Err("usage: render-svg <source> <width> <output>".into());
+            }
+            packaging::render_svg(Path::new(&source), width, Path::new(&output))
+        }
         Some("pr-check") => {
             if args.next().is_some() {
                 return Err("usage: cargo pr-check".to_owned());
             }
             pr_check()
+        }
+        Some("check-packaging") => {
+            if args.next().is_some() {
+                return Err("usage: cargo xtask check-packaging".into());
+            }
+            let python = env::var("SILICOLAB_PACKAGING_PYTHON")
+                .unwrap_or_else(|_| if cfg!(windows) { "python" } else { "python3" }.into());
+            let status = Command::new(python)
+                .args([
+                    "-B",
+                    "-m",
+                    "unittest",
+                    "discover",
+                    "-s",
+                    "scripts",
+                    "-p",
+                    "test_release_*.py",
+                ])
+                .current_dir(repo_root()?)
+                .status()
+                .map_err(|error| error.to_string())?;
+            if status.success() {
+                Ok(())
+            } else {
+                Err("packaging checks failed; install scripts/requirements-packaging.txt in the selected Python environment".into())
+            }
         }
         Some("check-docs") => {
             if args.next().is_some() {

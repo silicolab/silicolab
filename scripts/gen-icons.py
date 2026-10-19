@@ -10,6 +10,7 @@ Deps (all present on stock macOS + conda Python): qlmanage, iconutil, python3
 with Pillow + numpy. Fallback rasterizer if qlmanage misbehaves:
 `cargo install resvg` then run with RASTERIZER=resvg.
 """
+import argparse
 import os
 import subprocess
 import sys
@@ -39,7 +40,14 @@ SQ_FILL_FULL = 1.0   # Windows .ico, Linux hicolor, runtime window icon: full bl
 def rasterize_svg(svg: Path, size: int) -> Image.Image:
     """SVG -> RGBA image at size×size. QuickLook by default; resvg if asked."""
     with tempfile.TemporaryDirectory() as td:
-        if os.environ.get("RASTERIZER") == "resvg":
+        if os.environ.get("RASTERIZER") == "xtask":
+            out = Path(td) / "out.png"
+            subprocess.run(
+                ["cargo", "run", "--locked", "-q", "-p", "xtask", "--features", "macos-packaging",
+                 "--", "render-svg", str(svg), str(size), str(out)],
+                cwd=ROOT, check=True,
+            )
+        elif os.environ.get("RASTERIZER") == "resvg":
             out = Path(td) / "out.png"
             subprocess.run(
                 ["resvg", "-w", str(size), "-h", str(size), str(svg), str(out)],
@@ -80,11 +88,16 @@ def masked_master(fill: float) -> Image.Image:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--macos-only", action="store_true")
+    parser.add_argument("--output", type=Path, default=ICON, help="Directory for the generated macOS .icns")
+    args = parser.parse_args()
+    args.output.mkdir(parents=True, exist_ok=True)
     if not MASTER.exists():
         sys.exit(f"error: {MASTER} missing (run Task 1 first)")
     # Two masters: padded for the macOS Dock grid, full-bleed for everyone else.
     mac = masked_master(SQ_FILL_MAC)
-    full = masked_master(SQ_FILL_FULL)
+    full = None if args.macos_only else masked_master(SQ_FILL_FULL)
 
     def at(master: Image.Image, px: int) -> Image.Image:
         return master.resize((px, px), Image.LANCZOS)
@@ -101,9 +114,12 @@ def main() -> None:
         ]:
             at(mac, px).save(iconset / f"icon_{label}.png")
         subprocess.run(
-            ["iconutil", "-c", "icns", str(iconset), "-o", str(ICON / "AppIcon.icns")],
+            ["iconutil", "-c", "icns", str(iconset), "-o", str(args.output / "AppIcon.icns")],
             check=True,
         )
+
+    if args.macos_only:
+        return
 
     print("==> Windows .ico")
     at(full, 256).save(

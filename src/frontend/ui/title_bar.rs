@@ -421,8 +421,10 @@ pub(crate) fn render_title_bar(
                 status @ (SelfUpdateStatus::Idle | SelfUpdateStatus::Failed { .. }) => {
                     if let Some((version, url)) = update_info {
                         let failed = matches!(status, SelfUpdateStatus::Failed { .. });
+                        let manual_bundle = crate::io::self_update::requires_manual_bundle_update();
+                        let action = if manual_bundle { "Download DMG" } else { "Update" };
                         let label = RichText::new(format!(
-                            "{}  Update: {version}",
+                            "{}  {action}: {version}",
                             egui_phosphor::regular::ARROW_CIRCLE_UP
                         ))
                         .color(pal.status_blue);
@@ -446,6 +448,7 @@ pub(crate) fn render_title_bar(
                                 SelfUpdateStatus::Failed { error } => {
                                     format!("Update failed ({error}) — open the release page")
                                 }
+                                _ if manual_bundle => "Quit SilicoLab, then replace the complete app from the new DMG. Projects and settings are kept.".to_string(),
                                 _ => "Open the release page".to_string(),
                             };
                             ui.hyperlink_to(label, &url).on_hover_text(hover);
