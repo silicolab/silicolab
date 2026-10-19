@@ -5,10 +5,24 @@ sidebar:
   order: 1
 ---
 
-## 预构建可执行文件
+## 下载与安装
 
-从 [GitHub Releases](https://github.com/silicolab/silicolab/releases)
-下载对应平台的可执行文件即可运行，无需安装程序。
+从 [GitHub Releases](https://github.com/silicolab/silicolab/releases) 下载。
+macOS 13 及以上用户按处理器选择：Apple Silicon 使用 `macos-aarch64.dmg`，
+Intel 使用 `macos-x86_64.dmg`。打开后将左侧的 SilicoLab 大图标拖到右侧
+Applications，推出磁盘映像，再从 Finder 的 Applications 启动，无需终端命令。
+
+当前 DMG 内的应用采用 **ad-hoc 签名，未公证**。本地签名完整性检查和本地启动
+不能替代互联网下载后的安装验收。Gatekeeper 可能阻止下载的副本；请以实际提示
+和 [Apple 应用安全说明](https://support.apple.com/zh-cn/102445)为准，不要关闭
+Gatekeeper，也不要忽视恶意软件或应用损坏警告。
+
+更新 DMG 安装时先退出 SilicoLab，再从新 DMG 替换整个应用；项目和设置会保留。
+Windows/Linux 便携压缩包及原有 macOS 压缩包目录结构仍保留原有更新行为。
+
+项目仍是 SQLite 数据库目录，请通过应用内 **Open Project** 打开。`.sls` 脚本仍需
+显式从 CLI 或应用内执行，不注册为 Finder 自动执行的文件。本安装包不包含外部
+计算引擎，也不改变远程 worker 的部署方式。
 
 ## 从源码构建
 

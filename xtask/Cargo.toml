@@ -5,3 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
+resvg = { version = "0.45.1", default-features = false, features = ["text"], optional = true }
+
+[features]
+macos-packaging = ["dep:resvg"]
