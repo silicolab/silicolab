@@ -278,6 +278,7 @@ mod tests {
             scf_trace: vec![-74.1, -74.96],
             opt_trace: vec![-74.96],
             frequencies: Vec::new(),
+            trajectory: None,
         };
         let series = QmSeries::from_outcome(&outcome);
         assert_eq!(series.version, 1);

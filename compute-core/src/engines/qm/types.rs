@@ -271,6 +271,10 @@ pub struct QmOptions {
     pub smearing_temperature_k: Option<f64>,
     /// Grimme FOD multireference diagnostic (implies a TPSS/def2-TZVP default).
     pub fod: bool,
+    /// Molecular-dynamics settings for a [`QmKind::Dynamics`] run. Skipped when
+    /// unset so existing requests (and their cache keys) serialize unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub md: Option<QmMdConfig>,
     /// Single-point Hessian treatment of a frequency run (geometry taken
     /// as-is; gradient direction projected out). Approximate.
     pub single_point_hessian: bool,
@@ -294,8 +298,35 @@ impl Default for QmOptions {
             smearing_temperature_k: None,
             fod: false,
             single_point_hessian: false,
+            md: None,
             symmetry_number: 1,
             qrrho_w0_cm1: QRRHO_W0_DEFAULT_CM1,
+        }
+    }
+}
+
+/// Settings of a [`QmKind::Dynamics`] run: NVT (Berendsen-thermostatted) MD
+/// with velocity-Verlet integration and no bond constraints, so bonds to
+/// hydrogen are free to break.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct QmMdConfig {
+    /// Thermostat temperature (K).
+    pub temperature_k: f64,
+    /// Simulated time (ps).
+    pub time_ps: f64,
+    /// Integration step (fs).
+    pub step_fs: f64,
+    /// Interval between saved frames (fs).
+    pub dump_fs: f64,
+}
+
+impl Default for QmMdConfig {
+    fn default() -> Self {
+        Self {
+            temperature_k: 300.0,
+            time_ps: 2.0,
+            step_fs: 0.5,
+            dump_fs: 2.0,
         }
     }
 }
@@ -313,6 +344,10 @@ pub enum QmKind {
     /// Climb to a first-order saddle point (transition state). The TS-specific
     /// inputs (search algorithm, guess route, IRC) live in [`QmRequest::ts`].
     TransitionState,
+    /// Molecular dynamics on the method's potential-energy surface (the xtb
+    /// engine only); settings in [`QmOptions::md`], frames in
+    /// [`QmOutcome::trajectory`].
+    Dynamics,
 }
 
 impl QmKind {
@@ -322,6 +357,7 @@ impl QmKind {
             QmKind::Optimize => "geometry optimization",
             QmKind::Frequencies => "frequencies",
             QmKind::TransitionState => "transition-state search",
+            QmKind::Dynamics => "molecular dynamics",
         }
     }
 }
@@ -519,6 +555,9 @@ pub enum QmEngine {
     #[default]
     Hartree,
     Orca,
+    /// Grimme's xtb (GFN-xTB semi-empirical tight binding), an optional
+    /// external executable.
+    Xtb,
 }
 
 impl QmEngine {
@@ -526,6 +565,7 @@ impl QmEngine {
         match self {
             Self::Hartree => "Hartree (built-in)",
             Self::Orca => "ORCA",
+            Self::Xtb => "xtb (GFN-xTB)",
         }
     }
 }
@@ -534,6 +574,9 @@ impl QmEngine {
 /// one. Both produce a [`QmOutcome`], so the worker thread, the workflow entry
 /// point, and the result-polling UI handle the two uniformly — only the input
 /// form differs. Built by the panel/console; run by [`crate::workflows::qm`].
+/// Built once per job and moved, never stored in bulk, so the size gap between
+/// the variants costs nothing worth a box.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum QmCalculation {
     /// A molecular (non-periodic) HF/DFT/post-HF calculation.
@@ -599,4 +642,15 @@ pub struct QmOutcome {
     /// Harmonic wavenumbers (cm⁻¹) for Frequencies runs; empty otherwise.
     #[serde(default)]
     pub frequencies: Vec<f64>,
+    /// The frames a [`QmKind::Dynamics`] run produced, as a multi-frame XYZ file
+    /// carried inline (the outcome crosses process boundaries as JSON).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trajectory: Option<QmTrajectory>,
+}
+
+/// A trajectory file carried inline in a [`QmOutcome`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QmTrajectory {
+    pub file_name: String,
+    pub bytes: Vec<u8>,
 }

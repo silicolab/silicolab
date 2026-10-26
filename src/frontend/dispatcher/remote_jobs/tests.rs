@@ -62,6 +62,7 @@ fn remote_qm_report_records_once_and_creates_no_entry() {
         scf_trace: Vec::new(),
         opt_trace: Vec::new(),
         frequencies: Vec::new(),
+        trajectory: None,
     };
 
     apply_remote_qm_outcome(&mut state, &row, outcome.clone()).unwrap();
@@ -98,6 +99,7 @@ fn open_project_compensation_imports_present_outcome_and_flags_missing() {
         scf_trace: Vec::new(),
         opt_trace: Vec::new(),
         frequencies: Vec::new(),
+        trajectory: None,
     });
     std::fs::write(
         present_dir.join(crate::engines::remote::launcher::OUTCOME_FILE),
@@ -323,6 +325,7 @@ fn qm_remote_artifact_repair_does_not_reimport_geometry() {
         scf_trace: vec![-1.0],
         opt_trace: vec![],
         frequencies: vec![],
+        trajectory: None,
     });
     std::fs::write(
         dir.join(crate::engines::remote::launcher::OUTCOME_FILE),
@@ -360,6 +363,7 @@ fn gui_agent_and_remote_qm_paths_produce_identical_facts_without_report_history(
         scf_trace: vec![-1.0, -2.0],
         opt_trace: vec![],
         frequencies: vec![15.0, 30.0],
+        trajectory: None,
     };
     let mut facts = Vec::new();
     for path in ["gui", "agent", "remote"] {
@@ -438,6 +442,7 @@ fn legacy_shared_outcome_is_not_attributed_to_an_old_job_during_recovery() {
         scf_trace: vec![],
         opt_trace: vec![],
         frequencies: vec![],
+        trajectory: None,
     });
     std::fs::write(
         dir.join(crate::engines::remote::launcher::OUTCOME_FILE),
@@ -470,6 +475,7 @@ fn remote_recovery_checks_preserved_facts_before_repairing_missing_status() {
             scf_trace: vec![-0.5, -1.0],
             opt_trace: vec![],
             frequencies: vec![],
+            trajectory: None,
         };
         apply_remote_qm_outcome(&mut state, &row, original.clone()).unwrap();
         let ledger = state.materializations.get(&job).unwrap().clone();

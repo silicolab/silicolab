@@ -110,6 +110,20 @@ pub(crate) fn start_pending_qm(state: &mut AppState) {
         };
         local_launches.insert(crate::engines::registry::EngineId::ORCA, resolved.launch);
     }
+    if remote_host.is_none() && prompt.engine == crate::engines::qm::QmEngine::Xtb {
+        let resolved = crate::backend::engine_launch::resolve_engine_launch(
+            crate::backend::engine_launch::LaunchTarget::Local(&state.config.engine_overrides),
+            crate::engines::registry::EngineId::XTB,
+        );
+        let Ok(resolved) = resolved else {
+            state.status_neutral(
+                "install xtb or set its program path in Settings -> Compute targets before running"
+                    .to_string(),
+            );
+            return;
+        };
+        local_launches.insert(crate::engines::registry::EngineId::XTB, resolved.launch);
+    }
     let prepared = (|| -> anyhow::Result<()> {
         let mut inputs = vec![crate::frontend::entry_ref::primary_input(state)?];
         if prompt.kind == crate::engines::qm::QmKind::TransitionState

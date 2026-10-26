@@ -60,6 +60,7 @@ fn agent_qm_completion_creates_the_optimized_entry_and_records_the_result() {
             scf_trace: Vec::new(),
             opt_trace: Vec::new(),
             frequencies: Vec::new(),
+            trajectory: None,
         },
     )))
     .unwrap();

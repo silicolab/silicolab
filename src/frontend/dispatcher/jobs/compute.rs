@@ -297,6 +297,17 @@ pub(crate) fn apply_qm_outcome(
     let already = cx
         .job_id
         .is_some_and(|id| outcome_already_materialized(state, &id.to_string()));
+    // A dynamics run's frames go next to its report in the run directory; the
+    // final-frame entry then carries them for playback, like a GROMACS run.
+    let trajectory_path = outcome.trajectory.as_ref().and_then(|trajectory| {
+        let run_dir = cx
+            .task_run_id
+            .and_then(|task_id| state.tasks.task_run(task_id))
+            .and_then(|task| task.run_dir.clone())?;
+        let path = run_dir.join(&trajectory.file_name);
+        std::fs::create_dir_all(&run_dir).ok()?;
+        std::fs::write(&path, &trajectory.bytes).ok().map(|()| path)
+    });
     if !already {
         match outcome.optimized_structure {
             Some(optimized) => {
@@ -305,7 +316,12 @@ pub(crate) fn apply_qm_outcome(
                 if let Some(task_run_id) = cx.task_run_id {
                     record_task_result_entry(state, task_run_id, entry_id);
                 }
-                set_qm_run_origin(state, entry_id);
+                if trajectory_path.is_some() {
+                    set_md_run_origin(state, entry_id, trajectory_path.clone());
+                    state.ui.autoplay_trajectory = Some(entry_id);
+                } else {
+                    set_qm_run_origin(state, entry_id);
+                }
                 if let Some(job_id) = cx.job_id {
                     record_materialization(
                         state,

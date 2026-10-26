@@ -261,6 +261,7 @@ pub fn run_periodic_qm(
         scf_trace: Vec::new(),
         opt_trace: Vec::new(),
         frequencies: Vec::new(),
+        trajectory: None,
     })
 }
 

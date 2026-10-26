@@ -4,6 +4,9 @@
 //! * `qm optimize` — relax the geometry on the QM surface; the relaxed structure
 //!   is added as a new entry (the original is preserved).
 //! * `qm freq`     — harmonic vibrational frequencies at the current geometry.
+//! * `qm md`       — reactive molecular dynamics on the xtb engine (GFN-xTB);
+//!   the trajectory plays back with bonds re-perceived per frame, and the final
+//!   frame is added as a new entry.
 //! * `qm ts`       — climb to a first-order saddle point (transition state); the
 //!   saddle structure is added as a new entry. The guess starts from the current
 //!   geometry, a reactant→product pair (`--product`), or a driven coordinate
@@ -21,7 +24,7 @@ use anyhow::{Result, anyhow, bail};
 use crate::{
     engines::qm::{
         CpcmDielectric, KMesh, PeriodicFunctional, PeriodicQmRequest, QmCalculation, QmDispersion,
-        QmEngine, QmInternalCoordinate, QmJob, QmKind, QmMethod, QmOptions, QmRequest,
+        QmEngine, QmInternalCoordinate, QmJob, QmKind, QmMdConfig, QmMethod, QmOptions, QmRequest,
         QmScfBackend, QmSolvation, QmTsAlgorithm, QmTsConfig, QmTsCoordinateScan, QmTsCoordinates,
         QmTsEndpoints, QmTsGuess, periodic,
     },
@@ -33,9 +36,11 @@ use crate::{
 pub fn qm_command(state: &mut AppState, args: &[String]) -> Result<String> {
     let Some(sub) = args.first().map(String::as_str) else {
         bail!(
-            "usage: qm <energy|optimize|freq|ts|periodic> [options]\n\
+            "usage: qm <energy|optimize|freq|ts|md|periodic> [options]\n\
              \n\
-             engine:   --engine hartree|orca   (default: hartree; ORCA path must be configured)\n\
+             engine:   --engine hartree|orca|xtb   (default: hartree; md defaults to xtb)\n\
+             \x20         xtb methods: gfn2-xtb (default), gfn1-xtb, gfn0-xtb, gfnff\n\
+             md (xtb):   --temp <K> (300)   --time <ps> (2)   --step <fs> (0.5)   --dump <fs> (2)\n\
              core:     --method <m>   hf|rhf|uhf|rohf|mp2|ccsd|ccsd(t), a functional \
              (pbe, b3lyp, r2scan, wb97m-v, b2plyp, …) with an optional -d3/-d4 suffix, \
              or a composite (r2scan-3c, b97-3c, pbeh-3c, b3lyp-3c)\n\
@@ -74,10 +79,11 @@ pub fn qm_command(state: &mut AppState, args: &[String]) -> Result<String> {
         "optimize" | "opt" => QmKind::Optimize,
         "freq" | "frequencies" => QmKind::Frequencies,
         "ts" | "saddle" | "transition-state" => QmKind::TransitionState,
+        "md" | "dynamics" => QmKind::Dynamics,
         other => {
             bail!(
                 "unknown qm subcommand `{other}` \
-                 (expected energy, optimize, freq, ts, periodic, recommend, status, or cancel)"
+                 (expected energy, optimize, freq, ts, md, periodic, recommend, status, or cancel)"
             )
         }
     };
@@ -116,10 +122,50 @@ fn assemble_qm_job(state: &AppState, kind: QmKind, args: &[String]) -> Result<Qm
     }
     let flags = QmFlags::parse(args)?;
     let engine = match flags.str("engine") {
+        None if kind == QmKind::Dynamics => QmEngine::Xtb,
         None | Some("hartree") => QmEngine::Hartree,
         Some("orca") => QmEngine::Orca,
-        Some(other) => bail!("--engine must be hartree or orca, got `{other}`"),
+        Some("xtb") => QmEngine::Xtb,
+        Some(other) => bail!("--engine must be hartree, orca, or xtb, got `{other}`"),
     };
+    if kind == QmKind::Dynamics && engine != QmEngine::Xtb {
+        bail!("molecular dynamics (qm md) runs on the xtb engine only");
+    }
+    if engine == QmEngine::Xtb && kind == QmKind::TransitionState {
+        bail!("the xtb engine covers energy, optimize, freq, and md");
+    }
+    if engine == QmEngine::Xtb {
+        for option in [
+            "direct",
+            "ri",
+            "cosx",
+            "ri-mp2",
+            "x2c",
+            "all-electron",
+            "grid",
+            "fod",
+            "sph",
+            "symmetry-number",
+            "qrrho-w0",
+            "solvent",
+            "eps",
+            "smd",
+            "properties",
+            "dispersion",
+            "basis",
+        ] {
+            if flags.flag(option) || flags.str(option).is_some() {
+                bail!("--{option} is not available with the xtb engine");
+            }
+        }
+    }
+    if kind != QmKind::Dynamics {
+        for option in ["temp", "time", "step", "dump"] {
+            if flags.str(option).is_some() {
+                bail!("--{option} applies to `qm md` only");
+            }
+        }
+    }
     if engine == QmEngine::Orca && kind == QmKind::TransitionState {
         bail!("ORCA support currently covers energy, optimize, and freq only");
     }
@@ -146,14 +192,32 @@ fn assemble_qm_job(state: &AppState, kind: QmKind, args: &[String]) -> Result<Qm
             }
         }
     }
+    let default_method = if engine == QmEngine::Xtb {
+        "gfn2-xtb"
+    } else {
+        "b3lyp"
+    };
     let (method, suffix_dispersion) = flags
         .str("method")
         .map(QmMethod::parse)
-        .unwrap_or_else(|| (QmMethod::Dft("b3lyp".to_string()), None));
-    let basis = flags.str("basis").unwrap_or("def2-svp").to_string();
+        .unwrap_or_else(|| (QmMethod::Dft(default_method.to_string()), None));
+    let basis = if engine == QmEngine::Xtb {
+        String::new()
+    } else {
+        flags.str("basis").unwrap_or("def2-svp").to_string()
+    };
     let charge = flags.int("charge")?.unwrap_or(0);
     let multiplicity = flags.uint("spin")?.or(flags.uint("mult")?).unwrap_or(1);
-    let options = build_options(&flags, suffix_dispersion)?;
+    let mut options = build_options(&flags, suffix_dispersion)?;
+    if kind == QmKind::Dynamics {
+        let defaults = QmMdConfig::default();
+        options.md = Some(QmMdConfig {
+            temperature_k: flags.float("temp")?.unwrap_or(defaults.temperature_k),
+            time_ps: flags.float("time")?.unwrap_or(defaults.time_ps),
+            step_fs: flags.float("step")?.unwrap_or(defaults.step_fs),
+            dump_fs: flags.float("dump")?.unwrap_or(defaults.dump_fs),
+        });
+    }
     let ts = if kind == QmKind::TransitionState {
         Some(build_ts_config(state, &flags)?)
     } else {
@@ -306,8 +370,9 @@ pub fn build_agent_qm_request(state: &AppState, args: &[String]) -> Result<QmJob
         "optimize" | "opt" => QmKind::Optimize,
         "freq" | "frequencies" => QmKind::Frequencies,
         "ts" | "saddle" | "transition-state" => QmKind::TransitionState,
+        "md" | "dynamics" => QmKind::Dynamics,
         other => {
-            bail!("unknown qm subcommand `{other}` (expected energy, optimize, freq, or ts)")
+            bail!("unknown qm subcommand `{other}` (expected energy, optimize, freq, ts, or md)")
         }
     };
     assemble_qm_job(state, kind, &args[1..])
@@ -319,6 +384,7 @@ fn kind_keyword(kind: QmKind) -> &'static str {
         QmKind::Optimize => "optimize",
         QmKind::Frequencies => "freq",
         QmKind::TransitionState => "ts",
+        QmKind::Dynamics => "md",
     }
 }
 
@@ -334,7 +400,7 @@ fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
     let budget = crate::backend::hardware::qm_incore_budget_bytes();
     let verdict = crate::engines::qm::memory_verdict(request, budget);
     match (&job.engine, &verdict) {
-        (QmEngine::Orca, _) | (_, crate::engines::qm::MemoryVerdict::Ok) => {}
+        (QmEngine::Orca | QmEngine::Xtb, _) | (_, crate::engines::qm::MemoryVerdict::Ok) => {}
         (_, crate::engines::qm::MemoryVerdict::ExceedsCanDirect { .. }) => {
             bail!(
                 "{} Re-run `qm {}` with --direct (integral-direct SCF) or --ri, \
@@ -363,7 +429,7 @@ fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
     // Synchronous: a throwaway cancel flag and a no-op progress sink.
     let cancel = Arc::new(AtomicBool::new(false));
     let cores = Some(match job.engine {
-        QmEngine::Hartree => state.config.compute_core_count.max(1),
+        QmEngine::Hartree | QmEngine::Xtb => state.config.compute_core_count.max(1),
         QmEngine::Orca => 1,
     });
     let outcome = (|| -> Result<crate::engines::qm::QmOutcome> {
@@ -381,6 +447,19 @@ fn run(state: &mut AppState, kind: QmKind, args: &[String]) -> Result<String> {
                     unreachable!("ORCA command built a periodic job");
                 };
                 crate::engines::orca::run_orca(request, launch, cores, cancel, |_| {})?
+            }
+            QmEngine::Xtb => {
+                let launch = crate::backend::engine_launch::resolve_engine_launch(
+                    crate::backend::engine_launch::LaunchTarget::Local(
+                        &state.config.engine_overrides,
+                    ),
+                    crate::engines::registry::EngineId::XTB,
+                )?
+                .launch;
+                let QmCalculation::Molecular(request) = job.calculation else {
+                    unreachable!("xtb command built a periodic job");
+                };
+                crate::engines::xtb::run_xtb(request, launch, cores, cancel, |_| {})?
             }
         })
     })();
@@ -415,6 +494,7 @@ fn begin_command_evidence(
         QmKind::Optimize => "qm-optimize",
         QmKind::Frequencies => "qm-frequencies",
         QmKind::TransitionState => "qm-transition-state",
+        QmKind::Dynamics => "qm-dynamics",
     };
     let controller = crate::backend::tasks::task_controller_by_id(name)
         .ok_or_else(|| anyhow!("QM task controller missing"))?;

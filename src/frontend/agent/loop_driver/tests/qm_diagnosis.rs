@@ -25,6 +25,7 @@ fn completed_job(state: &mut AppState, converged: bool) -> (crate::job::JobId, s
             scf_trace: vec![],
             opt_trace: vec![],
             frequencies: vec![],
+            trajectory: None,
         },
     )))
     .unwrap();

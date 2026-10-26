@@ -102,6 +102,10 @@ impl Engine {
                 engine: QmEngine::Orca,
                 ..
             }) => &[EngineId::ORCA],
+            Engine::Qm(QmJob {
+                engine: QmEngine::Xtb,
+                ..
+            }) => &[EngineId::XTB],
             Engine::Qm(_) | Engine::Docking(_) => &[],
             Engine::Gromacs(_) => &[EngineId::GROMACS],
         }
@@ -544,6 +548,9 @@ fn validate_qm_job(job: &QmJob) -> Result<()> {
     if job.engine == QmEngine::Orca && matches!(job.calculation, QmCalculation::Periodic(_)) {
         bail!("ORCA does not support periodic QM jobs");
     }
+    if job.engine == QmEngine::Xtb && matches!(job.calculation, QmCalculation::Periodic(_)) {
+        bail!("the xtb engine does not run periodic QM jobs");
+    }
     let structure = match &job.calculation {
         QmCalculation::Molecular(req) => &req.structure,
         QmCalculation::Periodic(req) => &req.structure,
@@ -641,6 +648,20 @@ fn run_request(
                     .clone();
                 let outcome =
                     crate::engines::orca::run_orca(request, launch, cores, cancel, |stage| {
+                        progress(stage.to_string())
+                    })?;
+                return Ok(EngineOutcome::Qm(outcome));
+            }
+            if job.engine == QmEngine::Xtb {
+                let QmCalculation::Molecular(request) = job.calculation else {
+                    bail!("the xtb engine does not run periodic QM jobs");
+                };
+                let launch = launches
+                    .get(EngineId::XTB)
+                    .ok_or_else(|| anyhow::anyhow!("the xtb job carries no launch for `xtb`"))?
+                    .clone();
+                let outcome =
+                    crate::engines::xtb::run_xtb(request, launch, cores, cancel, |stage| {
                         progress(stage.to_string())
                     })?;
                 return Ok(EngineOutcome::Qm(outcome));

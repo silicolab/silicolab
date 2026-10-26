@@ -22,6 +22,7 @@ impl EngineId {
     pub const UFF: Self = Self("uff");
     pub const HARTREE: Self = Self("hartree");
     pub const ORCA: Self = Self("orca");
+    pub const XTB: Self = Self("xtb");
     pub const GROMACS: Self = Self("gromacs");
     pub const DOCKING: Self = Self("docking");
 

@@ -181,6 +181,7 @@ fn save_qm_run_artifacts_writes_report_and_series_into_the_run_dir() {
         scf_trace: vec![-74.1, -74.96],
         opt_trace: Vec::new(),
         frequencies: Vec::new(),
+        trajectory: None,
     };
     ensure_task_run_dir(&mut state, task_id, TaskKind::RunQmEnergy, None).unwrap();
     state.active_task_run = None;
@@ -263,6 +264,7 @@ fn single_point_entry_surfaces_its_report_and_chart() {
         scf_trace: vec![-233.6, -232.337],
         opt_trace: Vec::new(),
         frequencies: Vec::new(),
+        trajectory: None,
     };
     save_qm_series_file(&run_dir, &QmSeries::from_outcome(&outcome)).unwrap();
 
@@ -393,6 +395,7 @@ fn local_qm_completion_materializes_and_attributes_through_the_run_graph() {
             scf_trace: Vec::new(),
             opt_trace: Vec::new(),
             frequencies: Vec::new(),
+            trajectory: None,
         },
     )))
     .unwrap();
@@ -627,6 +630,7 @@ fn qm_artifact_status_matrix_and_repair_preserve_execution_and_geometry() {
                 scf_trace: vec![-1.0],
                 opt_trace: vec![],
                 frequencies: vec![],
+                trajectory: None,
             };
             apply_qm_outcome(&mut state, &cx, outcome.clone()).unwrap();
             complete_local_job(&mut state, Some(job), TaskStatus::Completed);
@@ -706,6 +710,7 @@ fn qm_single_point_inspection_checks_report_access_independently() {
             scf_trace: vec![],
             opt_trace: vec![],
             frequencies: vec![],
+            trajectory: None,
         },
     )
     .unwrap();

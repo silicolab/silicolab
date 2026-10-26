@@ -7,3 +7,4 @@ pub mod process;
 pub mod qm;
 pub mod registry;
 pub mod remote;
+pub mod xtb;

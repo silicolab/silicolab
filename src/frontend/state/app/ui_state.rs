@@ -241,6 +241,9 @@ pub struct UiState {
     /// Active trajectory playback (loaded from an MD-output entry's run
     /// directory), or `None` when nothing is playing.
     pub trajectory: Option<crate::frontend::trajectory::TrajectoryPlayback>,
+    /// An entry whose trajectory should start playing as soon as it is shown
+    /// (set when a dynamics run finishes; consumed by the workspace).
+    pub autoplay_trajectory: Option<u64>,
     /// A newer published release found by the background update check; renders
     /// a link to the release page in the status bar.
     pub available_update: Option<crate::io::update_check::AvailableUpdate>,
@@ -368,6 +371,7 @@ impl Default for UiState {
             md_solvation_preview: None,
             md_solvation_preview_key: 0,
             trajectory: None,
+            autoplay_trajectory: None,
             available_update: None,
             text_viewer: None,
             chart: None,

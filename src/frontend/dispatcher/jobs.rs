@@ -64,11 +64,17 @@ pub(crate) fn load_trajectory(
         return;
     }
 
-    let Some(project) = state.workspace.project() else {
-        state.status_neutral("Trajectory playback requires an open project");
-        return;
+    // A run outside any project (the scratch workspace) records its
+    // trajectory by absolute path, which needs no project to resolve.
+    let absolute = if relative.is_absolute() {
+        relative.clone()
+    } else {
+        let Some(project) = state.workspace.project() else {
+            state.status_neutral("Trajectory playback requires an open project");
+            return;
+        };
+        project.root.join(&relative)
     };
-    let absolute = project.root.join(&relative);
     if !absolute.exists() {
         state.status_error(format!(
             "Trajectory file is missing: {}",

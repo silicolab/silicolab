@@ -49,6 +49,8 @@ pub fn heavy_kind_of(call: &ToolCall) -> Option<HeavyKind> {
                     | "ts"
                     | "saddle"
                     | "transition-state"
+                    | "md"
+                    | "dynamics"
             )
         )
         .then_some(HeavyKind::Qm),
@@ -177,6 +179,7 @@ fn agent_task_controller_id(kind: HeavyKind, command: &str) -> &'static str {
             "optimize" | "opt" => "qm-optimize",
             "freq" | "frequencies" => "qm-frequencies",
             "ts" | "saddle" | "transition-state" => "qm-transition-state",
+            "md" | "dynamics" => "qm-dynamics",
             _ => "qm-energy",
         },
         HeavyKind::Md => "run-md",
@@ -256,6 +259,16 @@ pub fn spawn_heavy(
                     )?
                     .launch;
                     launches.insert(crate::engines::registry::EngineId::ORCA, launch);
+                }
+                if job.engine == crate::engines::qm::QmEngine::Xtb {
+                    let launch = crate::backend::engine_launch::resolve_engine_launch(
+                        crate::backend::engine_launch::LaunchTarget::Local(
+                            &state.config.engine_overrides,
+                        ),
+                        crate::engines::registry::EngineId::XTB,
+                    )?
+                    .launch;
+                    launches.insert(crate::engines::registry::EngineId::XTB, launch);
                 }
                 prepare(state)?;
                 evidence_request = Some(job.clone());

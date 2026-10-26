@@ -55,6 +55,7 @@ pub fn run_qm(
         QmKind::Optimize => "optimizing geometry",
         QmKind::Frequencies => "running scf and hessian",
         QmKind::TransitionState => "searching for transition state",
+        QmKind::Dynamics => "running molecular dynamics",
     });
 
     let result = resolved
@@ -94,7 +95,7 @@ pub fn run_qm(
             }
             saddle
         }),
-        QmKind::SinglePoint | QmKind::Frequencies => None,
+        QmKind::SinglePoint | QmKind::Frequencies | QmKind::Dynamics => None,
     }
     .transpose()?;
 
@@ -114,7 +115,7 @@ pub fn run_qm(
             .as_ref()
             .map(|ts| ts.history.iter().map(|step| step.energy).collect())
             .unwrap_or_default(),
-        QmKind::SinglePoint | QmKind::Frequencies => Vec::new(),
+        QmKind::SinglePoint | QmKind::Frequencies | QmKind::Dynamics => Vec::new(),
     };
     let frequencies: Vec<f64> = match kind {
         QmKind::Frequencies => result
@@ -133,5 +134,6 @@ pub fn run_qm(
         scf_trace,
         opt_trace,
         frequencies,
+        trajectory: None,
     })
 }

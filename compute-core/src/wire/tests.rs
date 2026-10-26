@@ -314,6 +314,7 @@ fn engine_outcome_round_trips_with_optimized_structure() {
         scf_trace: vec![-0.9, -1.0],
         opt_trace: Vec::new(),
         frequencies: Vec::new(),
+        trajectory: None,
     });
     let json = serde_json::to_vec(&outcome).unwrap();
     let EngineOutcome::Qm(back) = serde_json::from_slice(&json).unwrap() else {

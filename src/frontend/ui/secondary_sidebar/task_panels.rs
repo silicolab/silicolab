@@ -264,8 +264,16 @@ pub(crate) fn render_qm_task_panel(
                         crate::engines::qm::QmEngine::Orca,
                         crate::engines::qm::QmEngine::Orca.label(),
                     );
+                    ui.selectable_value(
+                        &mut prompt.engine,
+                        crate::engines::qm::QmEngine::Xtb,
+                        crate::engines::qm::QmEngine::Xtb.label(),
+                    );
                 });
         });
+        if prompt.engine != previous_engine {
+            super::qm_form::on_engine_switch(prompt, previous_engine);
+        }
         if prompt.engine != previous_engine && prompt.engine == crate::engines::qm::QmEngine::Orca {
             prompt.prefs.cores_per_subtask = 1;
         }
@@ -295,6 +303,8 @@ pub(crate) fn render_qm_task_panel(
 
         if prompt.periodic {
             render_periodic_qm_form(ui, &mut prompt.periodic_form);
+        } else if prompt.engine == crate::engines::qm::QmEngine::Xtb {
+            super::qm_form::render_xtb_qm_form(ui, prompt);
         } else {
             render_molecular_qm_form(ui, prompt, &entry_options);
         }

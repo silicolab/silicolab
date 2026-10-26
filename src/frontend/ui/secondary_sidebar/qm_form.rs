@@ -669,3 +669,124 @@ fn render_qm_advanced(ui: &mut egui::Ui, prompt: &mut crate::frontend::state::Qm
                 });
         });
 }
+
+/// Reset the parts of a QM prompt that do not carry over between engines: xtb
+/// has its own methods (GFN-xTB) and no basis set, and only xtb runs dynamics.
+pub(crate) fn on_engine_switch(
+    prompt: &mut crate::frontend::state::QmPrompt,
+    previous: crate::engines::qm::QmEngine,
+) {
+    use crate::engines::qm::{QmDispersion, QmEngine, QmKind, QmMethod};
+    if prompt.engine == QmEngine::Xtb {
+        prompt.method = QmMethod::Dft("gfn2-xtb".to_string());
+        prompt.basis = String::new();
+        prompt.options.dispersion = None;
+        prompt.options.solvation = None;
+        prompt.options.compute_properties = false;
+        prompt.periodic = false;
+        if prompt.kind == QmKind::TransitionState {
+            prompt.kind = QmKind::SinglePoint;
+        }
+    } else if previous == QmEngine::Xtb {
+        prompt.method = QmMethod::Dft("b3lyp".to_string());
+        prompt.basis = "def2-svp".to_string();
+        prompt.options.dispersion = Some(QmDispersion::D3Bj);
+        prompt.options.md = None;
+        if prompt.kind == QmKind::Dynamics {
+            prompt.kind = QmKind::SinglePoint;
+        }
+    }
+}
+
+/// The QM form for the xtb engine: a GFN method, charge and spin, the
+/// calculation, and — for dynamics — the MD settings.
+pub(crate) fn render_xtb_qm_form(ui: &mut egui::Ui, prompt: &mut crate::frontend::state::QmPrompt) {
+    use crate::engines::qm::{QmKind, QmMdConfig, QmMethod};
+
+    egui::Grid::new("sidebar_xtb_options")
+        .num_columns(2)
+        .spacing([8.0, 6.0])
+        .show(ui, |ui| {
+            ui.label("Method:");
+            egui::ComboBox::from_id_salt("xtb_method")
+                .selected_text(prompt.method.label())
+                .show_ui(ui, |ui| {
+                    crate::frontend::theme::stabilize_selectable_rows(ui);
+                    for name in ["gfn2-xtb", "gfn1-xtb", "gfnff"] {
+                        let method = QmMethod::Dft(name.to_string());
+                        let label = method.label();
+                        ui.selectable_value(&mut prompt.method, method, label);
+                    }
+                });
+            ui.end_row();
+
+            ui.label("Charge:");
+            ui.add(egui::DragValue::new(&mut prompt.charge).range(-10..=10));
+            ui.end_row();
+
+            ui.label("Multiplicity:").on_hover_text(
+                "Spin multiplicity, 2S+1 (1 = singlet, 2 = doublet, 3 = triplet, …).",
+            );
+            ui.add(egui::DragValue::new(&mut prompt.multiplicity).range(1..=11));
+            ui.end_row();
+        });
+
+    ui.separator();
+    ui.label("Calculation:");
+    ui.radio_value(&mut prompt.kind, QmKind::SinglePoint, "Single-point energy");
+    ui.radio_value(&mut prompt.kind, QmKind::Optimize, "Geometry optimization");
+    ui.radio_value(
+        &mut prompt.kind,
+        QmKind::Frequencies,
+        "Vibrational frequencies",
+    );
+    ui.radio_value(
+        &mut prompt.kind,
+        QmKind::Dynamics,
+        "Molecular dynamics (reactive)",
+    );
+
+    if prompt.kind == QmKind::Dynamics {
+        let md = prompt.options.md.get_or_insert_with(QmMdConfig::default);
+        ui.separator();
+        egui::Grid::new("sidebar_xtb_md")
+            .num_columns(2)
+            .spacing([8.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Temperature (K):");
+                ui.add(
+                    egui::DragValue::new(&mut md.temperature_k)
+                        .range(1.0..=3000.0)
+                        .speed(10.0),
+                );
+                ui.end_row();
+                ui.label("Simulated time (ps):");
+                ui.add(
+                    egui::DragValue::new(&mut md.time_ps)
+                        .range(0.05..=100.0)
+                        .speed(0.1),
+                );
+                ui.end_row();
+                ui.label("Time step (fs):");
+                ui.add(
+                    egui::DragValue::new(&mut md.step_fs)
+                        .range(0.1..=4.0)
+                        .speed(0.1),
+                );
+                ui.end_row();
+                ui.label("Save a frame every (fs):");
+                ui.add(
+                    egui::DragValue::new(&mut md.dump_fs)
+                        .range(0.5..=100.0)
+                        .speed(0.5),
+                );
+                ui.end_row();
+            });
+        ui.small(
+            "No bond constraints: bonds may break and form. Playback re-draws bonds every frame. \
+             GFN-xTB is semi-empirical — read the trajectory as a qualitative mechanism.",
+        );
+    } else {
+        prompt.options.md = None;
+    }
+}

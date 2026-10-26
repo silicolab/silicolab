@@ -54,6 +54,7 @@ fn qm_artifacts_follow_bound_identity_for_every_outcome_kind() {
             scf_trace: vec![-0.5, -1.0],
             opt_trace: Vec::new(),
             frequencies: vec![42.0],
+            trajectory: None,
         };
         apply_qm_outcome(&mut state, &cx, outcome).unwrap();
         let run = state.tasks.task_run(task).unwrap();
@@ -200,6 +201,7 @@ fn missing_identity_does_not_import_into_active_task() {
             scf_trace: Vec::new(),
             opt_trace: Vec::new(),
             frequencies: Vec::new(),
+            trajectory: None,
         },
     )
     .unwrap_err();
