@@ -23,6 +23,12 @@ pub struct Trajectory {
     stride: usize,
     /// Number of frames present in the source file before any subsampling.
     source_frame_count: usize,
+    /// Potential energy (Hartree) of each frame, when the source records one
+    /// (quantum/semi-empirical MD written as multi-frame XYZ). Empty otherwise;
+    /// when present, `len() == frame_count`.
+    energies: Vec<f64>,
+    /// What produced the trajectory (e.g. `GFN2-xTB`), when the source says.
+    method: Option<String>,
 }
 
 impl Trajectory {
@@ -44,7 +50,39 @@ impl Trajectory {
             times,
             stride: stride.max(1),
             source_frame_count,
+            energies: Vec::new(),
+            method: None,
         }
+    }
+
+    /// Record the method that produced the trajectory.
+    pub fn with_method(mut self, method: Option<String>) -> Self {
+        self.method = method;
+        self
+    }
+
+    /// The method that produced the trajectory, when the source recorded it.
+    pub fn method(&self) -> Option<&str> {
+        self.method.as_deref()
+    }
+
+    /// Attach per-frame energies (Hartree). Ignored unless there is exactly one
+    /// value per frame, so a partial record never misaligns with the frames.
+    pub fn with_energies(mut self, energies: Vec<f64>) -> Self {
+        if energies.len() == self.frame_count() {
+            self.energies = energies;
+        }
+        self
+    }
+
+    /// Energy (Hartree) of `frame`, when the trajectory carries energies.
+    pub fn energy(&self, frame: usize) -> Option<f64> {
+        self.energies.get(frame).copied()
+    }
+
+    /// Every frame's energy (Hartree); empty when the source recorded none.
+    pub fn energies(&self) -> &[f64] {
+        &self.energies
     }
 
     pub fn natoms(&self) -> usize {

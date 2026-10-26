@@ -186,6 +186,51 @@ fn build_molecule_instances_with_cartoon(
     }
 }
 
+/// Append the reactive-trajectory bonds drawn with an effect (forming /
+/// breaking): a stick scaled by `radius_scale` whose atom-colored halves are
+/// blended toward the bond's tint by the tint's alpha.
+pub(crate) fn append_overlay_bonds(
+    scene: &mut MoleculeInstances,
+    structure: &Structure,
+    overlay: &[crate::frontend::reactive_bonds::OverlayBond],
+    selection: &AtomSelection,
+    visual_state: &ViewportVisualState,
+) {
+    if overlay.is_empty() {
+        return;
+    }
+    let atom_draw = build_atom_draw_table(structure, selection, visual_state);
+    for bond in overlay {
+        let (Some(start), Some(end)) = (atom_draw.get(bond.a), atom_draw.get(bond.b)) else {
+            continue;
+        };
+        if !(start.visible && end.visible)
+            || !(start.style.draws_stick_bonds() || end.style.draws_stick_bonds())
+        {
+            continue;
+        }
+        let blend = |color: Color32| {
+            let t = bond.tint.a() as f32 / 255.0;
+            let mix =
+                |from: u8, to: u8| (from as f32 + (to as f32 - from as f32) * t).round() as u8;
+            Color32::from_rgb(
+                mix(color.r(), bond.tint.r()),
+                mix(color.g(), bond.tint.g()),
+                mix(color.b(), bond.tint.b()),
+            )
+        };
+        if let Some(cylinder) = cylinder_instance(
+            structure.atoms[bond.a].position,
+            structure.atoms[bond.b].position,
+            SINGLE_BOND_RADIUS * bond.radius_scale,
+            blend(start.color),
+            blend(end.color),
+        ) {
+            scene.cylinders.push(cylinder);
+        }
+    }
+}
+
 fn bond_adjacency(structure: &Structure) -> Vec<Vec<usize>> {
     let mut adjacency = vec![Vec::new(); structure.atoms.len()];
     for bond in &structure.bonds {

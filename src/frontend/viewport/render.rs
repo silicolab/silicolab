@@ -16,8 +16,8 @@ mod scene;
 mod surface;
 
 pub(super) use cell::draw_cell_labels;
-pub(super) use instances::build_cached_molecule_instances;
 pub(super) use instances::build_molecule_instances;
+pub(super) use instances::{append_overlay_bonds, build_cached_molecule_instances};
 pub(super) use scene::{PickTarget, pick_atom, project_pick_targets};
 pub(super) use surface::{SurfaceSceneGeometry, build_surface_world_mesh};
 

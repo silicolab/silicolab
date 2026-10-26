@@ -28,6 +28,7 @@ mod modal;
 mod notification;
 mod panel_bodies;
 mod plot_view;
+pub(crate) mod reactive_hud;
 mod secondary_sidebar;
 mod settings_modal;
 // Reachable from `state.rs` (which stores `SettingCategory` in `SettingsState`),

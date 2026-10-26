@@ -9,7 +9,8 @@ use std::sync::mpsc::{Receiver, channel};
 use nalgebra::Point3;
 
 use crate::domain::{Structure, Trajectory};
-use crate::io::trajectory::read_xtc;
+use crate::frontend::reactive_bonds::{OverlayBond, ReactiveBonds};
+use crate::io::trajectory::read_trajectory;
 use crate::workflows::molecular_dynamics::{STAGE_EM, STAGE_NPT, STAGE_NVT, STAGE_PROD};
 
 /// Default playback rate (frames per second).
@@ -71,7 +72,7 @@ pub fn md_stage_trajectories(primary: &Path, project_root: &Path) -> Vec<MdStage
     let mut stages: Vec<(u8, String, MdStage)> = Vec::new();
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("xtc") {
+        if !crate::io::trajectory::is_trajectory_path(&path) {
             continue;
         }
         let Some(stem) = path.file_stem().and_then(|stem| stem.to_str()) else {
@@ -92,6 +93,19 @@ pub fn md_stage_trajectories(primary: &Path, project_root: &Path) -> Vec<MdStage
     }
     stages.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
     stages.into_iter().map(|(_, _, stage)| stage).collect()
+}
+
+/// Whether a trajectory file comes from a reactive (quantum / semi-empirical)
+/// simulation, whose bonds should be re-perceived per frame. Multi-frame XYZ is
+/// the format those codes write; GROMACS `.xtc` is classical, fixed-topology MD.
+pub fn is_reactive_source(path: &Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|ext| ext.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref(),
+        Some("trj" | "xyz")
+    )
 }
 
 /// A decoded trajectory bound to an entry, plus the UI playback state. Rendering
@@ -115,6 +129,10 @@ pub struct TrajectoryPlayback {
     /// the view does not drift/zoom as the system diffuses between frames.
     pub view_center: Point3<f32>,
     pub view_radius: f32,
+    /// Per-frame bonding for a reactive (quantum / semi-empirical) trajectory,
+    /// so bonds form and break during playback. `None` keeps the base
+    /// structure's fixed topology, as for classical MD.
+    pub reactive: Option<ReactiveBonds>,
 }
 
 impl TrajectoryPlayback {
@@ -126,6 +144,17 @@ impl TrajectoryPlayback {
     pub fn sync_scratch(&mut self) {
         self.trajectory
             .apply_frame(self.current_frame, &mut self.scratch.atoms);
+        if let Some(reactive) = &self.reactive {
+            self.scratch.bonds = reactive.plain_bonds(self.current_frame);
+        }
+    }
+
+    /// Bonds of the current frame drawn with a forming/breaking effect.
+    pub fn overlay_bonds(&self) -> &[OverlayBond] {
+        self.reactive
+            .as_ref()
+            .map(|reactive| reactive.overlay(self.current_frame))
+            .unwrap_or(&[])
     }
 
     /// Jump to `frame` (clamped) and refresh the scratch structure.
@@ -172,7 +201,7 @@ pub fn spawn_trajectory_load(
 ) -> RunningTrajectoryLoad {
     let (sender, receiver) = channel();
     std::thread::spawn(move || {
-        let result = read_xtc(&path).map_err(|error| format!("{error:#}"));
+        let result = read_trajectory(&path).map_err(|error| format!("{error:#}"));
         let _ = sender.send(result);
     });
     RunningTrajectoryLoad {

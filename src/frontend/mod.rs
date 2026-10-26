@@ -21,6 +21,7 @@ mod nanosheet_panel;
 mod navigation;
 mod ptm_commands;
 mod qm_commands;
+mod reactive_bonds;
 mod remote_jobs;
 mod reticular_panel;
 mod selection;

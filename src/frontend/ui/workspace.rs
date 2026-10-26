@@ -107,6 +107,10 @@ pub(super) fn render_workspace(
                             } else {
                                 (&entry.structure, entry_id, entry.revision, None)
                             };
+                        let bond_overlay = playback
+                            .map(|playback| playback.overlay_bonds())
+                            .unwrap_or(&[]);
+                        let viewport_rect = ui.available_rect_before_wrap();
                         let viewport_interaction = draw_viewport(
                             ui,
                             ViewportDrawArgs {
@@ -121,8 +125,16 @@ pub(super) fn render_workspace(
                                 empty_state_hint: None,
                                 view_override,
                                 background_corner_radius: crate::frontend::theme::radius::LARGE,
+                                bond_overlay,
                             },
                         );
+                        if let Some(playback) = playback {
+                            crate::frontend::ui::reactive_hud::draw_reactive_hud(
+                                ui,
+                                viewport_rect,
+                                playback,
+                            );
+                        }
                         if viewport_interaction.hover_changed {
                             ui_state.hovered_atom = viewport_interaction.hovered_atom;
                         }
@@ -174,6 +186,7 @@ pub(super) fn render_workspace(
                             ),
                             view_override: None,
                             background_corner_radius: crate::frontend::theme::radius::LARGE,
+                            bond_overlay: &[],
                         },
                     );
                 }
