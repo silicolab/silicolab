@@ -54,6 +54,8 @@ pub(crate) use ptm_args::{
     help_template = "{about}\n\nCommands:\n{subcommands}\n\nOptions:\n{options}"
 )]
 pub(crate) struct Root {
+    #[command(flatten)]
+    pub(crate) guard: super::guard::GuardArgs,
     #[command(subcommand)]
     pub(crate) command: Command,
 }
@@ -540,7 +542,10 @@ impl Command {
                 db,
                 dir,
                 revision,
-            } => super::fetch_command(state, &id, db.as_deref(), dir, revision.as_deref()),
+            } => {
+                let dir = dir.map(|dir| context.output_path(state, dir)).transpose()?;
+                super::fetch_command(state, &id, db.as_deref(), dir, revision.as_deref())
+            }
             Command::Source { path } => {
                 super::run_script_path_with_context(state, context, &path.display().to_string())?;
                 Ok(String::new())
@@ -595,7 +600,7 @@ pub(crate) fn run(
         Err(err) => return render_clap_error(err),
     };
     let root = Root::from_arg_matches(&matches).map_err(|err| anyhow!("{err}"))?;
-    root.command.dispatch(state, context)
+    super::guard::run(state, context, root.guard, root.command)
 }
 
 /// The approval [`RiskLevel`] of a raw `.sls` command line, for the assistant's

@@ -528,12 +528,24 @@ fn finish_command_evidence(
                 .job_id
                 .ok_or_else(|| anyhow!("QM execution identity missing"))?;
             let summary = crate::backend::records::qm::completion(&id.to_string(), &outcome);
+            // A strict script must not build on an unconverged result, so the step
+            // fails; the report is still saved for inspection.
+            let rejected = !outcome.converged && crate::frontend::console::in_strict_command(state);
+            let status = if rejected {
+                TaskStatus::Failed
+            } else {
+                TaskStatus::Completed
+            };
             let applied = apply_qm_outcome(state, cx, outcome);
-            complete_local_job(state, cx.job_id, TaskStatus::Completed);
+            complete_local_job(state, cx.job_id, status);
             if let Some(task) = cx.task_run_id {
-                mark_task_status(state, task, TaskStatus::Completed);
+                mark_task_status(state, task, status);
             }
-            applied.map(|()| summary)
+            applied?;
+            if rejected {
+                bail!("the calculation did not converge, so the step is marked failed\n{summary}");
+            }
+            Ok(summary)
         }
         Err(error) => {
             complete_local_job(state, cx.job_id, TaskStatus::Failed);

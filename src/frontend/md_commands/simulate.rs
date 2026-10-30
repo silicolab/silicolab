@@ -42,6 +42,7 @@ pub fn md_simulate(state: &mut AppState, args: &[String]) -> Result<String> {
         save_trajectory,
     };
 
+    require_current_build(state)?;
     let structure = require_boxed_structure(state)?;
 
     let task_run_id = create_cli_task_run(state, "run-md")?;

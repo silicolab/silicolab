@@ -26,7 +26,7 @@ pub(crate) fn export_command(
         bail!("nothing to export for scope `{:?}`", args.scope);
     }
 
-    let path = context.resolve_path(&args.path);
+    let path = context.output_path(state, &args.path)?;
     // A structure extension means "write this one file"; anything else names a
     // folder to fill, so a script never has to guess which the console chose.
     if writable_format_of(&path).is_some() {

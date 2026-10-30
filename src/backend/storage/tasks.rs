@@ -14,8 +14,9 @@ pub(crate) fn upsert_task_runs(conn: &Connection, tasks: &[&TaskRun]) -> Result<
             "insert or replace into task_runs (
                 id, run_uuid, controller_id, status, run_dir,
                 source_entry_id, result_entry_id, engine_label,
-                created_at_ms, finished_at_ms, inputs_json, result_revision
-            ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                created_at_ms, finished_at_ms, inputs_json, result_revision,
+                request_id, stale_inputs_accepted
+            ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
             params![
                 task.id as i64,
                 task.run_uuid,
@@ -34,6 +35,8 @@ pub(crate) fn upsert_task_runs(conn: &Connection, tasks: &[&TaskRun]) -> Result<
                     .map(serde_json::to_string)
                     .transpose()?,
                 task.result_revision.map(|value| value as i64),
+                task.request_id.as_deref(),
+                task.stale_inputs_accepted,
             ],
         )?;
     }
@@ -56,7 +59,7 @@ pub(crate) fn load_tasks(db: &Connection) -> Result<TaskManager> {
         }
     };
     let mut statement = db.prepare(&format!(
-        "select id, {}, controller_id, status, {}, {}, {}, {}, {}, {}, {}, {}
+        "select id, {}, controller_id, status, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}
          from task_runs
          order by id",
         column("run_uuid", "null"),
@@ -68,6 +71,8 @@ pub(crate) fn load_tasks(db: &Connection) -> Result<TaskManager> {
         column("finished_at_ms", "null"),
         column("inputs_json", "null"),
         column("result_revision", "null"),
+        column("request_id", "null"),
+        column("stale_inputs_accepted", "0"),
     ))?;
     let rows = statement.query_map([], |row| {
         Ok((
@@ -83,6 +88,8 @@ pub(crate) fn load_tasks(db: &Connection) -> Result<TaskManager> {
             row.get::<_, Option<i64>>(9)?,
             row.get::<_, Option<String>>(10)?,
             row.get::<_, Option<i64>>(11)?,
+            row.get::<_, Option<String>>(12)?,
+            row.get::<_, bool>(13)?,
         ))
     })?;
     for row in rows {
@@ -99,6 +106,8 @@ pub(crate) fn load_tasks(db: &Connection) -> Result<TaskManager> {
             finished_at_ms,
             inputs_json,
             result_revision,
+            request_id,
+            stale_inputs_accepted,
         ) = row?;
         let Some(controller) = task_controller_by_id(&controller_id).copied() else {
             continue;
@@ -118,6 +127,8 @@ pub(crate) fn load_tasks(db: &Connection) -> Result<TaskManager> {
         run.source_entry_id = source_entry_id.map(|value| value as u64);
         run.result_entry_id = result_entry_id.map(|value| value as u64);
         run.result_revision = result_revision.map(|value| value as u64);
+        run.request_id = request_id;
+        run.stale_inputs_accepted = stale_inputs_accepted;
         run.engine_label = engine_label;
         run.created_at_ms = created_at_ms;
         run.finished_at_ms = finished_at_ms.map(|value| value as u64);

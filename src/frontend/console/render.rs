@@ -221,7 +221,7 @@ pub(crate) fn save_command(
                     "image export is unavailable in CLI mode; launch the GUI to use GPU export"
                 );
             }
-            let resolved_path = context.resolve_path(&path);
+            let resolved_path = context.output_path(state, &path)?;
             let request = PendingViewportPngExport {
                 background,
                 structure: state.structure().clone(),
@@ -239,7 +239,7 @@ pub(crate) fn save_command(
             ))
         }
         SaveTarget::View { path } => {
-            let resolved_path = context.resolve_path(&path);
+            let resolved_path = context.output_path(state, &path)?;
             let script = view_state_to_script(&state.ui.viewport);
             std::fs::write(&resolved_path, script)
                 .with_context(|| format!("failed to write {}", resolved_path.display()))?;

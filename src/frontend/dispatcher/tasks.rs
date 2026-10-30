@@ -587,11 +587,27 @@ pub(crate) fn bind_task_inputs(
         }
         return Ok(());
     }
+    let (stale_inputs_accepted, request_id) = match &state.command_guard {
+        Some(guard) => match guard.admit(state, &inputs) {
+            Ok(accepted) => (accepted, guard.request_id().map(str::to_string)),
+            Err(error) => {
+                state.tasks.mark_status(task_id, TaskStatus::Failed);
+                return Err(error);
+            }
+        },
+        None => (false, None),
+    };
+    let task = state
+        .tasks
+        .task_run_mut(task_id)
+        .ok_or_else(|| anyhow!("task #{task_id} not found"))?;
     task.source_entry_id = inputs
         .iter()
         .find(|input| matches!(input.role.as_str(), "primary" | "ligand"))
         .map(|input| input.entry_id);
     task.inputs = Some(inputs);
+    task.stale_inputs_accepted = stale_inputs_accepted;
+    task.request_id = request_id;
     state.tasks.mark_task_runs_dirty([task_id]);
     Ok(())
 }

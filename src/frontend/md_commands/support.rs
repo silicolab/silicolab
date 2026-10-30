@@ -9,6 +9,7 @@ use std::{
 
 use anyhow::{Result, bail};
 
+use crate::backend::tasks::TaskKind;
 use crate::engines::gromacs::topology::TopologySource;
 use crate::{
     domain::Structure,
@@ -118,6 +119,35 @@ pub fn require_boxed_structure(state: &AppState) -> Result<Structure> {
         );
     }
     Ok(structure.clone())
+}
+
+/// A strict script runs MD only on an entry whose MD build captured its current
+/// revision; otherwise the run would pair a stale (or derived) topology with the
+/// structure it now has.
+pub fn require_current_build(state: &AppState) -> Result<()> {
+    if !crate::frontend::console::in_strict_command(state) {
+        return Ok(());
+    }
+    let Some(entry) = state.entries.active_entry() else {
+        bail!("no active entry to run MD on");
+    };
+    let Some(build) = state
+        .tasks
+        .latest_completed_run_for_result(TaskKind::BuildMdSystem, entry.id)
+    else {
+        bail!(
+            "entry #{} has no MD build; run `md build` on it first",
+            entry.id
+        );
+    };
+    if build.result_revision != Some(entry.revision) {
+        bail!(
+            "entry #{} changed after its MD build (task #{}); run `md build` on it again",
+            entry.id,
+            build.id
+        );
+    }
+    Ok(())
 }
 
 fn active_entry_md_topology_path(state: &AppState) -> Option<PathBuf> {

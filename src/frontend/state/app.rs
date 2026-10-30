@@ -44,6 +44,9 @@ pub struct AppState {
     pub workspace: WorkspaceSession,
     /// Held while `workspace` is a project; `None` in a scratch workspace.
     pub project_lock: Option<crate::backend::housekeeping::SessionLock>,
+    /// Set only while a console command with guard options, or any command of a
+    /// strict script, runs; checked where a run binds its inputs.
+    pub command_guard: Option<crate::frontend::console::CommandGuard>,
     pub config: AppConfig,
     pub recent_projects: Vec<RecentProject>,
     pub entries: EntryStore,
@@ -122,6 +125,7 @@ impl AppState {
         let mut state = Self {
             workspace,
             project_lock: None,
+            command_guard: None,
             config,
             recent_projects,
             entries,

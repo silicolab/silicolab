@@ -58,6 +58,34 @@ script with `--project`, and run `status` again. When the agent is interrupted o
 starts a new session, `status` tells it what is already done and which results
 need to be recomputed, so it does not have to remember.
 
+Add `--strict` when an agent runs the scripts, so SilicoLab refuses mistakes
+instead of trusting the agent to avoid them:
+
+```sh
+silicolab --project path/to/project --strict step.sls
+```
+
+A strict script must name the entries each calculation uses. Put guard options
+before the command:
+
+```text
+--entry #3@2 --request-id opt-1 qm optimize --method r2scan-3c
+```
+
+- `--entry #3@2` runs on entry 3 and refuses if it is no longer at revision 2
+  (the revision `status` reported). Repeat `--entry` for calculations with
+  several inputs, such as docking; the first one becomes active.
+- An input produced by a stale task, or by a task that did not complete, is
+  refused. `--allow-stale` uses it anyway, and the task records that it did.
+- `--request-id` makes a retry safe: if a task with that id already completed,
+  the command reports it instead of running again.
+
+A strict script also marks a QM step failed when the calculation did not
+converge, runs MD only on an entry whose `md build` matches its current
+revision, and writes files (`export`, `save`, `fetch --dir`) only inside the
+project. The guard options also work without `--strict`, in scripts and in the
+console; they are only required in a strict script.
+
 The same `.sls` scripts also run interactively in the GUI console, so a
 workflow you automate on the command line behaves identically inside the app.
 
