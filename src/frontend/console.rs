@@ -11,6 +11,7 @@ mod args;
 mod editing;
 mod export;
 mod grammar;
+mod guard;
 mod loading;
 mod render;
 mod risk;
@@ -19,6 +20,8 @@ pub(crate) use args::*;
 pub(crate) use editing::*;
 pub(crate) use export::*;
 pub(crate) use grammar::*;
+pub use guard::CommandGuard;
+pub(crate) use guard::in_strict_command;
 pub(crate) use loading::*;
 pub(crate) use render::*;
 pub(crate) use risk::*;
@@ -63,12 +66,22 @@ impl Default for CommandConsoleState {
 /// killed run keeps the steps that already finished.
 pub type ScriptCheckpoint = fn(&mut AppState) -> Result<()>;
 
+/// How a script file runs beyond its own lines.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ScriptPolicy {
+    pub checkpoint: Option<ScriptCheckpoint>,
+    /// Agent-harness rules for a project run: every run must pin its inputs with
+    /// `--entry`, MD needs a build of the current revision, an unconverged QM
+    /// result fails its step, and files are written only inside the project.
+    pub strict: bool,
+}
+
 #[derive(Debug, Clone)]
 pub struct ScriptContext {
     variables: BTreeMap<String, String>,
     stdout_lines: Vec<String>,
     gpu_image_export: bool,
-    checkpoint: Option<ScriptCheckpoint>,
+    policy: ScriptPolicy,
 }
 
 impl Default for ScriptContext {
@@ -77,7 +90,7 @@ impl Default for ScriptContext {
             variables: BTreeMap::new(),
             stdout_lines: Vec::new(),
             gpu_image_export: true,
-            checkpoint: None,
+            policy: ScriptPolicy::default(),
         }
     }
 }
@@ -91,6 +104,54 @@ impl ScriptContext {
     pub(crate) fn resolve_path(&self, path: impl AsRef<Path>) -> PathBuf {
         path.as_ref().to_path_buf()
     }
+
+    pub(crate) fn strict(&self) -> bool {
+        self.policy.strict
+    }
+
+    /// Resolve a path a command will write to. A strict script may write only
+    /// inside its project.
+    pub(crate) fn output_path(&self, state: &AppState, path: impl AsRef<Path>) -> Result<PathBuf> {
+        let path = self.resolve_path(path);
+        if self.strict() {
+            let project = state
+                .workspace
+                .project()
+                .ok_or_else(|| anyhow::anyhow!("a strict script needs an open project"))?;
+            ensure_inside(&project.root, &path)?;
+        }
+        Ok(path)
+    }
+}
+
+/// Fail unless `path`, which may not exist yet, lies inside `root` once symlinks
+/// in its existing ancestors are resolved.
+fn ensure_inside(root: &Path, path: &Path) -> Result<()> {
+    let absolute = std::path::absolute(path)?;
+    let mut existing = absolute.as_path();
+    let mut rest = Vec::new();
+    while !existing.exists() {
+        let (Some(parent), Some(name)) = (existing.parent(), existing.file_name()) else {
+            break;
+        };
+        rest.push(name);
+        existing = parent;
+    }
+    let mut resolved = existing.canonicalize()?;
+    for name in rest.into_iter().rev() {
+        resolved.push(name);
+    }
+    let escapes = absolute
+        .components()
+        .any(|component| component == std::path::Component::ParentDir);
+    if escapes || !resolved.starts_with(root.canonicalize()?) {
+        bail!(
+            "{} is outside the project {}; a strict script writes only inside its project",
+            path.display(),
+            root.display()
+        );
+    }
+    Ok(())
 }
 
 pub fn execute_console_line(state: &mut AppState, line: &str) -> Result<String> {
@@ -129,12 +190,12 @@ pub fn run_script_file_with_args(
     state: &mut AppState,
     script_path: &std::path::Path,
     variables: BTreeMap<String, String>,
-    checkpoint: Option<ScriptCheckpoint>,
+    policy: ScriptPolicy,
 ) -> Result<ScriptRunResult> {
     let mut context = ScriptContext {
         variables,
         gpu_image_export: false,
-        checkpoint,
+        policy,
         ..ScriptContext::default()
     };
     run_script_path_with_context(state, &mut context, &script_path.display().to_string())?;
@@ -198,7 +259,7 @@ pub(crate) fn run_script_path_with_context(
         if !output.is_empty() {
             context.stdout_lines.push(output);
         }
-        if let Some(checkpoint) = context.checkpoint {
+        if let Some(checkpoint) = context.policy.checkpoint {
             checkpoint(state)?;
         }
     }
@@ -393,6 +454,13 @@ pub fn command_catalog() -> String {
         "  qm periodic [--functional pade] [--basis SZV-GTH] [--kmesh 2x2x2] [--cutoff 280] (needs a cell)",
         "  dock --receptor <entry> --ligand <entry> [--center x,y,z] [--size x,y,z] [--exhaustiveness 8] [--modes 9] [--seed 0]",
         "  score --receptor <entry> --ligand <entry> [--center x,y,z] [--size x,y,z]   (single-point pose score)",
+        "",
+        "Guard options (before any command; required for compute in a strict project run):",
+        "  --entry #id[@revision]      Pin an input entry, refusing if it changed; repeat for",
+        "                              several inputs. The first pinned entry becomes active.",
+        "  --allow-stale               Use an input from a stale or unfinished upstream task.",
+        "  --request-id <key>          Report the earlier run with this key instead of rerunning.",
+        "                              e.g. `--entry #3@2 --request-id opt-1 qm optimize`.",
         "",
         "Task control:",
         "  jobs                        List running and tracked local, assistant, and remote jobs.",

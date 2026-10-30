@@ -170,6 +170,41 @@ fn assess_task(
     }
 }
 
+/// Why a new run should not take `entry_id` as an input, judged by the task that
+/// produced the entry. Entries no task produced (opened, sketched, fetched) have
+/// nothing to object to.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpstreamProblem {
+    /// The producing run's result derives from inputs that changed since.
+    Stale { task_id: u64 },
+    /// The producing run did not complete, so its entry is not a vetted result.
+    NotCompleted { task_id: u64, status: TaskStatus },
+}
+
+pub fn upstream_problem(
+    tasks: &TaskManager,
+    assessed: &BTreeMap<u64, Freshness>,
+    entry_id: u64,
+) -> Option<UpstreamProblem> {
+    let producer = tasks
+        .tasks
+        .iter()
+        .filter(|task| task.result_entry_id == Some(entry_id))
+        .max_by_key(|task| task.id)?;
+    if producer.status != TaskStatus::Completed {
+        return Some(UpstreamProblem::NotCompleted {
+            task_id: producer.id,
+            status: producer.status,
+        });
+    }
+    assessed
+        .get(&producer.id)
+        .is_some_and(Freshness::taints_consumers)
+        .then_some(UpstreamProblem::Stale {
+            task_id: producer.id,
+        })
+}
+
 /// The latest completed task created before `before` that produced `entry_id`.
 fn producer_before(tasks: &TaskManager, entry_id: u64, before: u64) -> Option<u64> {
     tasks
@@ -314,5 +349,34 @@ mod tests {
             [StaleReason::InputDeleted { entry_id, .. }] if *entry_id == a
         ));
         assert_eq!(assessed[&pending], Freshness::NotApplicable);
+    }
+
+    #[test]
+    fn upstream_problems_follow_the_producing_run() {
+        let mut entries = EntryStore::new_empty();
+        let mut tasks = TaskManager::default();
+        let a = entry(&mut entries, "A");
+        let b = entry(&mut entries, "B");
+        let c = entry(&mut entries, "C");
+        let build = complete(&mut tasks, &entries, "build-md-system", a, Some(b));
+        let failed = complete(&mut tasks, &entries, "qm-optimize", a, Some(c));
+        tasks.task_run_mut(failed).unwrap().status = TaskStatus::Failed;
+        assert_eq!(upstream_problem(&tasks, &assess(&tasks, &entries), a), None);
+        assert_eq!(upstream_problem(&tasks, &assess(&tasks, &entries), b), None);
+        assert_eq!(
+            upstream_problem(&tasks, &assess(&tasks, &entries), c),
+            Some(UpstreamProblem::NotCompleted {
+                task_id: failed,
+                status: TaskStatus::Failed
+            })
+        );
+
+        edit(&mut entries, b);
+        assert_eq!(upstream_problem(&tasks, &assess(&tasks, &entries), b), None);
+        edit(&mut entries, a);
+        assert_eq!(
+            upstream_problem(&tasks, &assess(&tasks, &entries), b),
+            Some(UpstreamProblem::Stale { task_id: build })
+        );
     }
 }

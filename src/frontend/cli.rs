@@ -11,7 +11,7 @@ use crate::backend::{
     storage::task_status_token,
 };
 use crate::frontend::{
-    console::run_script_file_with_args,
+    console::{ScriptPolicy, run_script_file_with_args},
     dispatcher::{close_project_headless, open_project_headless, persist_project},
     state::AppState,
 };
@@ -20,6 +20,8 @@ use crate::frontend::{
 pub struct CliScriptRequest {
     /// Run inside this project instead of a throwaway scratch workspace.
     pub project: Option<PathBuf>,
+    /// Apply the agent-harness rules; needs a project.
+    pub strict: bool,
     pub script_path: PathBuf,
     pub script_args: BTreeMap<String, String>,
 }
@@ -30,20 +32,35 @@ pub struct CliScriptResult {
 }
 
 pub fn parse_cli_script_request(args: &[String]) -> Result<Option<CliScriptRequest>> {
-    if args.is_empty() {
+    if matches!(
+        args.first().map(String::as_str),
+        None | Some("help" | "--help" | "-h")
+    ) {
         return Ok(None);
     }
 
-    let (project, args) = match args[0].as_str() {
-        "help" | "--help" | "-h" => return Ok(None),
-        "--project" => {
-            let dir = args
-                .get(1)
-                .context("`--project` needs a project directory")?;
-            (Some(PathBuf::from(dir)), &args[2..])
+    let mut project = None;
+    let mut strict = false;
+    let mut args = args;
+    loop {
+        match args.first().map(String::as_str) {
+            Some("--project") => {
+                let dir = args
+                    .get(1)
+                    .context("`--project` needs a project directory")?;
+                project = Some(PathBuf::from(dir));
+                args = &args[2..];
+            }
+            Some("--strict") => {
+                strict = true;
+                args = &args[1..];
+            }
+            _ => break,
         }
-        _ => (None, args),
-    };
+    }
+    if strict && project.is_none() {
+        bail!("`--strict` needs `--project <dir>`");
+    }
     let first = args
         .first()
         .context("CLI mode expects a `.sls` script path")?
@@ -60,6 +77,7 @@ pub fn parse_cli_script_request(args: &[String]) -> Result<Option<CliScriptReque
 
     Ok(Some(CliScriptRequest {
         project,
+        strict,
         script_path,
         script_args: parse_named_script_args(&args[1..])?,
     }))
@@ -72,7 +90,7 @@ pub fn run_cli_script(request: &CliScriptRequest) -> Result<CliScriptResult> {
     }
     let Some(project) = &request.project else {
         let mut state = AppState::scratch(config, Vec::new());
-        return run_script(&mut state, request, None);
+        return run_script(&mut state, request, ScriptPolicy::default());
     };
 
     let (mut state, warnings) = open_project_headless(project, config)
@@ -81,7 +99,11 @@ pub fn run_cli_script(request: &CliScriptRequest) -> Result<CliScriptResult> {
         eprintln!("warning: {warning}");
     }
     // Saving after every line keeps finished steps if a long run is killed.
-    let result = run_script(&mut state, request, Some(checkpoint));
+    let policy = ScriptPolicy {
+        checkpoint: Some(checkpoint),
+        strict: request.strict,
+    };
+    let result = run_script(&mut state, request, policy);
     let closed = close_project_headless(&mut state)
         .with_context(|| format!("failed to save project {}", project.display()));
     match (result, closed) {
@@ -95,13 +117,13 @@ pub fn run_cli_script(request: &CliScriptRequest) -> Result<CliScriptResult> {
 fn run_script(
     state: &mut AppState,
     request: &CliScriptRequest,
-    checkpoint: Option<crate::frontend::console::ScriptCheckpoint>,
+    policy: ScriptPolicy,
 ) -> Result<CliScriptResult> {
     let result = run_script_file_with_args(
         state,
         &request.script_path,
         request.script_args.clone(),
-        checkpoint,
+        policy,
     )
     .with_context(|| format!("failed to run {}", request.script_path.display()))?;
 
@@ -154,6 +176,8 @@ fn project_status(path: &Path) -> Result<Value> {
                 "inputs": task.inputs,
                 "result_entry": task.result_entry_id,
                 "result_revision": task.result_revision,
+                "request_id": task.request_id,
+                "stale_inputs_accepted": task.stale_inputs_accepted,
                 "freshness": freshness.token(),
                 "stale_reasons": freshness.reasons(),
             })
@@ -184,7 +208,7 @@ fn project_status(path: &Path) -> Result<Value> {
 }
 
 pub fn cli_help_text() -> &'static str {
-    "SilicoLab\n\nUsage:\n  silicolab                  Launch the GUI\n  silicolab [--project <dir>] <script.sls> [--name value | --flag]\n  silicolab status --project <dir>\n\nScript arguments are passed to ${name} placeholders in the script.\nWith --project the script runs inside that project and saves it after each\nline; without it the script runs in a throwaway scratch workspace.\n\n`status` prints the project's entries and tasks as JSON, marking each completed\ntask current or stale against the entries' latest revisions.\n"
+    "SilicoLab\n\nUsage:\n  silicolab                  Launch the GUI\n  silicolab [--project <dir> [--strict]] <script.sls> [--name value | --flag]\n  silicolab status --project <dir>\n\nScript arguments are passed to ${name} placeholders in the script.\nWith --project the script runs inside that project and saves it after each\nline; without it the script runs in a throwaway scratch workspace.\n\n--strict applies the rules for an AI agent: each calculation must pin its\ninputs with `--entry #id@revision` before the command, stale inputs are\nrefused unless `--allow-stale` is given, `--request-id` makes retries safe,\nunconverged QM steps fail, MD needs a build of the current revision, and\nfiles are written only inside the project.\n\n`status` prints the project's entries and tasks as JSON, marking each completed\ntask current or stale against the entries' latest revisions.\n"
 }
 
 fn parse_named_script_args(args: &[String]) -> Result<BTreeMap<String, String>> {
@@ -233,192 +257,4 @@ fn normalize_script_arg_name(name: &str) -> Result<String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::{collections::BTreeMap, fs, path::PathBuf};
-
-    use super::{
-        CliScriptRequest, parse_cli_script_request, parse_named_script_args, run_cli_script,
-    };
-    use crate::backend::project::{create_project, open_project};
-
-    #[test]
-    fn parses_script_request_with_named_args() {
-        let args = vec![
-            "examples/demo.sls".to_string(),
-            "--output".to_string(),
-            "out/demo.png".to_string(),
-            "--dry-run".to_string(),
-            "--width=1200".to_string(),
-        ];
-        let request = parse_cli_script_request(&args)
-            .unwrap()
-            .expect("script request should parse");
-
-        assert_eq!(request.script_path.to_string_lossy(), "examples/demo.sls");
-        assert_eq!(request.script_args.get("output").unwrap(), "out/demo.png");
-        assert_eq!(request.script_args.get("dry_run").unwrap(), "true");
-        assert_eq!(request.script_args.get("width").unwrap(), "1200");
-    }
-
-    #[test]
-    fn rejects_unexpected_positional_script_args() {
-        let error = parse_named_script_args(&["plain".to_string()]).expect_err("should fail");
-        assert!(error.to_string().contains("unexpected positional argument"));
-    }
-
-    #[test]
-    fn parses_project_flag_before_script() {
-        let args = ["--project", "proj", "run.sls", "--basis", "sto-3g"].map(String::from);
-        let request = parse_cli_script_request(&args)
-            .unwrap()
-            .expect("script request should parse");
-        assert_eq!(request.project, Some(PathBuf::from("proj")));
-        assert_eq!(request.script_path, PathBuf::from("run.sls"));
-        assert_eq!(request.script_args.get("basis").unwrap(), "sto-3g");
-
-        let error = parse_cli_script_request(&["--project".to_string()]).unwrap_err();
-        assert!(error.to_string().contains("project directory"), "{error}");
-    }
-
-    #[test]
-    fn project_runs_persist_across_invocations() {
-        let root = PathBuf::from("target/test-cli-project");
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let project = create_project(&root, "demo").unwrap();
-        fs::write(root.join("h2.xyz"), "2\nh2\nH 0 0 0\nH 0 0 0.74\n").unwrap();
-        let script = root.join("step.sls");
-        fs::write(
-            &script,
-            format!(
-                "open {}\nqm energy --method rhf --basis sto-3g\n",
-                root.join("h2.xyz").display()
-            ),
-        )
-        .unwrap();
-        let request = CliScriptRequest {
-            project: Some(project.root.clone()),
-            script_path: script,
-            script_args: BTreeMap::new(),
-        };
-
-        run_cli_script(&request).unwrap();
-        run_cli_script(&request).unwrap();
-
-        let (_, snapshot) = open_project(&project.root).unwrap();
-        assert_eq!(snapshot.entries.records.len(), 2);
-        assert_eq!(snapshot.tasks.tasks.len(), 2);
-        assert!(snapshot.warnings.is_empty(), "{:?}", snapshot.warnings);
-    }
-
-    #[test]
-    fn project_open_in_another_session_is_refused() {
-        let root = PathBuf::from("target/test-cli-locked");
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let project = create_project(&root, "demo").unwrap();
-        let script = root.join("noop.sls");
-        fs::write(&script, "# nothing\n").unwrap();
-        let (held, _) = crate::backend::housekeeping::acquire_lock(&project).unwrap();
-        let request = CliScriptRequest {
-            project: Some(project.root.clone()),
-            script_path: script,
-            script_args: BTreeMap::new(),
-        };
-
-        let error = run_cli_script(&request).unwrap_err();
-        assert!(format!("{error:#}").contains("already open"), "{error:#}");
-        held.release();
-        run_cli_script(&request).unwrap();
-    }
-
-    #[test]
-    fn status_reports_results_made_stale_by_a_later_edit() {
-        let root = PathBuf::from("target/test-cli-status");
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let project = create_project(&root, "demo").unwrap();
-        fs::write(root.join("o.xyz"), "1\no\nO 0 0 0\n").unwrap();
-        let run = |name: &str, body: String| {
-            let script = root.join(name);
-            fs::write(&script, body).unwrap();
-            run_cli_script(&CliScriptRequest {
-                project: Some(project.root.clone()),
-                script_path: script,
-                script_args: BTreeMap::new(),
-            })
-            .unwrap();
-        };
-        let status = || -> serde_json::Value {
-            let args = ["--project".to_string(), project.root.display().to_string()];
-            serde_json::from_str(&super::run_cli_status(&args).unwrap()).unwrap()
-        };
-
-        run(
-            "energy.sls",
-            format!(
-                "open {}\nhydrogen add\nqm energy --method rhf --basis sto-3g\n",
-                root.join("o.xyz").display()
-            ),
-        );
-        let report = status();
-        assert_eq!(report["summary"]["stale"], 0, "{report:#}");
-        assert_eq!(report["project"]["open_elsewhere"], false);
-        let energy = report["tasks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|task| task["task"] == "qm-energy")
-            .unwrap();
-        assert_eq!(energy["freshness"], "current", "{report:#}");
-
-        run("edit.sls", "delete chain A\nhydrogen add\n".to_string());
-        let report = status();
-        let energy = report["tasks"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|task| task["task"] == "qm-energy")
-            .unwrap();
-        assert_eq!(energy["freshness"], "stale", "{report:#}");
-        assert_eq!(energy["stale_reasons"][0]["kind"], "input_edited");
-    }
-
-    #[test]
-    fn status_never_writes_even_to_an_unmigrated_project() {
-        let root = PathBuf::from("target/test-cli-status-readonly");
-        let _ = fs::remove_dir_all(&root);
-        fs::create_dir_all(&root).unwrap();
-        let project = create_project(&root, "demo").unwrap();
-        fs::write(root.join("o.xyz"), "1\no\nO 0 0 0\n").unwrap();
-        let script = root.join("energy.sls");
-        fs::write(
-            &script,
-            format!(
-                "open {}\nqm energy --method rhf --basis sto-3g\n",
-                root.join("o.xyz").display()
-            ),
-        )
-        .unwrap();
-        run_cli_script(&CliScriptRequest {
-            project: Some(project.root.clone()),
-            script_path: script,
-            script_args: BTreeMap::new(),
-        })
-        .unwrap();
-        // Simulate a project last saved before result revisions existed.
-        rusqlite::Connection::open(&project.project_db)
-            .unwrap()
-            .execute("alter table task_runs drop column result_revision", [])
-            .unwrap();
-        let before = fs::read(&project.project_db).unwrap();
-
-        let args = ["--project".to_string(), project.root.display().to_string()];
-        let report: serde_json::Value =
-            serde_json::from_str(&super::run_cli_status(&args).unwrap()).unwrap();
-
-        assert_eq!(fs::read(&project.project_db).unwrap(), before);
-        assert_eq!(report["tasks"][0]["freshness"], "current", "{report:#}");
-        assert!(report["tasks"][0]["result_revision"].is_null());
-    }
-}
+mod tests;

@@ -88,7 +88,10 @@ silicolab workflow.sls
 
 Add `--project <dir>` to run the script inside a saved project instead of a
 throwaway workspace; the project is saved after each line, and is refused while
-another SilicoLab window or script has it open.
+another SilicoLab window or script has it open. `silicolab status --project <dir>`
+prints which results are still current, and `--strict` makes SilicoLab enforce
+the rules an AI agent should follow; see the
+[quickstart](https://docs.silicolab.nmrtist.space/getting-started/quickstart/).
 
 The same scripts also run interactively in the GUI console. The full user
 manual in English and Chinese lives at <https://docs.silicolab.nmrtist.space/>.

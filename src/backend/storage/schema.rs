@@ -221,6 +221,14 @@ fn ensure_task_run_columns(db: &Connection) -> Result<()> {
         "result_revision",
         "alter table task_runs add column result_revision integer",
     )?;
+    add_column(
+        "request_id",
+        "alter table task_runs add column request_id text",
+    )?;
+    add_column(
+        "stale_inputs_accepted",
+        "alter table task_runs add column stale_inputs_accepted integer not null default 0",
+    )?;
     Ok(())
 }
 

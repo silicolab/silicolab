@@ -61,6 +61,7 @@ pub fn md_presets(state: &mut AppState, args: &[String]) -> Result<String> {
 /// `--raw "key=val;..."` (verbatim engine passthrough).
 pub fn md_run(state: &mut AppState, args: &[String]) -> Result<String> {
     let flags = Flags::parse(args)?;
+    require_current_build(state)?;
     let structure = require_boxed_structure(state)?;
     let context = load_or_derive_context(state);
     let eff = context.with_overrides(parse_overrides(&flags));

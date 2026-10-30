@@ -455,6 +455,12 @@ pub struct TaskRun {
     /// edit of that entry is detectable. `None` for runs that have not completed
     /// and for runs recorded before this was tracked.
     pub result_revision: Option<u64>,
+    /// The caller's retry key: a later command with the same id does not start a
+    /// second run while this one completed or is still running.
+    pub request_id: Option<String>,
+    /// An input came from a stale upstream result and was used anyway because the
+    /// command said `--allow-stale`.
+    pub stale_inputs_accepted: bool,
     pub engine_label: Option<String>,
     pub created_at_ms: u64,
     pub finished_at_ms: Option<u64>,
@@ -489,6 +495,8 @@ impl TaskRun {
             inputs: None,
             result_entry_id: None,
             result_revision: None,
+            request_id: None,
+            stale_inputs_accepted: false,
             engine_label: None,
             created_at_ms: now_unix_ms(),
             finished_at_ms: None,
