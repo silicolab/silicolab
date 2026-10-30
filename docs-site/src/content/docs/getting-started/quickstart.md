@@ -86,6 +86,20 @@ revision, and writes files (`export`, `save`, `fetch --dir`) only inside the
 project. The guard options also work without `--strict`, in scripts and in the
 console; they are only required in a strict script.
 
+An agent that supports the Model Context Protocol can use the project through
+tools instead of shell commands. Register SilicoLab as an MCP server, for
+example in Claude Code:
+
+```sh
+claude mcp add silicolab -- silicolab mcp --project path/to/project
+```
+
+The server offers three tools: `project_status` (the `status` report),
+`run_commands` (console lines, always under the strict rules), and
+`command_catalog` (the command reference). Each call opens the project, saves
+it, and closes it again, so you can still open the project in the app between
+calls. A calculation runs to completion before its call returns.
+
 The same `.sls` scripts also run interactively in the GUI console, so a
 workflow you automate on the command line behaves identically inside the app.
 

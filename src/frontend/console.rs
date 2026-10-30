@@ -250,6 +250,27 @@ pub(crate) fn run_script_path_with_context(
         bail!("SilicoLab scripts use the .sls extension");
     }
     let script = std::fs::read_to_string(&resolved_path)?;
+    run_script_lines(state, context, &script)
+}
+
+/// Run `.sls` source text line by line, as a script file does but without one.
+pub fn run_script_text(
+    state: &mut AppState,
+    script: &str,
+    policy: ScriptPolicy,
+) -> Result<ScriptRunResult> {
+    let mut context = ScriptContext {
+        gpu_image_export: false,
+        policy,
+        ..ScriptContext::default()
+    };
+    run_script_lines(state, &mut context, script)?;
+    Ok(ScriptRunResult {
+        stdout_lines: context.stdout_lines,
+    })
+}
+
+fn run_script_lines(state: &mut AppState, context: &mut ScriptContext, script: &str) -> Result<()> {
     for line in script.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() || trimmed.starts_with('#') {

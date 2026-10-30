@@ -30,6 +30,10 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if args[0] == "mcp" {
+        return frontend::run_mcp_server(&args[1..]);
+    }
+
     if args[0] == "status" {
         println!("{}", frontend::run_cli_status(&args[1..])?);
         return Ok(());
