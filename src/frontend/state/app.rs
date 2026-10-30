@@ -42,6 +42,8 @@ const LAYOUT_SAVE_DEBOUNCE_SECS: f64 = 0.6;
 
 pub struct AppState {
     pub workspace: WorkspaceSession,
+    /// Held while `workspace` is a project; `None` in a scratch workspace.
+    pub project_lock: Option<crate::backend::housekeeping::SessionLock>,
     pub config: AppConfig,
     pub recent_projects: Vec<RecentProject>,
     pub entries: EntryStore,
@@ -119,6 +121,7 @@ impl AppState {
             .unwrap_or_default();
         let mut state = Self {
             workspace,
+            project_lock: None,
             config,
             recent_projects,
             entries,

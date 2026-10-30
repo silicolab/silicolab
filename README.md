@@ -86,6 +86,10 @@ Pass a script path to run it headless from the command line:
 silicolab workflow.sls
 ```
 
+Add `--project <dir>` to run the script inside a saved project instead of a
+throwaway workspace; the project is saved after each line, and is refused while
+another SilicoLab window or script has it open.
+
 The same scripts also run interactively in the GUI console. The full user
 manual in English and Chinese lives at <https://docs.silicolab.nmrtist.space/>.
 

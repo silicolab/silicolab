@@ -39,10 +39,48 @@ pub fn shutdown(state: &mut AppState) -> anyhow::Result<()> {
         return Ok(());
     }
     persist_project(state, true)?;
-    if let Some(project) = state.workspace.project() {
-        housekeeping::release_lock(project);
-    }
+    release_project_lock(state);
     Ok(())
+}
+
+/// Open a project for a headless (CLI) session: the user's settings, the
+/// project's exclusive session lock, and the same crash reconciliation as a GUI
+/// open. Remote-job compensation is left to the GUI, since it may reach hosts.
+pub(crate) fn open_project_headless(
+    path: &Path,
+    config: crate::backend::config::AppConfig,
+) -> anyhow::Result<(AppState, Vec<String>)> {
+    let (project, snapshot) = open_project_dir(path)?;
+    let (lock, recovered_from_crash) = housekeeping::acquire_lock(&project)?;
+    let mut warnings = snapshot.warnings.clone();
+    if recovered_from_crash {
+        warnings.push("previous session did not close cleanly".to_string());
+    }
+    let mut state = AppState::new(
+        Structure::empty(),
+        None,
+        WorkspaceSession::Project(project),
+        config,
+        Vec::new(),
+        Some(snapshot),
+    );
+    state.project_lock = Some(lock);
+    reconcile_interrupted_local_tasks(&mut state);
+    Ok((state, warnings))
+}
+
+/// Save and release a project opened by [`open_project_headless`]. The lock is
+/// released even when the save fails, so a failed run never wedges the project.
+pub(crate) fn close_project_headless(state: &mut AppState) -> anyhow::Result<()> {
+    let saved = persist_project(state, true);
+    release_project_lock(state);
+    saved
+}
+
+fn release_project_lock(state: &mut AppState) {
+    if let Some(lock) = state.project_lock.take() {
+        lock.release();
+    }
 }
 
 pub(crate) fn persist_project(state: &mut AppState, persist_history: bool) -> anyhow::Result<()> {
@@ -247,14 +285,29 @@ pub(crate) fn replace_workspace_from_project(
     project: ProjectSession,
     snapshot: ProjectSnapshot,
 ) {
+    // Take the new project's lock before touching the workspace, so a project held
+    // by another process leaves the current one open. Reopening the open project
+    // keeps the lock this process already holds.
+    let reopening = state
+        .workspace
+        .project()
+        .is_some_and(|current| current.root == project.root);
+    let (lock, recovered_from_crash) = if reopening {
+        (state.project_lock.take(), false)
+    } else {
+        match housekeeping::acquire_lock(&project) {
+            Ok((lock, recovered)) => (Some(lock), recovered),
+            Err(error) => {
+                state.report_system_error(SystemSubsystem::Project, error.to_string());
+                return;
+            }
+        }
+    };
+    release_project_lock(state);
+    state.project_lock = lock;
     let assistant = snapshot.assistant.clone();
     let warnings = snapshot.warnings.clone();
     cancel_agent_runtime(state);
-    // Release the lock on the project we are leaving, then take the new one.
-    if let Some(previous) = state.workspace.project() {
-        housekeeping::release_lock(previous);
-    }
-    let recovered_from_crash = housekeeping::acquire_lock(&project);
     state.workspace = WorkspaceSession::Project(project.clone());
     state.entries = snapshot.entries;
     state.ui.submitted_compute_prompts.clear();
@@ -391,15 +444,16 @@ fn open_project_path_without_persist(state: &mut AppState, path: PathBuf) {
 fn close_project_without_persist(state: &mut AppState, run_maintenance: bool) {
     cancel_agent_runtime(state);
     // Compact the databases and release the lock now that we are leaving cleanly.
-    if let Some(project) = state.workspace.project().cloned() {
-        if run_maintenance && let Err(error) = housekeeping::run_maintenance(&project) {
-            state.report_system_error(
-                SystemSubsystem::Project,
-                format!("Project maintenance failed: {error}"),
-            );
-        }
-        housekeeping::release_lock(&project);
+    if run_maintenance
+        && let Some(project) = state.workspace.project().cloned()
+        && let Err(error) = housekeeping::run_maintenance(&project)
+    {
+        state.report_system_error(
+            SystemSubsystem::Project,
+            format!("Project maintenance failed: {error}"),
+        );
     }
+    release_project_lock(state);
     state.workspace = WorkspaceSession::Scratch;
     state.entries = EntryStore::new_empty();
     state.ui.submitted_compute_prompts.clear();
@@ -541,9 +595,7 @@ fn execute_leave_intent(
 }
 
 fn abandon_project_session(state: &mut AppState) {
-    if let Some(project) = state.workspace.project() {
-        housekeeping::release_lock(project);
-    }
+    release_project_lock(state);
 }
 
 pub(crate) fn load_active_entry(state: &mut AppState) {
@@ -666,103 +718,4 @@ pub(crate) fn delete_entries(state: &mut AppState, ids: Vec<u64>) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::frontend::state::ChartState;
-
-    #[test]
-    fn reset_chart_caches_clears_chart_and_both_memos() {
-        let mut state = AppState::scratch(Default::default(), Vec::new());
-        state.ui.chart = Some(ChartState::new("project-a run".to_string()));
-        state.ui.chart_availability.insert(1, true);
-        state.ui.chart_availability.insert(2, false);
-        state.ui.task_chart_thumbnails.insert(1, None);
-
-        reset_chart_caches(&mut state);
-
-        assert!(state.ui.chart.is_none());
-        assert!(state.ui.chart_availability.is_empty());
-        assert!(state.ui.task_chart_thumbnails.is_empty());
-    }
-
-    /// A completed task's `result_entry_id` reaches disk only through the atomic
-    /// entries+ledger save; the every-frame narrow flush must not write that row
-    /// ahead of it, or a crash in the gap leaves the task pointing at an entry
-    /// that was never persisted. The flush therefore defers while a full save is
-    /// pending — signalled either by a scheduled autosave (an unsaved entry) or a
-    /// dirty ledger (an unsaved materialization) — and only then persists.
-    #[test]
-    fn narrow_task_flush_defers_to_a_pending_full_save() {
-        let root = std::env::temp_dir().join(format!("sl-flush-defer-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        let session = crate::backend::project::create_project(&root, "flush").unwrap();
-        let mut state = AppState::scratch(Default::default(), Vec::new());
-        state.workspace = crate::backend::project::WorkspaceSession::Project(session);
-
-        let controller = *crate::backend::tasks::task_controller_by_id("qm-optimize").unwrap();
-        let task = state.tasks.create_task_run(controller);
-        state.tasks.set_result_entry_id(task, Some(42));
-        state.tasks.mark_status(task, TaskStatus::Completed);
-        assert!(state.tasks.has_dirty_task_runs());
-
-        // A scheduled autosave (an unsaved entry) defers the flush.
-        state.request_autosave(0.0, 0.5);
-        flush_dirty_task_runs(&mut state);
-        assert!(
-            state.tasks.has_dirty_task_runs(),
-            "must defer while an autosave is pending",
-        );
-
-        // So does a dirty ledger (an unsaved materialization), even with no autosave.
-        state.clear_autosave_deadline();
-        state
-            .materializations
-            .record(crate::backend::materialization::Materialization::single(
-                "job-1".to_string(),
-                0,
-                42,
-                "result",
-            ));
-        flush_dirty_task_runs(&mut state);
-        assert!(
-            state.tasks.has_dirty_task_runs(),
-            "must defer while the ledger is dirty",
-        );
-
-        // Once nothing is pending, the entry is already durable, so the flush writes.
-        state.materializations.mark_saved();
-        flush_dirty_task_runs(&mut state);
-        assert!(
-            !state.tasks.has_dirty_task_runs(),
-            "must persist once no full save is pending",
-        );
-
-        std::fs::remove_dir_all(&root).ok();
-    }
-
-    /// A scratch workspace has no database to persist the ledger into, so
-    /// `persist_project` must resolve its dirty flag on the early-return path.
-    /// Left set, the flag would re-arm the autosave every frame and pin
-    /// `full_save_pending` for the whole session, permanently deferring the
-    /// narrow flushes.
-    #[test]
-    fn scratch_persist_resolves_a_dirty_ledger() {
-        let mut state = AppState::scratch(Default::default(), Vec::new());
-        state
-            .materializations
-            .record(crate::backend::materialization::Materialization::report(
-                "job-1".to_string(),
-                0,
-            ));
-        assert!(state.materializations.is_dirty());
-        assert!(full_save_pending(&state));
-
-        persist_project(&mut state, false).unwrap();
-
-        assert!(
-            !state.materializations.is_dirty(),
-            "scratch persist must resolve the ledger's dirty flag",
-        );
-        assert!(!full_save_pending(&state));
-    }
-}
+mod tests;

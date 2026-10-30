@@ -9,9 +9,9 @@
 //!
 //! All generated files are plaintext and carry a "do not edit" banner.
 
-use std::fs::{self, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail};
@@ -73,24 +73,65 @@ fn parse_manifest_field(contents: &str, key: &str) -> Option<u32> {
     })
 }
 
-/// Acquire the session lock, returning `true` if a stale lock from a previous
-/// run was found (i.e. the last session did not shut down cleanly).
-pub fn acquire_lock(project: &ProjectSession) -> bool {
+/// The session lock held while a process has a project open. The file holds an
+/// OS advisory lock, so a second process (GUI or CLI) cannot open the same
+/// project for writing. The OS drops the advisory lock when the process exits,
+/// even on a crash; the file itself is removed only by [`SessionLock::release`],
+/// which is how the next session detects an unclean shutdown.
+#[derive(Debug)]
+pub struct SessionLock {
+    file: Option<File>,
+    path: PathBuf,
+}
+
+impl SessionLock {
+    /// Release the lock on a clean shutdown / project switch.
+    pub fn release(self) {
+        drop(self.file);
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// Acquire the session lock, returning it with `true` if a stale lock from a
+/// previous run was found (i.e. the last session did not shut down cleanly).
+/// Fails only when another process holds the lock; a lock file that cannot be
+/// created or locked (read-only or lock-less filesystem) never blocks opening.
+pub fn acquire_lock(project: &ProjectSession) -> Result<(SessionLock, bool)> {
     let path = project.silicolab_dir.join(LOCK_FILE);
     let was_stale = path.exists();
+    let Ok(mut file) = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)
+    else {
+        return Ok((SessionLock { file: None, path }, was_stale));
+    };
+    match file.try_lock() {
+        Ok(()) => {}
+        Err(TryLockError::WouldBlock) => bail!(
+            "project {} is already open in another SilicoLab process",
+            project.root.display()
+        ),
+        Err(TryLockError::Error(_)) => return Ok((SessionLock { file: None, path }, was_stale)),
+    }
     let contents = format!(
         "{DO_NOT_EDIT}\nopened {}\npid {}\n",
         utc_timestamp(),
         std::process::id(),
     );
     // Best-effort: a failed lock write must never block opening the project.
-    let _ = fs::write(&path, contents);
-    was_stale
-}
-
-/// Release the session lock on a clean shutdown / project switch.
-pub fn release_lock(project: &ProjectSession) {
-    let _ = fs::remove_file(project.silicolab_dir.join(LOCK_FILE));
+    let _ = file
+        .set_len(0)
+        .and_then(|()| file.write_all(contents.as_bytes()));
+    Ok((
+        SessionLock {
+            file: Some(file),
+            path,
+        },
+        was_stale,
+    ))
 }
 
 /// Compact both project databases with `VACUUM` and append the result to the
@@ -194,11 +235,29 @@ mod tests {
     #[test]
     fn lock_detects_unclean_shutdown() {
         let session = session("lock");
-        assert!(!acquire_lock(&session), "first acquire is clean");
-        // Lock left behind (simulating a crash) is detected on next acquire.
-        assert!(acquire_lock(&session), "lingering lock is stale");
-        release_lock(&session);
-        assert!(!acquire_lock(&session), "released lock is clean again");
+        let (lock, stale) = acquire_lock(&session).unwrap();
+        assert!(!stale, "first acquire is clean");
+        // A crash leaves the file with no holder. Dropping the lock here instead
+        // is racy: a child forked by a parallel test briefly keeps the descriptor,
+        // and with it the advisory lock.
+        lock.release();
+        fs::write(session.silicolab_dir.join(LOCK_FILE), "").unwrap();
+        let (lock, stale) = acquire_lock(&session).unwrap();
+        assert!(stale, "lingering lock is stale");
+        lock.release();
+        let (lock, stale) = acquire_lock(&session).unwrap();
+        assert!(!stale, "released lock is clean again");
+        lock.release();
+    }
+
+    #[test]
+    fn lock_is_exclusive_until_released() {
+        let session = session("exclusive");
+        let (lock, _) = acquire_lock(&session).unwrap();
+        let error = acquire_lock(&session).unwrap_err();
+        assert!(error.to_string().contains("already open"), "{error}");
+        lock.release();
+        acquire_lock(&session).unwrap().0.release();
     }
 
     #[test]

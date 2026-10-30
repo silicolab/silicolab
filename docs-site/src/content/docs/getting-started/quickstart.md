@@ -29,6 +29,18 @@ Pass a script path to run it from the command line, without the GUI:
 silicolab workflow.sls
 ```
 
+By default the script runs in a throwaway workspace and keeps nothing after it
+exits. To build on earlier results, run it inside a saved project:
+
+```sh
+silicolab --project path/to/project workflow.sls
+```
+
+The project is saved after every line, so a long script that is stopped part
+way keeps the steps that finished. A project can be open in only one place at
+a time: the command refuses a project that a SilicoLab window or another script
+already has open.
+
 The same `.sls` scripts also run interactively in the GUI console, so a
 workflow you automate on the command line behaves identically inside the app.
 
