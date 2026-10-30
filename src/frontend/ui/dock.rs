@@ -572,6 +572,7 @@ fn render_task_body(
                 | TaskKind::RunQmOptimize
                 | TaskKind::RunQmFrequencies
                 | TaskKind::RunQmTransitionState
+                | TaskKind::RunQmDynamics
         )
         && let Some(spec) = crate::frontend::dispatcher::task_chart_thumbnail(state, task_run_id)
     {

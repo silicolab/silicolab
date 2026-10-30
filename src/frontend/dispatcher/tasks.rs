@@ -58,17 +58,19 @@ pub(crate) fn qm_default_kind(kind: TaskKind) -> crate::engines::qm::QmKind {
         TaskKind::RunQmOptimize => QmKind::Optimize,
         TaskKind::RunQmFrequencies => QmKind::Frequencies,
         TaskKind::RunQmTransitionState => QmKind::TransitionState,
+        TaskKind::RunQmDynamics => QmKind::Dynamics,
         _ => QmKind::SinglePoint,
     }
 }
 
-/// Mark whichever QM task is active as finished. The three QM tasks share one
+/// Mark whichever QM task is active as finished. The QM tasks share one
 /// panel, so we complete by trying each kind (only the active one matches).
 pub(crate) fn complete_active_qm_task(state: &mut AppState, status: TaskStatus) {
     complete_active_task(state, TaskKind::RunQmEnergy, status);
     complete_active_task(state, TaskKind::RunQmOptimize, status);
     complete_active_task(state, TaskKind::RunQmFrequencies, status);
     complete_active_task(state, TaskKind::RunQmTransitionState, status);
+    complete_active_task(state, TaskKind::RunQmDynamics, status);
 }
 
 pub(crate) fn complete_active_task(state: &mut AppState, kind: TaskKind, status: TaskStatus) {

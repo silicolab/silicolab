@@ -299,15 +299,35 @@ pub(crate) fn apply_qm_outcome(
         .is_some_and(|id| outcome_already_materialized(state, &id.to_string()));
     // A dynamics run's frames go next to its report in the run directory; the
     // final-frame entry then carries them for playback, like a GROMACS run.
-    let trajectory_path = outcome.trajectory.as_ref().and_then(|trajectory| {
-        let run_dir = cx
-            .task_run_id
-            .and_then(|task_id| state.tasks.task_run(task_id))
-            .and_then(|task| task.run_dir.clone())?;
-        let path = run_dir.join(&trajectory.file_name);
-        std::fs::create_dir_all(&run_dir).ok()?;
-        std::fs::write(&path, &trajectory.bytes).ok().map(|()| path)
-    });
+    // Failing to save the frames must not drop the final-frame entry, so it is
+    // reported and the entry is added without playback.
+    let trajectory_path = match outcome.trajectory.as_ref() {
+        None => None,
+        Some(trajectory) => {
+            let run_dir = cx
+                .task_run_id
+                .and_then(|task_id| state.tasks.task_run(task_id))
+                .and_then(|task| task.run_dir.clone());
+            let written = run_dir
+                .ok_or_else(|| anyhow!("the run has no run directory"))
+                .and_then(|run_dir| {
+                    let path = run_dir.join(&trajectory.file_name);
+                    std::fs::create_dir_all(&run_dir)
+                        .and_then(|()| std::fs::write(&path, &trajectory.bytes))
+                        .map_err(|error| anyhow!("write {}: {error}", path.display()))?;
+                    Ok(path)
+                });
+            match written {
+                Ok(path) => Some(path),
+                Err(error) => {
+                    state.status_warning(format!(
+                        "Could not save the MD trajectory, so it cannot be played back: {error:#}"
+                    ));
+                    None
+                }
+            }
+        }
+    };
     if !already {
         match outcome.optimized_structure {
             Some(optimized) => {

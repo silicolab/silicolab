@@ -13,6 +13,7 @@ pub enum TaskKind {
     RunQmOptimize,
     RunQmFrequencies,
     RunQmTransitionState,
+    RunQmDynamics,
     TranslateIntoFirstUnitCell,
     ExpandSupercell,
     PrepareProtein,
@@ -36,6 +37,7 @@ impl TaskKind {
                 | Self::RunQmOptimize
                 | Self::RunQmFrequencies
                 | Self::RunQmTransitionState
+                | Self::RunQmDynamics
         )
     }
 }
@@ -231,7 +233,7 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         description: "Run semi-empirical (GFN-xTB) molecular dynamics with the xtb engine; bonds are \
                       free to break and form. The trajectory plays back with per-frame bonding and \
                       the final frame is added as a new entry.",
-        kind: TaskKind::RunQmOptimize,
+        kind: TaskKind::RunQmDynamics,
         panel: TaskPanelKind::QmPrompt,
         outcome: TaskOutcome::CreateEntry,
         uses_run_directory: true,
