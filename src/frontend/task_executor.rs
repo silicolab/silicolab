@@ -29,6 +29,7 @@ pub(crate) fn mark_task_status(
     status: TaskStatus,
 ) -> anyhow::Result<()> {
     state.tasks.mark_status(task_run_id, status);
+    stamp_result_revision(state, task_run_id);
     sync_task_manifest(state, task_run_id)
 }
 
@@ -38,7 +39,24 @@ pub(crate) fn record_task_result_entry(
     entry_id: u64,
 ) -> anyhow::Result<()> {
     state.tasks.set_result_entry_id(task_run_id, Some(entry_id));
+    stamp_result_revision(state, task_run_id);
     sync_task_manifest(state, task_run_id)
+}
+
+/// Record the anchor entry's revision on a completed run. Also called when the
+/// result entry is recorded, since some flows complete the run first.
+fn stamp_result_revision(state: &mut AppState, task_run_id: u64) {
+    let Some(task) = state.tasks.task_run(task_run_id) else {
+        return;
+    };
+    if task.status != TaskStatus::Completed {
+        return;
+    }
+    let revision = task
+        .anchor_entry_id()
+        .and_then(|entry_id| state.entries.entry(entry_id))
+        .map(|entry| entry.revision);
+    state.tasks.set_result_revision(task_run_id, revision);
 }
 
 const TASK_EXECUTORS: &[TaskExecutor] = &[
@@ -154,6 +172,7 @@ fn run_qm_panel(state: &mut AppState, task_run_id: u64) {
 fn run_translate_into_first_cell(state: &mut AppState, task_run_id: u64) {
     dispatcher::translate_atoms_into_first_unit_cell(state);
     state.tasks.mark_status(task_run_id, TaskStatus::Completed);
+    stamp_result_revision(state, task_run_id);
 }
 
 fn run_supercell_expansion(state: &mut AppState, task_run_id: u64) {
@@ -175,11 +194,13 @@ fn run_disorder_panel(state: &mut AppState, task_run_id: u64) {
 fn run_add_hydrogens(state: &mut AppState, task_run_id: u64) {
     dispatcher::add_hydrogens(state);
     state.tasks.mark_status(task_run_id, TaskStatus::Completed);
+    stamp_result_revision(state, task_run_id);
 }
 
 fn run_recompute_bonds(state: &mut AppState, task_run_id: u64) {
     dispatcher::recompute_bonds(state);
     state.tasks.mark_status(task_run_id, TaskStatus::Completed);
+    stamp_result_revision(state, task_run_id);
 }
 
 fn run_md(state: &mut AppState, task_run_id: u64) {

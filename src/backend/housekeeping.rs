@@ -92,6 +92,15 @@ impl SessionLock {
     }
 }
 
+/// Whether another process currently holds the project's session lock. Never
+/// creates or removes the lock file, so it leaves crash detection untouched.
+pub fn is_locked(project: &ProjectSession) -> bool {
+    let Ok(file) = File::open(project.silicolab_dir.join(LOCK_FILE)) else {
+        return false;
+    };
+    matches!(file.try_lock_shared(), Err(TryLockError::WouldBlock))
+}
+
 /// Acquire the session lock, returning it with `true` if a stale lock from a
 /// previous run was found (i.e. the last session did not shut down cleanly).
 /// Fails only when another process holds the lock; a lock file that cannot be
@@ -256,7 +265,9 @@ mod tests {
         let (lock, _) = acquire_lock(&session).unwrap();
         let error = acquire_lock(&session).unwrap_err();
         assert!(error.to_string().contains("already open"), "{error}");
+        assert!(is_locked(&session));
         lock.release();
+        assert!(!is_locked(&session));
         acquire_lock(&session).unwrap().0.release();
     }
 

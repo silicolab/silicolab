@@ -263,38 +263,7 @@ fn write_project_snapshot_tx(
     )?;
 
     tx.execute("delete from task_runs", [])?;
-    for task in &snapshot.tasks.tasks {
-        tx.execute(
-            "insert into task_runs (
-                id,
-                run_uuid,
-                controller_id,
-                status,
-                run_dir,
-                source_entry_id,
-                result_entry_id,
-                engine_label,
-                created_at_ms,
-                finished_at_ms, inputs_json
-            ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                task.id as i64,
-                task.run_uuid,
-                task.controller_id,
-                task_status_token(task.status),
-                task.run_dir.as_ref().map(path_to_string),
-                task.source_entry_id.map(|id| id as i64),
-                task.result_entry_id.map(|id| id as i64),
-                task.engine_label.as_deref(),
-                task.created_at_ms as i64,
-                task.finished_at_ms.map(|value| value as i64),
-                task.inputs
-                    .as_ref()
-                    .map(serde_json::to_string)
-                    .transpose()?,
-            ],
-        )?;
-    }
+    upsert_task_runs(tx, &snapshot.tasks.tasks.iter().collect::<Vec<_>>())?;
     write_run_graph(tx, &snapshot.tasks.runs)?;
     save_project_view_settings(tx, snapshot.view)?;
     save_assistant_state(tx, snapshot.assistant)?;

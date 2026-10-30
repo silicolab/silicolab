@@ -217,6 +217,10 @@ fn ensure_task_run_columns(db: &Connection) -> Result<()> {
         "finished_at_ms",
         "alter table task_runs add column finished_at_ms integer",
     )?;
+    add_column(
+        "result_revision",
+        "alter table task_runs add column result_revision integer",
+    )?;
     Ok(())
 }
 

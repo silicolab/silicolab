@@ -30,6 +30,11 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    if args[0] == "status" {
+        println!("{}", frontend::run_cli_status(&args[1..])?);
+        return Ok(());
+    }
+
     let request = frontend::parse_cli_script_request(&args)?;
     if let Some(request) = request {
         let result = frontend::run_cli_script(&request)?;
