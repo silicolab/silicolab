@@ -451,6 +451,10 @@ pub struct TaskRun {
     pub source_entry_id: Option<u64>,
     pub inputs: Option<Vec<TaskInput>>,
     pub result_entry_id: Option<u64>,
+    /// Revision of [`Self::anchor_entry_id`] when the run completed, so a later
+    /// edit of that entry is detectable. `None` for runs that have not completed
+    /// and for runs recorded before this was tracked.
+    pub result_revision: Option<u64>,
     pub engine_label: Option<String>,
     pub created_at_ms: u64,
     pub finished_at_ms: Option<u64>,
@@ -484,6 +488,7 @@ impl TaskRun {
             source_entry_id: None,
             inputs: None,
             result_entry_id: None,
+            result_revision: None,
             engine_label: None,
             created_at_ms: now_unix_ms(),
             finished_at_ms: None,
@@ -625,6 +630,13 @@ impl TaskManager {
     pub fn set_result_entry_id(&mut self, task_run_id: u64, entry_id: Option<u64>) {
         if let Some(task) = self.task_run_mut(task_run_id) {
             task.result_entry_id = entry_id;
+        }
+    }
+
+    pub fn set_result_revision(&mut self, task_run_id: u64, revision: Option<u64>) {
+        if let Some(task) = self.task_run_mut(task_run_id) {
+            task.result_revision = revision;
+            self.dirty_task_runs.insert(task_run_id);
         }
     }
 

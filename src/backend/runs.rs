@@ -29,6 +29,8 @@ pub struct RunManifest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub result_entry_id: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub result_revision: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub engine: Option<&'a str>,
 }
 
@@ -47,6 +49,7 @@ impl<'a> RunManifest<'a> {
             source_entry_id: task.source_entry_id,
             inputs: task.inputs.as_deref(),
             result_entry_id: task.result_entry_id,
+            result_revision: task.result_revision,
             engine: task.engine_label.as_deref(),
         }
     }

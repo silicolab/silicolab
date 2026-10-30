@@ -4,6 +4,7 @@ pub mod config;
 pub mod engine_launch;
 pub mod entries;
 pub mod force_fields;
+pub mod freshness;
 pub mod hardware;
 pub mod history;
 pub mod housekeeping;

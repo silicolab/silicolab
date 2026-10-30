@@ -103,6 +103,36 @@ pub fn load_project_snapshot(session: &ProjectSession) -> Result<ProjectSnapshot
     })
 }
 
+/// A project's entries and tasks, for a read-only report.
+pub struct ProjectOverview {
+    pub name: String,
+    pub entries: EntryStore,
+    pub tasks: TaskManager,
+}
+
+/// Load entries and tasks without writing anything: both databases open
+/// read-only and schema initialization is skipped, so this is safe while
+/// another process has the project open. Unlike [`load_project_snapshot`], a
+/// project from an older version is not migrated.
+pub fn load_project_overview(session: &ProjectSession) -> Result<ProjectOverview> {
+    let open = |path: &Path| {
+        Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("failed to open {} read-only", path.display()))
+    };
+    let project_db = open(&session.project_db)?;
+    let compounds_db = open(&session.compounds_db)?;
+    let name = project_meta(&project_db, "name")?.unwrap_or_else(|| session.name.clone());
+    let entries = load_entries(&project_db, &compounds_db).context(
+        "the project may need to be opened once by this SilicoLab version before `status` can read it",
+    )?;
+    let tasks = load_tasks(&project_db)?;
+    Ok(ProjectOverview {
+        name,
+        entries,
+        tasks,
+    })
+}
+
 /// Load a single compound's structure on demand (used for lazy loading entries
 /// that were not materialized when the project was opened).
 pub fn load_structure_for_compound(compounds_db: &Path, compound_id: i64) -> Result<Structure> {
@@ -263,38 +293,7 @@ fn write_project_snapshot_tx(
     )?;
 
     tx.execute("delete from task_runs", [])?;
-    for task in &snapshot.tasks.tasks {
-        tx.execute(
-            "insert into task_runs (
-                id,
-                run_uuid,
-                controller_id,
-                status,
-                run_dir,
-                source_entry_id,
-                result_entry_id,
-                engine_label,
-                created_at_ms,
-                finished_at_ms, inputs_json
-            ) values (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            params![
-                task.id as i64,
-                task.run_uuid,
-                task.controller_id,
-                task_status_token(task.status),
-                task.run_dir.as_ref().map(path_to_string),
-                task.source_entry_id.map(|id| id as i64),
-                task.result_entry_id.map(|id| id as i64),
-                task.engine_label.as_deref(),
-                task.created_at_ms as i64,
-                task.finished_at_ms.map(|value| value as i64),
-                task.inputs
-                    .as_ref()
-                    .map(serde_json::to_string)
-                    .transpose()?,
-            ],
-        )?;
-    }
+    upsert_task_runs(tx, &snapshot.tasks.tasks.iter().collect::<Vec<_>>())?;
     write_run_graph(tx, &snapshot.tasks.runs)?;
     save_project_view_settings(tx, snapshot.view)?;
     save_assistant_state(tx, snapshot.assistant)?;

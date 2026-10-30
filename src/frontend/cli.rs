@@ -1,8 +1,15 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::BTreeMap,
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result, anyhow, bail};
+use serde_json::{Value, json};
 
-use crate::backend::config::load_config;
+use crate::backend::{
+    config::load_config, freshness, housekeeping, project::read_project_overview,
+    storage::task_status_token,
+};
 use crate::frontend::{
     console::run_script_file_with_args,
     dispatcher::{close_project_headless, open_project_headless, persist_project},
@@ -107,8 +114,77 @@ fn checkpoint(state: &mut AppState) -> Result<()> {
     persist_project(state, false)
 }
 
+/// `silicolab status --project <dir>`: a JSON report of the project's entries
+/// and tasks, with whether each completed task still matches the current
+/// entries. It never writes to the project and takes no lock, so it works while
+/// the project is open elsewhere; it reflects the last save.
+pub fn run_cli_status(args: &[String]) -> Result<String> {
+    let project = match args {
+        [flag, dir] if flag == "--project" => PathBuf::from(dir),
+        _ => bail!("usage: silicolab status --project <dir>"),
+    };
+    let report = project_status(&project)
+        .with_context(|| format!("failed to read project {}", project.display()))?;
+    Ok(serde_json::to_string_pretty(&report)?)
+}
+
+fn project_status(path: &Path) -> Result<Value> {
+    let (session, snapshot) = read_project_overview(path)?;
+    let assessed = freshness::assess(&snapshot.tasks, &snapshot.entries);
+    let entries: Vec<Value> = snapshot
+        .entries
+        .records
+        .iter()
+        .map(|entry| json!({"id": entry.id, "name": entry.name, "revision": entry.revision}))
+        .collect();
+    let tasks: Vec<Value> = snapshot
+        .tasks
+        .tasks
+        .iter()
+        .map(|task| {
+            let freshness = assessed
+                .get(&task.id)
+                .unwrap_or(&freshness::Freshness::NotApplicable);
+            json!({
+                "id": task.id,
+                "run_uuid": task.run_uuid,
+                "task": task.controller_id,
+                "title": task.title,
+                "status": task_status_token(task.status),
+                "inputs": task.inputs,
+                "result_entry": task.result_entry_id,
+                "result_revision": task.result_revision,
+                "freshness": freshness.token(),
+                "stale_reasons": freshness.reasons(),
+            })
+        })
+        .collect();
+    let count = |token: &str| {
+        assessed
+            .values()
+            .filter(|freshness| freshness.token() == token)
+            .count()
+    };
+    Ok(json!({
+        "project": {
+            "name": session.name,
+            "root": session.root,
+            "open_elsewhere": housekeeping::is_locked(&session),
+        },
+        "active_entry": snapshot.entries.active_entry_id(),
+        "entries": entries,
+        "tasks": tasks,
+        "summary": {
+            "current": count("current"),
+            "stale": count("stale"),
+            "unknown": count("unknown"),
+            "not_completed": count("not_applicable"),
+        },
+    }))
+}
+
 pub fn cli_help_text() -> &'static str {
-    "SilicoLab\n\nUsage:\n  silicolab                  Launch the GUI\n  silicolab [--project <dir>] <script.sls> [--name value | --flag]\n\nScript arguments are passed to ${name} placeholders in the script.\nWith --project the script runs inside that project and saves it after each\nline; without it the script runs in a throwaway scratch workspace.\n"
+    "SilicoLab\n\nUsage:\n  silicolab                  Launch the GUI\n  silicolab [--project <dir>] <script.sls> [--name value | --flag]\n  silicolab status --project <dir>\n\nScript arguments are passed to ${name} placeholders in the script.\nWith --project the script runs inside that project and saves it after each\nline; without it the script runs in a throwaway scratch workspace.\n\n`status` prints the project's entries and tasks as JSON, marking each completed\ntask current or stale against the entries' latest revisions.\n"
 }
 
 fn parse_named_script_args(args: &[String]) -> Result<BTreeMap<String, String>> {
@@ -254,5 +330,95 @@ mod tests {
         assert!(format!("{error:#}").contains("already open"), "{error:#}");
         held.release();
         run_cli_script(&request).unwrap();
+    }
+
+    #[test]
+    fn status_reports_results_made_stale_by_a_later_edit() {
+        let root = PathBuf::from("target/test-cli-status");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let project = create_project(&root, "demo").unwrap();
+        fs::write(root.join("o.xyz"), "1\no\nO 0 0 0\n").unwrap();
+        let run = |name: &str, body: String| {
+            let script = root.join(name);
+            fs::write(&script, body).unwrap();
+            run_cli_script(&CliScriptRequest {
+                project: Some(project.root.clone()),
+                script_path: script,
+                script_args: BTreeMap::new(),
+            })
+            .unwrap();
+        };
+        let status = || -> serde_json::Value {
+            let args = ["--project".to_string(), project.root.display().to_string()];
+            serde_json::from_str(&super::run_cli_status(&args).unwrap()).unwrap()
+        };
+
+        run(
+            "energy.sls",
+            format!(
+                "open {}\nhydrogen add\nqm energy --method rhf --basis sto-3g\n",
+                root.join("o.xyz").display()
+            ),
+        );
+        let report = status();
+        assert_eq!(report["summary"]["stale"], 0, "{report:#}");
+        assert_eq!(report["project"]["open_elsewhere"], false);
+        let energy = report["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["task"] == "qm-energy")
+            .unwrap();
+        assert_eq!(energy["freshness"], "current", "{report:#}");
+
+        run("edit.sls", "delete chain A\nhydrogen add\n".to_string());
+        let report = status();
+        let energy = report["tasks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|task| task["task"] == "qm-energy")
+            .unwrap();
+        assert_eq!(energy["freshness"], "stale", "{report:#}");
+        assert_eq!(energy["stale_reasons"][0]["kind"], "input_edited");
+    }
+
+    #[test]
+    fn status_never_writes_even_to_an_unmigrated_project() {
+        let root = PathBuf::from("target/test-cli-status-readonly");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let project = create_project(&root, "demo").unwrap();
+        fs::write(root.join("o.xyz"), "1\no\nO 0 0 0\n").unwrap();
+        let script = root.join("energy.sls");
+        fs::write(
+            &script,
+            format!(
+                "open {}\nqm energy --method rhf --basis sto-3g\n",
+                root.join("o.xyz").display()
+            ),
+        )
+        .unwrap();
+        run_cli_script(&CliScriptRequest {
+            project: Some(project.root.clone()),
+            script_path: script,
+            script_args: BTreeMap::new(),
+        })
+        .unwrap();
+        // Simulate a project last saved before result revisions existed.
+        rusqlite::Connection::open(&project.project_db)
+            .unwrap()
+            .execute("alter table task_runs drop column result_revision", [])
+            .unwrap();
+        let before = fs::read(&project.project_db).unwrap();
+
+        let args = ["--project".to_string(), project.root.display().to_string()];
+        let report: serde_json::Value =
+            serde_json::from_str(&super::run_cli_status(&args).unwrap()).unwrap();
+
+        assert_eq!(fs::read(&project.project_db).unwrap(), before);
+        assert_eq!(report["tasks"][0]["freshness"], "current", "{report:#}");
+        assert!(report["tasks"][0]["result_revision"].is_null());
     }
 }

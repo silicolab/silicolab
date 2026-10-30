@@ -43,6 +43,7 @@ pub use app::run;
 pub use block_editor::BuildingBlockEditor;
 pub use cli::{
     CliScriptRequest, CliScriptResult, cli_help_text, parse_cli_script_request, run_cli_script,
+    run_cli_status,
 };
 pub use console::CommandConsoleState;
 pub use nanosheet_panel::NanosheetBuilderPanel;
