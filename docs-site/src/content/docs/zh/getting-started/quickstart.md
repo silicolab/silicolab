@@ -79,6 +79,18 @@ revision 时才运行 MD；写文件（`export`、`save`、`fetch --dir`）只�
 里。这些校验选项不加 `--strict` 也能在脚本和控制台里使用，只是在严格模式下是
 必需的。
 
+支持 Model Context Protocol（MCP）的助手可以通过工具而不是 shell 命令来操作项目。
+把 SilicoLab 注册为 MCP 服务器，例如在 Claude Code 中：
+
+```sh
+claude mcp add silicolab -- silicolab mcp --project path/to/project
+```
+
+服务器提供三个工具：`project_status`（即 `status` 报告）、`run_commands`（运行
+控制台命令，始终按严格模式校验）和 `command_catalog`（命令参考）。每次调用都会
+打开项目、保存并关闭，所以两次调用之间仍然可以在应用里打开这个项目。计算会在
+调用返回之前完成。
+
 同样的 `.sls` 脚本也可以在图形界面的控制台中交互执行——在命令行里自动化
 的工作流，在应用内的行为完全一致。
 

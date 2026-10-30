@@ -13,6 +13,7 @@ mod glycan_commands;
 mod gpu_inventory;
 pub(crate) mod gpu_monitor;
 mod jobs;
+mod mcp;
 mod md_commands;
 mod md_support;
 #[cfg(target_os = "macos")]
@@ -46,6 +47,7 @@ pub use cli::{
     run_cli_status,
 };
 pub use console::CommandConsoleState;
+pub use mcp::run_mcp_server;
 pub use nanosheet_panel::NanosheetBuilderPanel;
 pub use reticular_panel::ReticularBuilderPanel;
 pub use selection::AtomSelection;

@@ -84,16 +84,31 @@ pub fn parse_cli_script_request(args: &[String]) -> Result<Option<CliScriptReque
 }
 
 pub fn run_cli_script(request: &CliScriptRequest) -> Result<CliScriptResult> {
+    let Some(project) = &request.project else {
+        let mut state = AppState::scratch(load_config_reporting_warning(), Vec::new());
+        return run_script(&mut state, request, ScriptPolicy::default());
+    };
+    with_project(project, request.strict, |state, policy| {
+        run_script(state, request, policy)
+    })
+}
+
+fn load_config_reporting_warning() -> crate::backend::config::AppConfig {
     let (config, config_warning) = load_config();
     if let Some(warning) = config_warning {
         eprintln!("warning: {warning}");
     }
-    let Some(project) = &request.project else {
-        let mut state = AppState::scratch(config, Vec::new());
-        return run_script(&mut state, request, ScriptPolicy::default());
-    };
+    config
+}
 
-    let (mut state, warnings) = open_project_headless(project, config)
+/// Open `project`, run `body` under the project's script policy, then save and
+/// close the project whether or not `body` succeeded.
+pub(crate) fn with_project<T>(
+    project: &Path,
+    strict: bool,
+    body: impl FnOnce(&mut AppState, ScriptPolicy) -> Result<T>,
+) -> Result<T> {
+    let (mut state, warnings) = open_project_headless(project, load_config_reporting_warning())
         .with_context(|| format!("failed to open project {}", project.display()))?;
     for warning in warnings {
         eprintln!("warning: {warning}");
@@ -101,9 +116,9 @@ pub fn run_cli_script(request: &CliScriptRequest) -> Result<CliScriptResult> {
     // Saving after every line keeps finished steps if a long run is killed.
     let policy = ScriptPolicy {
         checkpoint: Some(checkpoint),
-        strict: request.strict,
+        strict,
     };
-    let result = run_script(&mut state, request, policy);
+    let result = body(&mut state, policy);
     let closed = close_project_headless(&mut state)
         .with_context(|| format!("failed to save project {}", project.display()));
     match (result, closed) {
@@ -150,7 +165,7 @@ pub fn run_cli_status(args: &[String]) -> Result<String> {
     Ok(serde_json::to_string_pretty(&report)?)
 }
 
-fn project_status(path: &Path) -> Result<Value> {
+pub(crate) fn project_status(path: &Path) -> Result<Value> {
     let (session, snapshot) = read_project_overview(path)?;
     let assessed = freshness::assess(&snapshot.tasks, &snapshot.entries);
     let entries: Vec<Value> = snapshot
@@ -208,7 +223,7 @@ fn project_status(path: &Path) -> Result<Value> {
 }
 
 pub fn cli_help_text() -> &'static str {
-    "SilicoLab\n\nUsage:\n  silicolab                  Launch the GUI\n  silicolab [--project <dir> [--strict]] <script.sls> [--name value | --flag]\n  silicolab status --project <dir>\n\nScript arguments are passed to ${name} placeholders in the script.\nWith --project the script runs inside that project and saves it after each\nline; without it the script runs in a throwaway scratch workspace.\n\n--strict applies the rules for an AI agent: each calculation must pin its\ninputs with `--entry #id@revision` before the command, stale inputs are\nrefused unless `--allow-stale` is given, `--request-id` makes retries safe,\nunconverged QM steps fail, MD needs a build of the current revision, and\nfiles are written only inside the project.\n\n`status` prints the project's entries and tasks as JSON, marking each completed\ntask current or stale against the entries' latest revisions.\n"
+    "SilicoLab\n\nUsage:\n  silicolab                  Launch the GUI\n  silicolab [--project <dir> [--strict]] <script.sls> [--name value | --flag]\n  silicolab status --project <dir>\n  silicolab mcp --project <dir>\n\nScript arguments are passed to ${name} placeholders in the script.\nWith --project the script runs inside that project and saves it after each\nline; without it the script runs in a throwaway scratch workspace.\n\n--strict applies the rules for an AI agent: each calculation must pin its\ninputs with `--entry #id@revision` before the command, stale inputs are\nrefused unless `--allow-stale` is given, `--request-id` makes retries safe,\nunconverged QM steps fail, MD needs a build of the current revision, and\nfiles are written only inside the project.\n\n`status` prints the project's entries and tasks as JSON, marking each completed\ntask current or stale against the entries' latest revisions.\n\n`mcp` serves the project to an MCP client over stdio, with tools for status,\nrunning console lines under the --strict rules, and the command catalog.\n"
 }
 
 fn parse_named_script_args(args: &[String]) -> Result<BTreeMap<String, String>> {
