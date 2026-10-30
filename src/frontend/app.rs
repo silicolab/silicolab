@@ -256,11 +256,14 @@ impl SilicoLabApp {
         let mut recent_projects = load_recent_projects();
         let mut state = if !config.closed_to_scratch {
             if let Some(last_project_path) = config.last_project_path.clone() {
-                match open_project(&last_project_path) {
-                    Ok((project, snapshot)) => {
+                let opened = open_project(&last_project_path).and_then(|(project, snapshot)| {
+                    let (lock, recovered) = housekeeping::acquire_lock(&project)?;
+                    Ok((project, snapshot, lock, recovered))
+                });
+                match opened {
+                    Ok((project, snapshot, lock, recovered_from_crash)) => {
                         let _ =
                             remember_opened_project(&mut config, &mut recent_projects, &project);
-                        let recovered_from_crash = housekeeping::acquire_lock(&project);
                         if !snapshot.warnings.is_empty() {
                             startup_message = Some(append_message(
                                 startup_message.take(),
@@ -275,6 +278,7 @@ impl SilicoLabApp {
                             recent_projects,
                             Some(snapshot),
                         );
+                        state.project_lock = Some(lock);
                         if recovered_from_crash {
                             startup_message = Some(append_message(
                                 startup_message.take(),

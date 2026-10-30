@@ -59,11 +59,16 @@ impl Default for CommandConsoleState {
     }
 }
 
+/// Run after each script line that succeeds, e.g. to persist a project so a
+/// killed run keeps the steps that already finished.
+pub type ScriptCheckpoint = fn(&mut AppState) -> Result<()>;
+
 #[derive(Debug, Clone)]
 pub struct ScriptContext {
     variables: BTreeMap<String, String>,
     stdout_lines: Vec<String>,
     gpu_image_export: bool,
+    checkpoint: Option<ScriptCheckpoint>,
 }
 
 impl Default for ScriptContext {
@@ -72,6 +77,7 @@ impl Default for ScriptContext {
             variables: BTreeMap::new(),
             stdout_lines: Vec::new(),
             gpu_image_export: true,
+            checkpoint: None,
         }
     }
 }
@@ -123,10 +129,12 @@ pub fn run_script_file_with_args(
     state: &mut AppState,
     script_path: &std::path::Path,
     variables: BTreeMap<String, String>,
+    checkpoint: Option<ScriptCheckpoint>,
 ) -> Result<ScriptRunResult> {
     let mut context = ScriptContext {
         variables,
         gpu_image_export: false,
+        checkpoint,
         ..ScriptContext::default()
     };
     run_script_path_with_context(state, &mut context, &script_path.display().to_string())?;
@@ -189,6 +197,9 @@ pub(crate) fn run_script_path_with_context(
         let output = execute_console_line_with_context(state, trimmed, context)?;
         if !output.is_empty() {
             context.stdout_lines.push(output);
+        }
+        if let Some(checkpoint) = context.checkpoint {
+            checkpoint(state)?;
         }
     }
     Ok(())
