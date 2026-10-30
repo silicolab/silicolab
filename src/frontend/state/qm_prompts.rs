@@ -280,7 +280,7 @@ impl QmPrompt {
                 "def2-svp"
             }
         };
-        Self {
+        let mut prompt = Self {
             engine: crate::engines::qm::QmEngine::Hartree,
             method: QmMethod::Dft("b3lyp".to_string()),
             custom_functional: String::new(),
@@ -298,7 +298,16 @@ impl QmPrompt {
             periodic_form: PeriodicQmForm::default(),
             memory_report: None,
             prefs: ExecutionPrefs::default(),
+        };
+        // Only xtb runs dynamics, so the dynamics task opens on its form.
+        if kind == QmKind::Dynamics {
+            prompt.engine = crate::engines::qm::QmEngine::Xtb;
+            prompt.method = QmMethod::Dft("gfn2-xtb".to_string());
+            prompt.basis = String::new();
+            prompt.options.dispersion = None;
+            prompt.options.md = Some(crate::engines::qm::QmMdConfig::default());
         }
+        prompt
     }
 
     /// Build the molecular engine request from this form against `structure`.
@@ -452,6 +461,21 @@ mod tests {
         let mut solvated = base.clone();
         solvated.options.solvation = Some(crate::engines::qm::QmSolvation::Smd("water".into()));
         assert_eq!(base_sig, solvated.memory_signature(&structure));
+    }
+
+    #[test]
+    fn dynamics_task_opens_on_the_xtb_form() {
+        let controller = crate::backend::tasks::task_controller_by_id("qm-dynamics").unwrap();
+        let kind = crate::frontend::dispatcher::qm_default_kind(controller.kind);
+        assert_eq!(kind, QmKind::Dynamics);
+        let prompt = QmPrompt::new(kind);
+        assert_eq!(prompt.engine, crate::engines::qm::QmEngine::Xtb);
+        assert_eq!(prompt.method, QmMethod::Dft("gfn2-xtb".into()));
+        assert!(prompt.basis.is_empty());
+        assert_eq!(prompt.options.dispersion, None);
+        assert!(prompt.options.md.is_some());
+        let request = prompt.to_request(water(), None);
+        assert_eq!(request.kind, QmKind::Dynamics);
     }
 
     #[test]
