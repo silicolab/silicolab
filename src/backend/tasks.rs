@@ -222,6 +222,21 @@ const TASK_CONTROLLERS: &[TaskController] = &[
         uses_run_directory: true,
     },
     TaskController {
+        id: "qm-dynamics",
+        title: "Reactive Molecular Dynamics (xtb)",
+        short_title: "QM Dynamics",
+        theme: "Electronic Structure",
+        method: "GFN-xTB Born–Oppenheimer MD",
+        application: "Adsorption, Bond Breaking and Forming",
+        description: "Run semi-empirical (GFN-xTB) molecular dynamics with the xtb engine; bonds are \
+                      free to break and form. The trajectory plays back with per-frame bonding and \
+                      the final frame is added as a new entry.",
+        kind: TaskKind::RunQmOptimize,
+        panel: TaskPanelKind::QmPrompt,
+        outcome: TaskOutcome::CreateEntry,
+        uses_run_directory: true,
+    },
+    TaskController {
         id: "translate-into-cell",
         title: "Wrap Atoms Into First Cell",
         short_title: "Wrap Into Cell",

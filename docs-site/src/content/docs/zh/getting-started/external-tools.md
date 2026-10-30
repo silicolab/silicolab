@@ -22,6 +22,21 @@ Windows 中使用 WSL 版 ORCA 时，将命令前缀设为 `wsl.exe -e`，程序
 ORCA 默认使用一个 CPU 核心；请求更多核心会启用 `%pal` 并行模式，并要求目标
 环境中能够调用 `mpirun`。
 
+## xtb
+
+[xtb](https://github.com/grimme-lab/xtb) 提供 GFN2-xTB、GFN1-xTB 和 GFN-FF
+半经验方法，支持分子体系的单点能、几何优化、频率计算和反应性分子动力学
+（`qm md`）。对过渡金属团簇这类 DFT 要算数小时的体系，GFN-xTB 只需数秒，但精度
+有限，能量和轨迹应视为定性结果。
+
+可用 `conda install -c conda-forge xtb` 安装，或下载发布版二进制文件。SilicoLab
+会在 `PATH` 和常见的 Homebrew 路径中查找 `xtb`。若安装在其他位置（例如 conda
+环境中，从 Finder 启动的应用看不到），请在 **Settings > Compute > Compute targets**
+的 xtb 行中填写 **Program**，再选择 **Verify**。
+
+在 QM 任务面板中选择 xtb，或在脚本中运行 `qm md --temp 300 --time 2`（`qm md`
+默认使用 xtb）。计算结束后会自动播放生成的多帧 XYZ 轨迹，并逐帧重新判断成键。
+
 ## GROMACS
 
 分子动力学模拟需要单独安装 [GROMACS](https://www.gromacs.org/)。

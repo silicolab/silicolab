@@ -157,6 +157,16 @@ const ENGINE_SPECS: &[EngineSpec] = &[
         identity_marker: "ORCA",
         requires_configured_path: true,
     },
+    EngineSpec {
+        id: EngineId::XTB,
+        name: "xtb",
+        description: "Optional GFN-xTB semi-empirical energies, optimizations, and reactive molecular dynamics.",
+        candidate_executables: &["xtb", "/opt/homebrew/bin/xtb", "/usr/local/bin/xtb"],
+        version_args: &["--version"],
+        identity_allows_nonzero_exit: true,
+        identity_marker: "xtb",
+        requires_configured_path: false,
+    },
 ];
 
 /// The detection spec for `id`, or `None` for a built-in engine (no executable).

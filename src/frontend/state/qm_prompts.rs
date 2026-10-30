@@ -276,7 +276,9 @@ impl QmPrompt {
         // energies (where the higher cost buys a noticeably better number).
         let basis = match kind {
             QmKind::SinglePoint => "def2-tzvp",
-            QmKind::Optimize | QmKind::Frequencies | QmKind::TransitionState => "def2-svp",
+            QmKind::Optimize | QmKind::Frequencies | QmKind::TransitionState | QmKind::Dynamics => {
+                "def2-svp"
+            }
         };
         Self {
             engine: crate::engines::qm::QmEngine::Hartree,

@@ -71,6 +71,7 @@ fn finished_job_posts_notice_and_clears_the_registry() {
         scf_trace: Vec::new(),
         opt_trace: Vec::new(),
         frequencies: Vec::new(),
+        trajectory: None,
     })))
     .unwrap();
     drop(tx);
@@ -118,6 +119,7 @@ fn unowned_qm_result_reports_rejection_without_success_notice() {
         scf_trace: vec![],
         opt_trace: vec![],
         frequencies: vec![],
+        trajectory: None,
     })))
     .unwrap();
     let conversation = state.ui.agent.active_conversation;
@@ -230,6 +232,7 @@ fn job_finishing_in_inactive_conversation_routes_to_its_origin() {
         scf_trace: Vec::new(),
         opt_trace: Vec::new(),
         frequencies: Vec::new(),
+        trajectory: None,
     })))
     .unwrap();
     drop(tx);

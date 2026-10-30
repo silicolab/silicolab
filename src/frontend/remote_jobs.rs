@@ -148,6 +148,7 @@ fn engine_id_token(engine: &crate::wire::Engine) -> &'static str {
         crate::wire::Engine::Qm(job) => match job.engine {
             crate::engines::qm::QmEngine::Hartree => EngineId::HARTREE.as_str(),
             crate::engines::qm::QmEngine::Orca => EngineId::ORCA.as_str(),
+            crate::engines::qm::QmEngine::Xtb => EngineId::XTB.as_str(),
         },
         crate::wire::Engine::Docking(_) => EngineId::DOCKING.as_str(),
         crate::wire::Engine::Gromacs(_) => EngineId::GROMACS.as_str(),

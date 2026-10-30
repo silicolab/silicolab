@@ -13,6 +13,7 @@ fn outcome(report: &str, energy: f64) -> QmOutcome {
         scf_trace: vec![-0.5, energy],
         opt_trace: vec![],
         frequencies: vec![40.0, 80.0],
+        trajectory: None,
     }
 }
 fn query(state: &mut AppState, input: Value) -> Value {

@@ -31,6 +31,25 @@ parallel mode and requires `mpirun` to be available in the target environment.
 Remote hosts have their own ORCA program setting. Enter a path valid on that
 host; a local path is never copied to a remote target.
 
+## xtb
+
+[xtb](https://github.com/grimme-lab/xtb) adds the GFN2-xTB, GFN1-xTB, and
+GFN-FF semi-empirical methods for molecular single points, geometry
+optimizations, frequencies, and reactive molecular dynamics (`qm md`). GFN-xTB
+handles systems such as transition-metal clusters in seconds, where DFT would
+take hours, at the cost of accuracy: treat its energies and trajectories as
+qualitative.
+
+Install xtb with `conda install -c conda-forge xtb`, or download a release
+binary. SilicoLab looks for `xtb` on `PATH` and in the usual Homebrew
+locations. If it is elsewhere (for example inside a conda environment, which an
+app launched from the Finder does not see), enter the path under **Program** in
+the xtb row of **Settings > Compute > Compute targets** and select **Verify**.
+
+Select xtb in the QM task panel, or run `qm md --temp 300 --time 2` in a script
+(`qm md` uses xtb by default). The run's multi-frame XYZ trajectory opens for
+playback when it finishes, with bonds re-perceived on every frame.
+
 ## GROMACS
 
 Molecular dynamics simulations require

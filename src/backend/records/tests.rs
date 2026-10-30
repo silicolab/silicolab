@@ -228,6 +228,7 @@ fn qm_facts_do_not_invent_empty_or_nonfinite_values() {
         scf_trace: vec![],
         opt_trace: vec![],
         frequencies: vec![f64::NAN, -3.0, 20.0],
+        trajectory: None,
     };
     let facts = qm::QmFacts::from_outcome(&o, None);
     assert_eq!(facts.energy_hartree, None);

@@ -68,6 +68,13 @@ pub(super) fn render_workspace(
                     .active_entry()
                     .map(|entry| entry.origin.is_md_run())
                     .unwrap_or(false);
+                if is_md_entry
+                    && let Some(entry_id) = state.entries.active_entry_id()
+                    && state.ui.autoplay_trajectory == Some(entry_id)
+                {
+                    state.ui.autoplay_trajectory = None;
+                    actions.push(AppAction::LoadTrajectory(entry_id, None));
+                }
                 if is_md_entry {
                     let pal = crate::frontend::theme::palette(ui);
                     egui::Panel::bottom("trajectory_controls")

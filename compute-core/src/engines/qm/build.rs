@@ -116,6 +116,11 @@ pub(crate) fn build_job(
     options: &QmOptions,
     ts: Option<&QmTsConfig>,
 ) -> Result<ResolvedJob> {
+    if kind == QmKind::Dynamics {
+        bail!(
+            "molecular dynamics runs on the xtb engine (`--engine xtb`), not the built-in engine"
+        );
+    }
     let molecule = molecule_from_structure(structure, charge, multiplicity)?;
 
     // Transition-state search is gated to the same gradient-capable, in-core,

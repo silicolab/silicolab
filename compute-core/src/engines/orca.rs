@@ -79,7 +79,7 @@ pub fn render_input(request: &QmRequest, cores: Option<usize>) -> Result<String>
         QmKind::SinglePoint => {}
         QmKind::Optimize => keywords.push("Opt".to_string()),
         QmKind::Frequencies => keywords.push("Freq".to_string()),
-        QmKind::TransitionState => unreachable!("validated above"),
+        QmKind::TransitionState | QmKind::Dynamics => unreachable!("validated above"),
     }
     if let Some(dispersion) = request.options.dispersion {
         keywords.push(
@@ -141,7 +141,7 @@ fn validate_request(request: &QmRequest) -> Result<()> {
     if request.structure.atoms.is_empty() {
         bail!("ORCA request has no atoms");
     }
-    if request.kind == QmKind::TransitionState {
+    if matches!(request.kind, QmKind::TransitionState | QmKind::Dynamics) {
         bail!("ORCA support currently covers single-point, optimization, and frequencies only");
     }
     if request.multiplicity == 0 {
@@ -225,6 +225,7 @@ fn parse_outcome(request: &QmRequest, run_dir: &Path, output: &str) -> Result<Qm
         scf_trace: Vec::new(),
         opt_trace: Vec::new(),
         frequencies,
+        trajectory: None,
     })
 }
 
