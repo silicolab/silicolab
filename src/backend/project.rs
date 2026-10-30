@@ -7,8 +7,9 @@ use crate::backend::{
         AppConfig, RecentProject, remember_recent_project, save_config, save_recent_projects,
     },
     storage::{
-        ProjectSnapshot, ProjectSnapshotRef, initialize_project_databases, load_project_snapshot,
-        save_project_snapshot, save_project_snapshot_ref,
+        ProjectOverview, ProjectSnapshot, ProjectSnapshotRef, initialize_project_databases,
+        load_project_overview, load_project_snapshot, save_project_snapshot,
+        save_project_snapshot_ref,
     },
 };
 
@@ -114,7 +115,7 @@ pub fn create_project(root: &Path, name: &str) -> Result<ProjectSession> {
     Ok(session)
 }
 
-pub fn open_project(path: &Path) -> Result<(ProjectSession, ProjectSnapshot)> {
+fn existing_project_session(path: &Path) -> Result<ProjectSession> {
     if !is_valid_project_dir(path) {
         bail!("not a valid SilicoLab project");
     }
@@ -123,10 +124,23 @@ pub fn open_project(path: &Path) -> Result<(ProjectSession, ProjectSnapshot)> {
         .and_then(|name| name.to_str())
         .unwrap_or("SilicoLab Project")
         .to_string();
-    let mut session = ProjectSession::from_root(path.to_path_buf(), fallback_name);
+    let session = ProjectSession::from_root(path.to_path_buf(), fallback_name);
     // Check the plaintext manifest before touching the databases so an
     // incompatible (newer-format) project fails fast with a clear message.
     crate::backend::housekeeping::check_manifest_compatibility(&session)?;
+    Ok(session)
+}
+
+/// Read a project's entries and tasks without writing to it.
+pub fn read_project_overview(path: &Path) -> Result<(ProjectSession, ProjectOverview)> {
+    let mut session = existing_project_session(path)?;
+    let overview = load_project_overview(&session)?;
+    session.name = overview.name.clone();
+    Ok((session, overview))
+}
+
+pub fn open_project(path: &Path) -> Result<(ProjectSession, ProjectSnapshot)> {
+    let mut session = existing_project_session(path)?;
     let snapshot = load_project_snapshot(&session)?;
     session.name = snapshot.name.clone();
     session.project_id = Some(ProjectId::from_stored(snapshot.project_id.clone()));

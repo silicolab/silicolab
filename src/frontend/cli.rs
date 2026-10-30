@@ -7,7 +7,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::{Value, json};
 
 use crate::backend::{
-    config::load_config, freshness, housekeeping, project::open_project, storage::task_status_token,
+    config::load_config, freshness, housekeeping, project::read_project_overview,
+    storage::task_status_token,
 };
 use crate::frontend::{
     console::run_script_file_with_args,
@@ -115,8 +116,8 @@ fn checkpoint(state: &mut AppState) -> Result<()> {
 
 /// `silicolab status --project <dir>`: a JSON report of the project's entries
 /// and tasks, with whether each completed task still matches the current
-/// entries. Read-only and lock-free, so it works while the project is open
-/// elsewhere; it reflects the last save.
+/// entries. It never writes to the project and takes no lock, so it works while
+/// the project is open elsewhere; it reflects the last save.
 pub fn run_cli_status(args: &[String]) -> Result<String> {
     let project = match args {
         [flag, dir] if flag == "--project" => PathBuf::from(dir),
@@ -128,7 +129,7 @@ pub fn run_cli_status(args: &[String]) -> Result<String> {
 }
 
 fn project_status(path: &Path) -> Result<Value> {
-    let (session, snapshot) = open_project(path)?;
+    let (session, snapshot) = read_project_overview(path)?;
     let assessed = freshness::assess(&snapshot.tasks, &snapshot.entries);
     let entries: Vec<Value> = snapshot
         .entries
@@ -179,7 +180,6 @@ fn project_status(path: &Path) -> Result<Value> {
             "unknown": count("unknown"),
             "not_completed": count("not_applicable"),
         },
-        "warnings": snapshot.warnings,
     }))
 }
 
@@ -382,5 +382,43 @@ mod tests {
             .unwrap();
         assert_eq!(energy["freshness"], "stale", "{report:#}");
         assert_eq!(energy["stale_reasons"][0]["kind"], "input_edited");
+    }
+
+    #[test]
+    fn status_never_writes_even_to_an_unmigrated_project() {
+        let root = PathBuf::from("target/test-cli-status-readonly");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let project = create_project(&root, "demo").unwrap();
+        fs::write(root.join("o.xyz"), "1\no\nO 0 0 0\n").unwrap();
+        let script = root.join("energy.sls");
+        fs::write(
+            &script,
+            format!(
+                "open {}\nqm energy --method rhf --basis sto-3g\n",
+                root.join("o.xyz").display()
+            ),
+        )
+        .unwrap();
+        run_cli_script(&CliScriptRequest {
+            project: Some(project.root.clone()),
+            script_path: script,
+            script_args: BTreeMap::new(),
+        })
+        .unwrap();
+        // Simulate a project last saved before result revisions existed.
+        rusqlite::Connection::open(&project.project_db)
+            .unwrap()
+            .execute("alter table task_runs drop column result_revision", [])
+            .unwrap();
+        let before = fs::read(&project.project_db).unwrap();
+
+        let args = ["--project".to_string(), project.root.display().to_string()];
+        let report: serde_json::Value =
+            serde_json::from_str(&super::run_cli_status(&args).unwrap()).unwrap();
+
+        assert_eq!(fs::read(&project.project_db).unwrap(), before);
+        assert_eq!(report["tasks"][0]["freshness"], "current", "{report:#}");
+        assert!(report["tasks"][0]["result_revision"].is_null());
     }
 }

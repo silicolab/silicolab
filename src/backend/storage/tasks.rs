@@ -42,21 +42,33 @@ pub(crate) fn upsert_task_runs(conn: &Connection, tasks: &[&TaskRun]) -> Result<
 
 pub(crate) fn load_tasks(db: &Connection) -> Result<TaskManager> {
     let mut manager = TaskManager::default();
-    let mut statement = db.prepare(
-        "select
-            id,
-            run_uuid,
-            controller_id,
-            status,
-            run_dir,
-            source_entry_id,
-            result_entry_id,
-            engine_label,
-            created_at_ms,
-            finished_at_ms, inputs_json, result_revision
+    // A read-only open skips schema migration, so a project last saved by an older
+    // version may lack later columns; those read as absent.
+    let existing = db
+        .prepare("pragma table_info(task_runs)")?
+        .query_map([], |row| row.get::<_, String>(1))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let column = |name: &'static str, missing: &'static str| {
+        if existing.iter().any(|column| column == name) {
+            name
+        } else {
+            missing
+        }
+    };
+    let mut statement = db.prepare(&format!(
+        "select id, {}, controller_id, status, {}, {}, {}, {}, {}, {}, {}, {}
          from task_runs
          order by id",
-    )?;
+        column("run_uuid", "null"),
+        column("run_dir", "null"),
+        column("source_entry_id", "null"),
+        column("result_entry_id", "null"),
+        column("engine_label", "null"),
+        column("created_at_ms", "0"),
+        column("finished_at_ms", "null"),
+        column("inputs_json", "null"),
+        column("result_revision", "null"),
+    ))?;
     let rows = statement.query_map([], |row| {
         Ok((
             row.get::<_, i64>(0)? as u64,

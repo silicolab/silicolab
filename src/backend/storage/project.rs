@@ -103,6 +103,36 @@ pub fn load_project_snapshot(session: &ProjectSession) -> Result<ProjectSnapshot
     })
 }
 
+/// A project's entries and tasks, for a read-only report.
+pub struct ProjectOverview {
+    pub name: String,
+    pub entries: EntryStore,
+    pub tasks: TaskManager,
+}
+
+/// Load entries and tasks without writing anything: both databases open
+/// read-only and schema initialization is skipped, so this is safe while
+/// another process has the project open. Unlike [`load_project_snapshot`], a
+/// project from an older version is not migrated.
+pub fn load_project_overview(session: &ProjectSession) -> Result<ProjectOverview> {
+    let open = |path: &Path| {
+        Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("failed to open {} read-only", path.display()))
+    };
+    let project_db = open(&session.project_db)?;
+    let compounds_db = open(&session.compounds_db)?;
+    let name = project_meta(&project_db, "name")?.unwrap_or_else(|| session.name.clone());
+    let entries = load_entries(&project_db, &compounds_db).context(
+        "the project may need to be opened once by this SilicoLab version before `status` can read it",
+    )?;
+    let tasks = load_tasks(&project_db)?;
+    Ok(ProjectOverview {
+        name,
+        entries,
+        tasks,
+    })
+}
+
 /// Load a single compound's structure on demand (used for lazy loading entries
 /// that were not materialized when the project was opened).
 pub fn load_structure_for_compound(compounds_db: &Path, compound_id: i64) -> Result<Structure> {
