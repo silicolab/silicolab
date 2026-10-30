@@ -367,6 +367,22 @@ pub(crate) fn poll_trajectory_jobs(state: &mut AppState, ctx: &egui::Context) {
                     let subsampled = trajectory.stride() > 1;
                     let source_frames = trajectory.source_frame_count();
                     let now = ctx.input(|input| input.time);
+                    // XYZ trajectories come from quantum / semi-empirical MD,
+                    // where bonds are meant to change; re-perceive them per frame.
+                    let reactive = crate::frontend::trajectory::is_reactive_source(&load.source)
+                        .then(|| {
+                            let elements: Vec<String> = load
+                                .base_structure
+                                .atoms
+                                .iter()
+                                .map(|atom| atom.element.clone())
+                                .collect();
+                            crate::frontend::reactive_bonds::ReactiveBonds::analyse(
+                                &trajectory,
+                                &elements,
+                            )
+                        })
+                        .flatten();
                     let mut playback = TrajectoryPlayback {
                         entry_id: load.entry_id,
                         source: load.source,
@@ -378,6 +394,7 @@ pub(crate) fn poll_trajectory_jobs(state: &mut AppState, ctx: &egui::Context) {
                         last_advance_secs: now,
                         view_center,
                         view_radius,
+                        reactive,
                     };
                     playback.sync_scratch();
                     state.ui.trajectory = Some(playback);

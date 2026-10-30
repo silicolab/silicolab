@@ -243,6 +243,9 @@ pub struct ViewportDrawArgs<'a> {
     /// to keep its inset surface rounded while the renderer still owns the
     /// scene background color.
     pub background_corner_radius: u8,
+    /// Bonds drawn with a forming/breaking effect during reactive-trajectory
+    /// playback, on top of `structure`'s own bonds. Empty otherwise.
+    pub bond_overlay: &'a [crate::frontend::reactive_bonds::OverlayBond],
 }
 
 pub fn draw_viewport(ui: &mut egui::Ui, args: ViewportDrawArgs<'_>) -> ViewportInteraction {
@@ -258,6 +261,7 @@ pub fn draw_viewport(ui: &mut egui::Ui, args: ViewportDrawArgs<'_>) -> ViewportI
         empty_state_hint,
         view_override,
         background_corner_radius,
+        bond_overlay,
     } = args;
     let available = ui.available_size();
     // The default background follows the app theme (dark in dark mode); an
@@ -312,6 +316,7 @@ pub fn draw_viewport(ui: &mut egui::Ui, args: ViewportDrawArgs<'_>) -> ViewportI
         structure_revision,
         selection,
         visual_state,
+        bond_overlay,
         background,
         cache,
     );
@@ -385,6 +390,7 @@ fn render_molecules_gpu(
     structure_revision: u64,
     selection: &AtomSelection,
     visual_state: &ViewportVisualState,
+    bond_overlay: &[crate::frontend::reactive_bonds::OverlayBond],
     background: Color32,
     cache: &mut ViewportCache,
 ) -> Vec<PickTarget> {
@@ -401,6 +407,7 @@ fn render_molecules_gpu(
             &mut cache.secondary,
             SecondaryStructureCacheKey::new(structure_id, structure_revision),
         );
+        append_overlay_bonds(&mut scene, structure, bond_overlay, selection, visual_state);
         let surface_key =
             SurfaceCacheKey::new(structure_id, structure_revision, structure, visual_state);
         scene.surface =
