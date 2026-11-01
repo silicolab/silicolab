@@ -37,6 +37,32 @@ ORCA 默认使用一个 CPU 核心；请求更多核心会启用 `%pal` 并行�
 在 QM 任务面板中选择 xtb，或在脚本中运行 `qm md --temp 300 --time 2`（`qm md`
 默认使用 xtb）。计算结束后会自动播放生成的多帧 XYZ 轨迹，并逐帧重新判断成键。
 
+## acpype（AmberTools）
+
+[acpype](https://github.com/alanwilter/acpype) 封装了 AmberTools 的
+`antechamber`，为单个有机分子分配 GAFF2 原子类型和 AM1-BCC 电荷，并输出
+GROMACS 拓扑。SilicoLab 通过 Console 命令 `forcefield type`（别名 `ff type`）
+调用它，用于内置 MD 表无法分型的客体分子、溶剂和封端低聚物。
+
+用 `conda install -c conda-forge acpype` 安装（会一并安装 AmberTools）。
+SilicoLab 会在 `PATH` 和常见的 Homebrew 位置查找 `acpype`；如果装在别处，
+请在 **Settings > Compute > Compute targets** 的 acpype 行中填写 **Program**
+并选择 **Verify**。
+
+```text
+forcefield type active --name benzene
+forcefield list
+```
+
+该命令在前台运行（AM1-BCC 对溶剂分子只需数秒，对 200 原子的低聚物需要数分钟；
+`--timeout` 以分钟为单位设置上限），并把 acpype 生成的 `.itp` 以给定名称保存到
+力场库（`~/.silicolab/force_fields/`）中。该拓扑是完整的 GROMACS
+`[ moleculetype ]`，`md build` 目前还不会读取它；可直接用于 GROMACS 运行，
+或等待后续的有机分子成键拓扑功能来拼接它。净电荷默认取结构形式电荷之和；
+缺少形式电荷时用 `--charge` 指定。`--method gas` 切换到更快但更粗糙的 Gasteiger
+电荷，`--atom-types gaff` 切换到第一代 GAFF 类型集。GAFF 只覆盖 H、C、N、O、F、
+P、S、Cl、Br、I，且分子必须带有键。
+
 ## GROMACS
 
 分子动力学模拟需要单独安装 [GROMACS](https://www.gromacs.org/)。

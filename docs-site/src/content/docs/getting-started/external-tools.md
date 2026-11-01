@@ -50,6 +50,35 @@ Select xtb in the QM task panel, or run `qm md --temp 300 --time 2` in a script
 (`qm md` uses xtb by default). The run's multi-frame XYZ trajectory opens for
 playback when it finishes, with bonds re-perceived on every frame.
 
+## acpype (AmberTools)
+
+[acpype](https://github.com/alanwilter/acpype) wraps AmberTools' `antechamber`
+to assign GAFF2 atom types and AM1-BCC charges to one organic molecule and
+write a GROMACS topology. SilicoLab calls it from the `forcefield type`
+console command (alias `ff type`) for guests, solvents, and capped oligomers
+that the built-in MD tables cannot type.
+
+Install it with `conda install -c conda-forge acpype` (this pulls in
+AmberTools). SilicoLab looks for `acpype` on `PATH` and in the usual Homebrew
+locations; otherwise enter its path under **Program** in the acpype row of
+**Settings > Compute > Compute targets** and select **Verify**.
+
+```text
+forcefield type active --name benzene
+forcefield list
+```
+
+The command runs in the foreground (AM1-BCC takes seconds for a solvent and
+minutes for a 200-atom oligomer; `--timeout` sets the limit in minutes) and
+saves acpype's `.itp` under the given name in the force-field library
+(`~/.silicolab/force_fields/`). The topology is a complete GROMACS
+`[ moleculetype ]` that `md build` does not consume yet; use it directly in a
+GROMACS run, or wait for the bonded organic topology step that will tile it. The net charge defaults to the sum
+of the structure's formal charges; pass `--charge` when they are missing.
+`--method gas` switches to faster, cruder Gasteiger charges and
+`--atom-types gaff` to the first-generation GAFF set. GAFF covers H, C, N, O,
+F, P, S, Cl, Br, and I only, and the molecule must have bonds.
+
 ## GROMACS
 
 Molecular dynamics simulations require

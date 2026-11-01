@@ -19,6 +19,7 @@ pub mod run;
 pub mod solvation;
 pub mod system;
 pub mod topology;
+pub mod typed;
 
 pub use catalog::{
     DEFAULT_FORCE_FIELD, FORCE_FIELDS, ForceFieldEntry, SystemContent, classify, force_field_title,
@@ -49,3 +50,4 @@ pub use topology::{
     BondedParam, BondedTerm, MdTopology, MoleculeAtom, MoleculeRun, MoleculeType, SettleGeometry,
     Species, TopologyDefaults, molecule_name,
 };
+pub use typed::{AtomTypeParams, BondedInteraction, TypedAtom, TypedMolecule};
