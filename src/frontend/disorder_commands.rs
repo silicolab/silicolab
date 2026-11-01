@@ -13,8 +13,11 @@ use crate::frontend::state::AppState;
 use crate::io::structure_io;
 use crate::workflows::packing::{
     PackLimits, PackRequest, PackSpecies, Region, RegionSense, count_for_concentration_molar,
-    count_for_density_g_per_cm3, pack,
+    count_for_density_g_per_cm3, molar_mass_u, pack,
 };
+
+/// Grams per unified atomic mass unit, for sizing a cube from a target density.
+const GRAMS_PER_U: f64 = 1.660_539_066_60e-24;
 
 /// How much of a molecule to pack.
 enum Amount {
@@ -36,6 +39,7 @@ pub fn disorder_command(state: &mut AppState, args: &[String]) -> Result<String>
 
     let mut components: Vec<ComponentArg> = Vec::new();
     let mut box_lengths: Option<[f32; 3]> = None;
+    let mut cube_density: Option<f32> = None;
     let mut sphere_radius: Option<f32> = None;
     let mut cylinder: Option<(f32, f32)> = None;
     let mut outside = false;
@@ -97,6 +101,7 @@ pub fn disorder_command(state: &mut AppState, args: &[String]) -> Result<String>
                 &value,
             )?,
             "box" => box_lengths = Some(parse_triple(&value.unwrap())?),
+            "cube" => cube_density = Some(parse_f(&value.unwrap())?),
             "sphere" => sphere_radius = Some(parse_f(&value.unwrap())?),
             "cylinder" => cylinder = Some(parse_pair(&value.unwrap())?),
             "outside" => outside = true,
@@ -113,6 +118,29 @@ pub fn disorder_command(state: &mut AppState, args: &[String]) -> Result<String>
         bail!("specify at least one molecule with --of <entry>");
     }
 
+    // Resolve each molecule first: a `--cube` region is sized from them.
+    let mut molecules = Vec::with_capacity(components.len());
+    for component in &components {
+        let entry_id = resolve_entry(state, &component.entry)?;
+        state.ensure_entry_loaded(entry_id);
+        let molecule = state
+            .entries
+            .entry(entry_id)
+            .map(|entry| entry.structure.clone())
+            .ok_or_else(|| anyhow!("entry `{}` could not be loaded", component.entry))?;
+        if molecule.atoms.is_empty() {
+            bail!("molecule `{}` has no atoms to pack", component.entry);
+        }
+        molecules.push(molecule);
+    }
+    if let Some(density) = cube_density {
+        if box_lengths.is_some() {
+            bail!("specify only one region (--box, --cube, --sphere, or --cylinder)");
+        }
+        let edge = cube_edge_for_density(&components, &molecules, density)?;
+        box_lengths = Some([edge, edge, edge]);
+    }
+
     // Exactly one region shape.
     let shapes = [
         box_lengths.is_some(),
@@ -123,10 +151,10 @@ pub fn disorder_command(state: &mut AppState, args: &[String]) -> Result<String>
     .filter(|set| **set)
     .count();
     if shapes == 0 {
-        bail!("specify a region: --box <X,Y,Z>, --sphere <R>, or --cylinder <R,L>");
+        bail!("specify a region: --box <X,Y,Z>, --cube <g/cm3>, --sphere <R>, or --cylinder <R,L>");
     }
     if shapes > 1 {
-        bail!("specify only one region (--box, --sphere, or --cylinder)");
+        bail!("specify only one region (--box, --cube, --sphere, or --cylinder)");
     }
     let is_box = box_lengths.is_some();
     let region = if let Some([x, y, z]) = box_lengths {
@@ -154,19 +182,9 @@ pub fn disorder_command(state: &mut AppState, args: &[String]) -> Result<String>
         RegionSense::Inside
     };
 
-    // Resolve each molecule and turn its amount into a copy count.
+    // Turn each molecule's amount into a copy count.
     let mut species = Vec::with_capacity(components.len());
-    for component in &components {
-        let entry_id = resolve_entry(state, &component.entry)?;
-        state.ensure_entry_loaded(entry_id);
-        let molecule = state
-            .entries
-            .entry(entry_id)
-            .map(|entry| entry.structure.clone())
-            .ok_or_else(|| anyhow!("entry `{}` could not be loaded", component.entry))?;
-        if molecule.atoms.is_empty() {
-            bail!("molecule `{}` has no atoms to pack", component.entry);
-        }
+    for (component, molecule) in components.iter().zip(molecules) {
         let count = match component.amount {
             Amount::Count(n) => n,
             Amount::Density(d) => count_for_density_g_per_cm3(&molecule, d, &region),
@@ -241,6 +259,7 @@ const USAGE: &str = "disorder [options]\n  \
     --density <g/cm3>   …or auto-count the preceding molecule by mass density\n  \
     --conc <mol/L>      …or by molar concentration\n  \
     --box <X,Y,Z>       Pack into an X×Y×Z Å box\n  \
+    --cube <g/cm3>      …or into a cube sized so the --count copies reach this density\n  \
     --sphere <R>        Pack into a sphere of radius R Å\n  \
     --cylinder <R,L>    Pack into a cylinder (radius R, length L Å)\n  \
     --outside           Pack OUTSIDE the region (sphere/cylinder only)\n  \
@@ -249,6 +268,34 @@ const USAGE: &str = "disorder [options]\n  \
     --avoid <entry>     Fixed obstacle structure to pack around\n  \
     --name <text>       Result entry name (default \"Disordered system\")\n  \
     --no-cell           Don't set the region as the result's simulation cell";
+
+/// Edge (Å) of the cube in which the counted copies of every molecule have mass
+/// density `density` (g/cm³). Only `--count` amounts can size the cube: a
+/// density or concentration amount needs the region first.
+fn cube_edge_for_density(
+    components: &[ComponentArg],
+    molecules: &[crate::domain::Structure],
+    density: f32,
+) -> Result<f32> {
+    if density <= 0.0 {
+        bail!("--cube needs a positive density in g/cm3");
+    }
+    let mut mass_u = 0.0f64;
+    for (component, molecule) in components.iter().zip(molecules) {
+        let Amount::Count(count) = component.amount else {
+            bail!(
+                "--cube sizes the box from --count amounts; `{}` uses --density/--conc",
+                component.entry
+            );
+        };
+        mass_u += count as f64 * molar_mass_u(molecule) as f64;
+    }
+    if mass_u <= 0.0 {
+        bail!("nothing to pack: every molecule resolves to zero copies");
+    }
+    let volume_cm3 = mass_u * GRAMS_PER_U / density as f64;
+    Ok((volume_cm3 * 1.0e24).cbrt() as f32)
+}
 
 /// Resolve an entry token: `"active"`, a numeric id, or a (case-insensitive) name.
 fn resolve_entry(state: &AppState, token: &str) -> Result<u64> {

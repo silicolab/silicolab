@@ -69,6 +69,9 @@ fn build_agent_md_run(
     if let Some(timestep) = flags.f32("timestep")? {
         params.timestep_ps = timestep;
     }
+    if let Some(melt) = flags.f32("melt")? {
+        params.melt_temperature_k = Some(melt);
+    }
 
     let mut stages = preset.build(&eff, &params);
     if let Some(length) = flags.str("length") {

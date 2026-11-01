@@ -123,6 +123,12 @@ pub struct MdSystemContext {
     /// since it blocks the long-timestep path rather than silently enabling it.
     #[serde(default)]
     pub hmr_applied: bool,
+    /// Atoms in the largest bonded molecule of the built structure; 1 for a monatomic
+    /// system, 0 when the build recorded nothing. Tells a box of chains from a
+    /// small-molecule liquid, which the recommendation needs for a typed organic
+    /// system that has no residue-based detection.
+    #[serde(default)]
+    pub largest_molecule_atoms: usize,
 }
 
 impl MdSystemContext {
@@ -155,6 +161,7 @@ impl MdSystemContext {
             atom_count: structure.atoms.len(),
             restraint_groups,
             hmr_applied,
+            largest_molecule_atoms: largest_molecule_atoms(structure),
         }
     }
 
@@ -273,6 +280,9 @@ impl EffectiveContext<'_> {
     pub fn hmr_applied(&self) -> bool {
         self.context.hmr_applied
     }
+    pub fn largest_molecule_atoms(&self) -> usize {
+        self.context.largest_molecule_atoms
+    }
     pub fn restraint_groups(&self) -> &[String] {
         &self.context.restraint_groups
     }
@@ -284,6 +294,15 @@ struct Detection {
     nucleic: bool,
     membrane: bool,
     ligand: bool,
+}
+
+fn largest_molecule_atoms(structure: &Structure) -> usize {
+    let atoms: Vec<usize> = (0..structure.atoms.len()).collect();
+    crate::md::analysis::molecules_of(structure, &atoms)
+        .iter()
+        .map(Vec::len)
+        .max()
+        .unwrap_or(0)
 }
 
 /// Detect system types from a structure's per-residue composition. Reuses the
@@ -369,6 +388,28 @@ mod tests {
     }
 
     #[test]
+    fn from_built_records_the_largest_bonded_molecule() {
+        use crate::domain::{Atom, BondType};
+        use nalgebra::Point3;
+        let atoms = (0..7)
+            .map(|i| Atom {
+                element: "C".to_string(),
+                position: Point3::new(i as f32 * 5.0, 0.0, 0.0),
+                charge: 0.0,
+            })
+            .collect();
+        let mut structure = Structure::new("chains", atoms);
+        for (a, b) in [(0, 1), (1, 2), (2, 3), (5, 6)] {
+            structure.add_bond(a, b, BondType::Single);
+        }
+        let ctx = MdSystemContext::from_built(&structure, "gaff2", None, false, 0.0, false, vec![]);
+        assert_eq!(ctx.largest_molecule_atoms, 4);
+        structure.bonds.clear();
+        let ctx = MdSystemContext::from_built(&structure, "gaff2", None, false, 0.0, false, vec![]);
+        assert_eq!(ctx.largest_molecule_atoms, 1);
+    }
+
+    #[test]
     fn overrides_win_over_detection_and_report_source() {
         let ctx = MdSystemContext {
             force_field_token: "amber14sb".to_string(),
@@ -383,6 +424,7 @@ mod tests {
             atom_count: 1234,
             restraint_groups: vec![],
             hmr_applied: false,
+            largest_molecule_atoms: 0,
         };
 
         // No overrides: effective == detection, sourced as detected.
@@ -419,6 +461,7 @@ mod tests {
             atom_count: 9001,
             restraint_groups: vec!["solute".to_string()],
             hmr_applied: true,
+            largest_molecule_atoms: 1800,
         };
         let json = serde_json::to_string(&ctx).unwrap();
         let back: MdSystemContext = serde_json::from_str(&json).unwrap();

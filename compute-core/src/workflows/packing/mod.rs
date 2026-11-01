@@ -25,7 +25,7 @@ use anyhow::Result;
 
 use crate::domain::{Structure, UnitCell};
 
-pub use density::{count_for_concentration_molar, count_for_density_g_per_cm3};
+pub use density::{count_for_concentration_molar, count_for_density_g_per_cm3, molar_mass_u};
 pub use region::{Region, RegionSense};
 
 /// One molecule type to pack: a rigid template and how many copies of it.

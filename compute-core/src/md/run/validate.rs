@@ -184,6 +184,7 @@ mod tests {
                 vec![]
             },
             hmr_applied: hmr,
+            largest_molecule_atoms: 0,
         }
     }
 

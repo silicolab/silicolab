@@ -339,7 +339,43 @@ mod tests {
             atom_count: 10_000,
             restraint_groups: vec!["solute".to_string()],
             hmr_applied: false,
+            largest_molecule_atoms: 0,
         }
+    }
+
+    /// The amorphous protocol realizes its compression pressure and its NPT
+    /// anneal: the ramp block and the barostat land in the same `.mdp`.
+    #[test]
+    fn amorphous_preset_realizes_compression_and_an_npt_anneal() {
+        let mut ctx = amber_protein_context();
+        ctx.force_field_token = "gaff2".to_string();
+        ctx.force_field_family = ForceFieldFamily::Other;
+        ctx.water_token = None;
+        let eff = ctx.with_overrides(SystemTypeOverrides::default());
+        let stages = PresetId::AmorphousCompression.build(&eff, &PresetParams::default());
+        let specs = stage_specs_from_md_stages(&stages, ForceFieldFamily::Other, None);
+        let mdp_of = |name: &str| {
+            render_mdp(
+                &specs
+                    .iter()
+                    .find(|spec| spec.stage_name == name)
+                    .unwrap_or_else(|| panic!("no stage {name}"))
+                    .settings,
+            )
+        };
+        assert!(mdp_of("npt1").contains("ref-p                    = 2000"));
+        assert!(mdp_of("npt2").contains("ref-p                    = 1"));
+        let anneal = mdp_of("anneal");
+        assert!(
+            anneal.contains("annealing                = single"),
+            "{anneal}"
+        );
+        assert!(
+            anneal.contains("annealing-temp           = 600 300"),
+            "{anneal}"
+        );
+        assert!(anneal.contains("ref-p                    = 1"), "{anneal}");
+        assert!(!mdp_of("md").contains("annealing "));
     }
 
     /// The Phase-C gate, "ran correctly" portion that does NOT need a real engine:

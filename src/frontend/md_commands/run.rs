@@ -55,7 +55,8 @@ pub fn md_presets(state: &mut AppState, args: &[String]) -> Result<String> {
 /// and run the GROMACS pipeline. The scriptable mirror of the GUI Run MD panel.
 ///
 /// Options: `--preset <id>` (default: recommended), `--temperature <K>`,
-/// `--length <time>` (production length), `--timestep <ps>`, the system-type
+/// `--length <time>` (production length), `--timestep <ps>`, `--melt <K>` (hot
+/// stages of the amorphous preset), the system-type
 /// overrides `--membrane|--no-membrane` (and `ligand`/`nucleic`),
 /// `--no-trajectory`, `--set key=val,...` (tiered parameters), and
 /// `--raw "key=val;..."` (verbatim engine passthrough).
@@ -78,6 +79,9 @@ pub fn md_run(state: &mut AppState, args: &[String]) -> Result<String> {
     }
     if let Some(timestep) = flags.f32("timestep")? {
         params.timestep_ps = timestep;
+    }
+    if let Some(melt) = flags.f32("melt")? {
+        params.melt_temperature_k = Some(melt);
     }
 
     let mut stages = preset.build(&eff, &params);

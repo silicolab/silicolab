@@ -30,14 +30,20 @@ forcefield type benzene --name benzene
 pack --of ps3 --count 8 --of benzene --count 20 --box 32,32,32 --seed 1
 ```
 
-用 `--density` 代替 `--count` 可按质量密度确定链数。较低的起始密度（0.1–0.3 g/cm³）装填得快；运行中的压缩阶段会把它带到真实密度。
+用 `--density` 代替 `--count` 可按质量密度确定链数；用 `--cube <g/cm³>` 代替 `--box` 则按给定计数自动算出一个立方晶胞，使起始密度等于该值。较低的起始密度（0.1–0.3 g/cm³）装填得快；运行中的压缩阶段会把它带到真实密度：
+
+```text
+pack --of ps3 --count 8 --of benzene --count 20 --cube 0.2 --seed 1
+```
 
 ## 3. 构建并运行
 
 ```text
 md build
-md simulate --time 500ps --temperature 300
+md run --preset amorphous --length 500ps --temperature 300
 ```
+
+对分型后、最大分子是链（60 个原子以上）的有机体系，`md presets` 会推荐 **Amorphous Compression** 预设：能量最小化、高温短程 NVT、2000 bar NPT 压缩、1 bar 松弛、较长的高温 NPT、从高温退火到目标温度的 NPT 阶段，然后生产。高温阶段默认 600 K，能熔融玻璃态聚合物，但会在 1 bar 阶段把小分子液体煮沸；对溶剂盒子这类液体，用 `--melt` 指定一个低于沸点的温度（甲醇用 `md run --preset amorphous --melt 330`），或者直接用推荐的 `quick-relax`。普通的 `md simulate` 走的是标准生物分子流程，会让松散装填的盒子停留在起始密度附近。
 
 `md build` 找出活动结构中的分子（键的连通分量），把每个分子匹配到库中原子相同、顺序相同且原子间成键也相同的条目（元素顺序相同的异构体会被拒绝），并捕获 GAFF2 拓扑：带 AM1-BCC 电荷的分型原子、带 acpype 显式参数的键合项，以及按坐标顺序排列的分子计数。回复会列出组成，例如 `… atoms as 8× ps3, 20× benzene`。
 
