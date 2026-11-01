@@ -20,6 +20,7 @@ mod md_support;
 mod menu_macos;
 mod nanosheet_panel;
 mod navigation;
+mod polymer_commands;
 mod ptm_commands;
 mod qm_commands;
 mod reactive_bonds;

@@ -69,6 +69,7 @@ impl Command {
             },
             Command::Glycan(_)
             | Command::Glycosylate(_)
+            | Command::Polymer { .. }
             | Command::Phosphorylate(_)
             | Command::Acetylate(_)
             | Command::Methylate(_)

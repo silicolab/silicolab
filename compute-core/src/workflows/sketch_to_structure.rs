@@ -52,6 +52,29 @@ const PUCKER_SEED: f32 = 0.5;
 
 /// Convert a sketch to a relaxed 3D structure with the given title.
 pub fn sketch_to_structure(sketch: &Sketch, title: impl Into<String>) -> Result<Structure> {
+    relax_restarts(sketch, title.into(), BuildLimit::Clock)
+}
+
+/// Like [`sketch_to_structure`], but every restart ends on a step count instead
+/// of the clock, so the same sketch always gives the same geometry. For
+/// templates that are copied many times (a polymer repeat unit), where a
+/// machine-dependent geometry would make the whole result irreproducible.
+pub fn sketch_to_structure_reproducible(
+    sketch: &Sketch,
+    title: impl Into<String>,
+    restarts: usize,
+    steps: usize,
+) -> Result<Structure> {
+    relax_restarts(sketch, title.into(), BuildLimit::Steps { restarts, steps })
+}
+
+#[derive(Clone, Copy)]
+enum BuildLimit {
+    Clock,
+    Steps { restarts: usize, steps: usize },
+}
+
+fn relax_restarts(sketch: &Sketch, title: String, limit: BuildLimit) -> Result<Structure> {
     let attachments = sketch.attachment_count();
     let repeat_units = sketch.repeat_units.len();
     if attachments > 0 || repeat_units > 0 {
@@ -61,22 +84,32 @@ pub fn sketch_to_structure(sketch: &Sketch, title: impl Into<String>) -> Result<
              repeat brackets"
         );
     }
-    let title = title.into();
     let parity = two_colouring(sketch);
 
     let started = Instant::now();
     let mut best: Option<(f32, Structure)> = None;
+    let restarts = match limit {
+        BuildLimit::Clock => MAX_RESTARTS,
+        BuildLimit::Steps { restarts, .. } => restarts.max(1),
+    };
 
-    for restart in 0..MAX_RESTARTS {
-        let remaining = BUILD_BUDGET.saturating_sub(started.elapsed());
-        if remaining.is_zero() {
-            break;
-        }
+    for restart in 0..restarts {
+        let options = match limit {
+            BuildLimit::Clock => {
+                let remaining = BUILD_BUDGET.saturating_sub(started.elapsed());
+                if remaining.is_zero() {
+                    break;
+                }
+                build_options(remaining.min(RESTART_CAP))
+            }
+            BuildLimit::Steps { steps, .. } => OptimizationOptions {
+                max_steps: steps,
+                max_duration: Duration::MAX,
+                ..build_options(Duration::MAX)
+            },
+        };
         let mut structure = embed(sketch, &title, restart, &parity);
-        match forcefield::optimize_geometry(
-            &mut structure,
-            build_options(remaining.min(RESTART_CAP)),
-        ) {
+        match forcefield::optimize_geometry(&mut structure, options) {
             Ok(report) => {
                 let energy = report.final_energy;
                 if best

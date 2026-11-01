@@ -27,6 +27,8 @@ pub(crate) use render::*;
 pub(crate) use risk::*;
 
 #[cfg(test)]
+mod builder_tests;
+#[cfg(test)]
 mod tests;
 
 /// The Console tab's full session state: the command input, the recall history,
@@ -389,6 +391,14 @@ pub fn command_catalog() -> String {
         "  sketch <SMILES> [--name <name>]",
         "                              Build a 3D structure from SMILES (e.g. `sketch CCO`).",
         "                              The entry name defaults to the SMILES; override with `--name`.",
+        "  polymer build <unit-smiles>... [--dp 10] [--sequence AB] [--residue <name>] [--seed 0]",
+        "               [--no-relax] [--name <name>]",
+        "                              Build a linear polymer chain as a new entry. Each unit is a",
+        "                              SMILES with two `[*]` attachment points (polyethylene is",
+        "                              `polymer build \"[*]CC[*]\" --dp 20`); several units make a",
+        "                              copolymer following `--sequence` over their labels A, B, ….",
+        "                              Each unit is recorded as one residue (chain A). Pack chains",
+        "                              into a box afterwards with `disorder`.",
         "  glycan <iupac> [--name <name>]",
         "                              Build a 3D oligosaccharide from IUPAC-condensed notation",
         "                              (e.g. `glycan Man(a1-3)[Man(a1-6)]Man(b1-4)GlcNAc(b1-4)GlcNAc`).",
