@@ -1,7 +1,7 @@
 //! Approval risk: how consequential each `.sls` command is, which is what the
 //! assistant's approval gate keys on.
 
-use super::{Command, ForcefieldAction, JobsAction};
+use super::{Command, ForcefieldAction, JobsAction, MembraneAction};
 
 /// How consequential a command is — the input to the assistant's approval gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -62,7 +62,19 @@ impl Command {
             | Command::Forcefield {
                 action: ForcefieldAction::List,
             }
+            | Command::Membrane {
+                action: MembraneAction::FreeVolume(_),
+            }
             | Command::Help => ReadOnly,
+            Command::Membrane {
+                action: MembraneAction::Diffusion(args),
+            } => {
+                if args.out.is_some() {
+                    FileWrite
+                } else {
+                    ReadOnly
+                }
+            }
             // `qm recommend` only prints the level-of-theory table (read-only);
             // every other `qm` sub-verb launches a calculation.
             Command::Qm { args } => match args.first().map(String::as_str) {

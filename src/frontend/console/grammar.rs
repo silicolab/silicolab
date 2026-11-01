@@ -37,7 +37,9 @@ mod builder_args;
 mod online_args;
 mod ptm_args;
 
-pub(crate) use builder_args::{ForcefieldAction, ForcefieldTypeArgs};
+pub(crate) use builder_args::{
+    DiffusionArgs, ForcefieldAction, ForcefieldTypeArgs, FreeVolumeArgs, MembraneAction,
+};
 use online_args::parse_find_limit;
 pub(crate) use online_args::{FindQueryKind, parse_find_query};
 pub(crate) use ptm_args::{
@@ -204,6 +206,12 @@ pub(crate) enum Command {
     Polymer {
         #[command(subcommand)]
         action: PolymerAction,
+    },
+
+    /// Transport analysis of a dense phase (run `membrane` for subcommands).
+    Membrane {
+        #[command(subcommand)]
+        action: MembraneAction,
     },
 
     /// Force-field typing of organic molecules (run `forcefield` for subcommands).
@@ -569,7 +577,7 @@ impl Command {
     ) -> Result<String> {
         use crate::frontend::{
             disorder_commands, docking_commands, forcefield_commands, glycan_commands, md_commands,
-            polymer_commands, ptm_commands, qm_commands,
+            membrane_commands, polymer_commands, ptm_commands, qm_commands,
         };
         match self {
             Command::Open { path } => super::open_command(state, context, &path),
@@ -620,6 +628,12 @@ impl Command {
             Command::Polymer {
                 action: PolymerAction::Build(args),
             } => polymer_commands::build_command(state, args),
+            Command::Membrane {
+                action: MembraneAction::Diffusion(args),
+            } => membrane_commands::diffusion_command(state, context, args),
+            Command::Membrane {
+                action: MembraneAction::FreeVolume(args),
+            } => membrane_commands::free_volume_command(state, args),
             Command::Forcefield {
                 action: ForcefieldAction::Type(args),
             } => forcefield_commands::type_command(state, args),

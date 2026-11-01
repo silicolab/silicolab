@@ -11,6 +11,7 @@
 //! stage chain — lives one layer up in
 //! [`crate::workflows::molecular_dynamics::protocol`].
 
+pub mod analysis;
 pub(crate) mod bonded_graph;
 pub mod catalog;
 pub mod framework;
