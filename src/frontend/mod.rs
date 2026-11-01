@@ -17,6 +17,7 @@ mod jobs;
 mod mcp;
 mod md_commands;
 mod md_support;
+mod membrane_commands;
 #[cfg(target_os = "macos")]
 mod menu_macos;
 mod nanosheet_panel;
