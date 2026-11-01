@@ -12,6 +12,7 @@
 //! can flag it.
 
 mod layout;
+mod repeat_unit;
 mod templates;
 mod valence;
 
@@ -20,12 +21,17 @@ use nalgebra::{Point2, Rotation2, Vector2};
 use crate::domain::BondType;
 
 pub use layout::{clean_up, seed_layout};
+pub use repeat_unit::{Bracket, RepeatConnectivity, RepeatUnit};
 pub use templates::RingTemplate;
 pub use valence::{bond_order_value, implicit_hydrogens, is_overvalent};
 
 /// Default 2D bond length in model units (Ångström-ish; ~C–C single bond). The
 /// canvas applies its own zoom on top of this.
 pub const BOND_LENGTH: f32 = 1.5;
+
+/// The [`SketchAtom::element`] of an attachment point: an open polymer end, not
+/// a chemical atom. It carries no implicit hydrogens.
+pub const ATTACHMENT_SYMBOL: &str = "*";
 
 /// A heavy atom in the 2D sketch.
 #[derive(Debug, Clone, PartialEq)]
@@ -53,6 +59,14 @@ impl SketchAtom {
             explicit_hydrogens: None,
         }
     }
+
+    pub fn attachment(pos: Point2<f32>) -> Self {
+        Self::new(ATTACHMENT_SYMBOL, pos)
+    }
+
+    pub fn is_attachment(&self) -> bool {
+        self.element == ATTACHMENT_SYMBOL
+    }
 }
 
 /// A bond between two sketch atoms, identified by their indices.
@@ -68,6 +82,7 @@ pub struct SketchBond {
 pub struct Sketch {
     pub atoms: Vec<SketchAtom>,
     pub bonds: Vec<SketchBond>,
+    pub repeat_units: Vec<RepeatUnit>,
 }
 
 impl Sketch {
@@ -77,6 +92,13 @@ impl Sketch {
 
     pub fn is_empty(&self) -> bool {
         self.atoms.is_empty()
+    }
+
+    pub fn attachment_count(&self) -> usize {
+        self.atoms
+            .iter()
+            .filter(|atom| atom.is_attachment())
+            .count()
     }
 
     /// Add an atom and return its index. The element is normalized.
@@ -129,42 +151,52 @@ impl Sketch {
     pub fn remove_bond(&mut self, bond: usize) {
         if bond < self.bonds.len() {
             self.bonds.remove(bond);
+            let atom_map: Vec<_> = (0..self.atoms.len()).map(Some).collect();
+            let bond_map: Vec<_> = (0..=self.bonds.len())
+                .map(|index| match index.cmp(&bond) {
+                    std::cmp::Ordering::Less => Some(index),
+                    std::cmp::Ordering::Equal => None,
+                    std::cmp::Ordering::Greater => Some(index - 1),
+                })
+                .collect();
+            self.reindex_repeat_units(&atom_map, &bond_map);
         }
     }
 
     /// Remove an atom together with its incident bonds, reindexing the rest.
     pub fn remove_atom(&mut self, atom: usize) {
-        if atom >= self.atoms.len() {
-            return;
-        }
-        self.atoms.remove(atom);
-        self.bonds.retain(|bond| bond.a != atom && bond.b != atom);
-        for bond in &mut self.bonds {
-            if bond.a > atom {
-                bond.a -= 1;
-            }
-            if bond.b > atom {
-                bond.b -= 1;
-            }
-        }
+        self.remove_atoms(&[atom]);
     }
 
     /// Remove a set of atoms (and any bond touching one of them) in a single
     /// pass, reindexing the survivors.
     pub fn remove_atoms(&mut self, victims: &[usize]) {
-        if victims.is_empty() {
+        let doomed = vec_to_mask(victims, self.atoms.len());
+        if !doomed.contains(&true) {
             return;
         }
-        let doomed = vec_to_mask(victims, self.atoms.len());
-        // Build the old→new index remap for surviving atoms.
-        let mut remap = vec![usize::MAX; self.atoms.len()];
+        // Build the old→new index remaps for surviving atoms and bonds.
         let mut next = 0usize;
-        for (old, dead) in doomed.iter().enumerate() {
-            if !dead {
-                remap[old] = next;
-                next += 1;
-            }
-        }
+        let atom_map: Vec<Option<usize>> = doomed
+            .iter()
+            .map(|dead| {
+                (!dead).then(|| {
+                    next += 1;
+                    next - 1
+                })
+            })
+            .collect();
+        let mut next = 0usize;
+        let bond_map: Vec<Option<usize>> = self
+            .bonds
+            .iter()
+            .map(|bond| {
+                (!doomed[bond.a] && !doomed[bond.b]).then(|| {
+                    next += 1;
+                    next - 1
+                })
+            })
+            .collect();
         let mut atom_index = 0usize;
         self.atoms.retain(|_| {
             let keep = !doomed[atom_index];
@@ -173,9 +205,10 @@ impl Sketch {
         });
         self.bonds.retain(|bond| !doomed[bond.a] && !doomed[bond.b]);
         for bond in &mut self.bonds {
-            bond.a = remap[bond.a];
-            bond.b = remap[bond.b];
+            bond.a = atom_map[bond.a].unwrap_or(bond.a);
+            bond.b = atom_map[bond.b].unwrap_or(bond.b);
         }
+        self.reindex_repeat_units(&atom_map, &bond_map);
     }
 
     /// Neighbors of an atom as `(other_index, bond_order)` pairs.
@@ -272,6 +305,7 @@ impl Sketch {
         for atom in &mut self.atoms {
             atom.pos += delta;
         }
+        self.refit_repeat_unit_brackets();
     }
 
     pub fn translate_atoms(&mut self, atoms: &[usize], delta: Vector2<f32>) {
@@ -280,6 +314,7 @@ impl Sketch {
                 atom.pos += delta;
             }
         }
+        self.refit_repeat_unit_brackets();
     }
 
     pub fn rotate(&mut self, center: Point2<f32>, angle: f32) {
@@ -287,6 +322,7 @@ impl Sketch {
         for atom in &mut self.atoms {
             atom.pos = center + rotation * (atom.pos - center);
         }
+        self.refit_repeat_unit_brackets();
     }
 
     pub fn rotate_atoms(&mut self, atoms: &[usize], center: Point2<f32>, angle: f32) {
@@ -296,6 +332,7 @@ impl Sketch {
                 atom.pos = center + rotation * (atom.pos - center);
             }
         }
+        self.refit_repeat_unit_brackets();
     }
 
     pub fn flip_horizontal(&mut self) {
@@ -303,6 +340,7 @@ impl Sketch {
         for atom in &mut self.atoms {
             atom.pos.x = 2.0 * center.x - atom.pos.x;
         }
+        self.refit_repeat_unit_brackets();
     }
 
     pub fn flip_vertical(&mut self) {
@@ -310,6 +348,7 @@ impl Sketch {
         for atom in &mut self.atoms {
             atom.pos.y = 2.0 * center.y - atom.pos.y;
         }
+        self.refit_repeat_unit_brackets();
     }
 
     /// Nearest atom to `point` within `radius`, if any.

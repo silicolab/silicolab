@@ -128,6 +128,8 @@ pub struct SketcherState {
     pub show_periodic_table: bool,
     /// One-shot request to recentre the view (consumed by the canvas).
     needs_fit: bool,
+    /// Repeat units last seen, to notice ones an edit removed.
+    repeat_unit_count: usize,
     undo: Vec<Sketch>,
     redo: Vec<Sketch>,
     gesture: Option<Gesture>,
@@ -153,6 +155,7 @@ impl Default for SketcherState {
             element_query: String::new(),
             show_periodic_table: false,
             needs_fit: false,
+            repeat_unit_count: 0,
             undo: Vec::new(),
             redo: Vec::new(),
             gesture: None,
@@ -168,6 +171,7 @@ impl SketcherState {
     /// Start a sketcher seeded with an existing sketch (e.g. from SMILES import).
     pub fn with_sketch(sketch: Sketch, title: impl Into<String>) -> Self {
         Self {
+            repeat_unit_count: sketch.repeat_units.len(),
             sketch,
             title: title.into(),
             needs_fit: true,
@@ -198,6 +202,7 @@ impl SketcherState {
         if let Some(previous) = self.undo.pop() {
             self.redo
                 .push(std::mem::replace(&mut self.sketch, previous));
+            self.repeat_unit_count = self.sketch.repeat_units.len();
             self.clamp_selection();
         }
     }
@@ -205,6 +210,7 @@ impl SketcherState {
     pub fn redo(&mut self) {
         if let Some(next) = self.redo.pop() {
             self.undo.push(std::mem::replace(&mut self.sketch, next));
+            self.repeat_unit_count = self.sketch.repeat_units.len();
             self.clamp_selection();
         }
     }
@@ -342,6 +348,7 @@ impl SketcherState {
             Ok(sketch) => {
                 self.push_undo();
                 self.sketch = sketch;
+                self.repeat_unit_count = self.sketch.repeat_units.len();
                 self.clear_selection();
                 self.needs_fit = true;
                 self.status = format!("Imported SMILES ({} atoms)", self.sketch.atoms.len());
@@ -355,6 +362,29 @@ impl SketcherState {
     /// Current drawing as a SMILES string.
     pub fn export_smiles(&self) -> String {
         crate::domain::smiles::to_smiles(&self.sketch)
+    }
+
+    /// Replace the drawing with one read from a file.
+    pub fn load(&mut self, sketch: Sketch, title: String) {
+        self.push_undo();
+        self.sketch = sketch;
+        if !title.is_empty() {
+            self.title = title;
+        }
+        self.repeat_unit_count = self.sketch.repeat_units.len();
+        self.clear_selection();
+        self.needs_fit = true;
+    }
+
+    /// Tell the user when an edit deleted a repeat unit's crossing bond, which
+    /// removes the unit.
+    pub(super) fn report_removed_repeat_units(&mut self) {
+        let count = self.sketch.repeat_units.len();
+        if count < self.repeat_unit_count {
+            let removed = self.repeat_unit_count - count;
+            self.status = format!("Removed {removed} repeat unit(s) with the deleted bonds");
+        }
+        self.repeat_unit_count = count;
     }
 
     /// Commit a ring placement (template fusion) into the sketch.
@@ -387,7 +417,7 @@ impl SketcherState {
     }
 
     /// Recentre and rescale so the whole drawing fits `rect`.
-    pub fn fit(&mut self, rect: Rect) {
+    pub fn fit(&mut self, rect: Rect, painter: &eframe::egui::Painter) {
         match self.sketch.bounds() {
             Some((min, max)) if rect.width() > 1.0 && rect.height() > 1.0 => {
                 let width = (max.x - min.x).max(BOND_UNIT);
@@ -398,6 +428,14 @@ impl SketcherState {
                 self.zoom = zoom_x.min(zoom_y).clamp(10.0, 120.0);
                 let center = Point2::new((min.x + max.x) * 0.5, (min.y + max.y) * 0.5);
                 self.pan = Vec2::new(-center.x * self.zoom, center.y * self.zoom);
+                if self
+                    .sketch
+                    .repeat_units
+                    .iter()
+                    .any(|unit| !unit.brackets.is_empty())
+                {
+                    canvas::fit_repeat_units(self, rect, painter);
+                }
             }
             _ => {
                 self.pan = Vec2::ZERO;
@@ -412,3 +450,39 @@ impl SketcherState {
 }
 
 const BOND_UNIT: f32 = 1.5;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::sketch::{RepeatConnectivity, RepeatUnit};
+
+    #[test]
+    fn erasing_a_crossing_bond_reports_the_removed_unit_but_undo_does_not() {
+        let mut sketch = crate::domain::smiles::parse("[*]CC[*]").unwrap();
+        sketch.repeat_units.push(RepeatUnit {
+            atoms: vec![1, 2],
+            crossing_bonds: [0, 2],
+            label: "n".to_string(),
+            connectivity: RepeatConnectivity::default(),
+            brackets: Vec::new(),
+        });
+        let mut state = SketcherState::with_sketch(sketch, "polymer");
+
+        state.push_undo();
+        state.sketch.remove_atom(0);
+        state.clamp_selection();
+        state.report_removed_repeat_units();
+        assert!(
+            state.status.contains("Removed 1 repeat unit"),
+            "{}",
+            state.status
+        );
+
+        state.status.clear();
+        state.undo();
+        state.report_removed_repeat_units();
+        state.redo();
+        state.report_removed_repeat_units();
+        assert!(state.status.is_empty(), "{}", state.status);
+    }
+}

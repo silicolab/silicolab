@@ -25,10 +25,13 @@
 //! UFF only parameterises H, C, N, O, F, P, S, Cl, Br and I. If the sketch uses
 //! any other element the relaxation is skipped and the lifted (seeded) geometry
 //! is returned as-is — still a valid structure, just not energy-minimised.
+//!
+//! A sketch with attachment points or repeat units is a polymer fragment, not a
+//! molecule, so it is rejected rather than capped or built as a single repeat.
 
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use nalgebra::{Point3, Vector3};
 
 use crate::domain::{Atom, Bond, BondType, Structure, sketch::Sketch, smiles};
@@ -48,7 +51,16 @@ const RESTART_CAP: Duration = Duration::from_millis(1500);
 const PUCKER_SEED: f32 = 0.5;
 
 /// Convert a sketch to a relaxed 3D structure with the given title.
-pub fn sketch_to_structure(sketch: &Sketch, title: impl Into<String>) -> Structure {
+pub fn sketch_to_structure(sketch: &Sketch, title: impl Into<String>) -> Result<Structure> {
+    let attachments = sketch.attachment_count();
+    let repeat_units = sketch.repeat_units.len();
+    if attachments > 0 || repeat_units > 0 {
+        bail!(
+            "cannot build 3D from a polymer fragment ({attachments} attachment point(s), \
+             {repeat_units} repeat unit(s)): replace each `*` with an end group and remove the \
+             repeat brackets"
+        );
+    }
     let title = title.into();
     let parity = two_colouring(sketch);
 
@@ -76,12 +88,13 @@ pub fn sketch_to_structure(sketch: &Sketch, title: impl Into<String>) -> Structu
             }
             // An unsupported element can't be relaxed by UFF; the lifted geometry
             // is still a valid structure and further restarts wouldn't change that.
-            Err(_) => return structure,
+            Err(_) => return Ok(structure),
         }
     }
 
-    best.map(|(_, structure)| structure)
-        .unwrap_or_else(|| embed(sketch, &title, 0, &parity))
+    Ok(best
+        .map(|(_, structure)| structure)
+        .unwrap_or_else(|| embed(sketch, &title, 0, &parity)))
 }
 
 /// Parse a SMILES string and convert it to a relaxed 3D structure. The title
@@ -91,7 +104,7 @@ pub fn smiles_to_structure(input: &str, title: Option<&str>) -> Result<Structure
     let title = title
         .map(str::to_string)
         .unwrap_or_else(|| input.to_string());
-    Ok(sketch_to_structure(&sketch, title))
+    sketch_to_structure(&sketch, title)
 }
 
 /// Optimiser settings for a sketch build: a tighter, longer relaxation than the
@@ -423,7 +436,7 @@ mod tests {
 
     #[test]
     fn benzene_builds_six_carbons_and_six_hydrogens() {
-        let structure = sketch_to_structure(&benzene_sketch(), "benzene");
+        let structure = sketch_to_structure(&benzene_sketch(), "benzene").unwrap();
         let carbons = structure.atoms.iter().filter(|a| a.element == "C").count();
         let hydrogens = structure.atoms.iter().filter(|a| a.element == "H").count();
         assert_eq!(carbons, 6);
@@ -434,7 +447,7 @@ mod tests {
 
     #[test]
     fn benzene_geometry_is_non_degenerate() {
-        let structure = sketch_to_structure(&benzene_sketch(), "benzene");
+        let structure = sketch_to_structure(&benzene_sketch(), "benzene").unwrap();
         // No two atoms collapsed onto each other.
         assert!(min_pairwise_distance(&structure) > 0.6);
         // Carbons are spread in 3D, not a single point.
@@ -443,7 +456,8 @@ mod tests {
 
     #[test]
     fn cyclohexane_relaxes_to_a_puckered_ring_of_tetrahedral_carbons() {
-        let structure = sketch_to_structure(&ring_sketch(RingTemplate::Cyclohexane, "C"), "C6H12");
+        let structure =
+            sketch_to_structure(&ring_sketch(RingTemplate::Cyclohexane, "C"), "C6H12").unwrap();
         let carbons: Vec<usize> = (0..structure.atoms.len())
             .filter(|&i| structure.atoms[i].element == "C")
             .collect();
@@ -486,7 +500,7 @@ mod tests {
     fn methane_is_tetrahedral() {
         let mut sketch = Sketch::new();
         sketch.add_atom("C", Point2::origin());
-        let structure = sketch_to_structure(&sketch, "methane");
+        let structure = sketch_to_structure(&sketch, "methane").unwrap();
         assert_eq!(structure.atoms.len(), 5); // C + 4 H
         assert_eq!(structure.bonds.len(), 4);
         // The carbon is index 0 (heavy atoms are placed before hydrogens).
@@ -617,13 +631,21 @@ mod tests {
     }
 
     #[test]
+    fn polymer_fragments_are_rejected_with_their_counts() {
+        let error = smiles_to_structure("[*]CC([*])c1ccccc1", None)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("2 attachment point(s)"), "{error}");
+    }
+
+    #[test]
     fn unsupported_element_falls_back_without_panicking() {
         // Boron is not UFF-parameterised; the build must still return a structure.
         let mut sketch = Sketch::new();
         let b = sketch.add_atom("B", Point2::origin());
         let c = sketch.add_atom("C", Point2::new(1.5, 0.0));
         sketch.add_bond(b, c, BondType::Single);
-        let structure = sketch_to_structure(&sketch, "borane-ish");
+        let structure = sketch_to_structure(&sketch, "borane-ish").unwrap();
         assert!(structure.atoms.iter().any(|a| a.element == "B"));
         assert!(structure.atoms.iter().any(|a| a.element == "C"));
     }

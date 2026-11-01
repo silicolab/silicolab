@@ -45,6 +45,10 @@ pub enum AppAction {
     CommitSketch,
     /// Discard the sketch and close the sketcher.
     CancelSketch,
+    /// Replace the sketch with a V3000 molfile chosen by the user.
+    OpenSketchMolfile,
+    /// Save the sketch as a V3000 molfile chosen by the user.
+    SaveSketchMolfile,
     SelectAll,
     InvertSelection,
     ClearSelection,

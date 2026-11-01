@@ -468,6 +468,14 @@ fn view_script_export_roundtrips() {
 }
 
 #[test]
+fn sketch_explains_why_attachment_points_cannot_build() {
+    let mut state = AppState::scratch(Default::default(), Vec::new());
+    let error = execute_console_line(&mut state, "sketch [*]CC").unwrap_err();
+    let text = error.to_string();
+    assert!(text.contains("1 attachment point(s)"), "error: {text}");
+}
+
+#[test]
 fn sketch_rejects_invalid_smiles_with_a_hint() {
     let mut state = AppState::scratch(Default::default(), Vec::new());
     // `HH` is not valid SMILES (hydrogen must be bracketed); the user hit this

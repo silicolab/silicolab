@@ -3,7 +3,8 @@
 //! Walks the bond graph with a DFS, emitting a (non-canonical) SMILES string:
 //! ring-closure (back) edges get digit labels, branches are parenthesised, and
 //! charged / non-organic atoms are written in bracket form with an explicit
-//! hydrogen count.
+//! hydrogen count. Attachment points become `[*]`; repeat units have no SMILES
+//! form and are not written.
 
 use crate::domain::{BondType, sketch::Sketch};
 
