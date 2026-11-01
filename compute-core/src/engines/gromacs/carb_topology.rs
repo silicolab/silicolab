@@ -236,6 +236,7 @@ pub(crate) fn glycan_impropers(
                 terms.push(BondedTerm {
                     atoms,
                     func: database.defaults.improper_func,
+                    params: Vec::new(),
                 });
             }
         }

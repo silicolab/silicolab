@@ -53,6 +53,7 @@ pub(crate) fn bonds(bonds: &[Bond], func: i32) -> Vec<BondedTerm> {
         .map(|(a, b)| BondedTerm {
             atoms: vec![a as u32 + 1, b as u32 + 1],
             func,
+            params: Vec::new(),
         })
         .collect()
 }
@@ -71,6 +72,7 @@ pub(crate) fn angles(adjacency: &[Vec<usize>], func: i32) -> Vec<BondedTerm> {
                         neighbors[j] as u32 + 1,
                     ],
                     func,
+                    params: Vec::new(),
                 });
             }
         }
@@ -106,6 +108,7 @@ pub(crate) fn proper_dihedrals(adjacency: &[Vec<usize>], func: i32) -> Vec<Bonde
         .map(|(i, j, k, l)| BondedTerm {
             atoms: vec![i as u32 + 1, j as u32 + 1, k as u32 + 1, l as u32 + 1],
             func,
+            params: Vec::new(),
         })
         .collect()
 }
@@ -139,6 +142,7 @@ pub(crate) fn one_four_pairs(adjacency: &[Vec<usize>], func: i32) -> Vec<BondedT
         .map(|(a, b)| BondedTerm {
             atoms: vec![a as u32 + 1, b as u32 + 1],
             func,
+            params: Vec::new(),
         })
         .collect()
 }

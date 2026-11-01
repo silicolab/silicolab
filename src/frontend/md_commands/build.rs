@@ -11,7 +11,8 @@ use crate::{
     backend::tasks::TaskStatus,
     frontend::{
         md_support::{
-            FrameworkRunMetadata, MD_FRAMEWORK_FILE, MD_TOPOLOGY_FILE, write_md_system_context,
+            FrameworkRunMetadata, MD_FRAMEWORK_FILE, MD_TOPOLOGY_FILE, derive_md_topology,
+            parse_typed_preferences, write_md_system_context,
         },
         state::AppState,
     },
@@ -40,6 +41,9 @@ pub fn md_build(state: &mut AppState, args: &[String]) -> Result<String> {
         Some(name) => Some(crate::backend::force_fields::load_force_field(name)?),
         None => None,
     };
+    // `--typed RES=name,...` picks the library molecule for a residue of a bonded
+    // organic system when several typed molecules have the same atoms.
+    let preferred = parse_typed_preferences(flags.str("typed"))?;
 
     let task_run_id = create_cli_task_run(state, "build-md-system")?;
     let run_dir = ensure_cli_task_run_dir(state, task_run_id)?;
@@ -108,7 +112,7 @@ pub fn md_build(state: &mut AppState, args: &[String]) -> Result<String> {
         state.show_entry(entry_id);
         record_cli_task_result_entry(state, task_run_id, entry_id)?;
 
-        let topology = MdTopology::from_structure(state.structure())?;
+        let (topology, organic) = derive_md_topology(state.structure(), &preferred)?;
         topology.save(&run_dir.join(MD_TOPOLOGY_FILE))?;
         // Geometry-only build: record the generic family (a later run uses the
         // captured engine-neutral topology, not a biomolecular nonbonded block).
@@ -116,7 +120,11 @@ pub fn md_build(state: &mut AppState, args: &[String]) -> Result<String> {
             &run_dir,
             &solute,
             topology.atom_count(),
-            "builtin",
+            if organic.is_some() {
+                "gaff2"
+            } else {
+                "builtin"
+            },
             None,
             false,
             topology.net_charge(),
@@ -124,11 +132,27 @@ pub fn md_build(state: &mut AppState, args: &[String]) -> Result<String> {
             Vec::new(),
         );
 
-        Ok(format!(
-            "MD system ready: {} atoms, {} species; topology captured",
-            topology.atom_count(),
-            topology.species.len()
-        ))
+        Ok(match organic {
+            Some(report) => {
+                let counts: Vec<String> = report
+                    .counts
+                    .iter()
+                    .map(|(name, count)| format!("{count}× {name}"))
+                    .collect();
+                format!(
+                    "Organic MD system ready: {} atoms as {} (net charge {:+.2}); typed topology \
+                     captured",
+                    report.atom_count,
+                    counts.join(", "),
+                    report.net_charge
+                )
+            }
+            None => format!(
+                "MD system ready: {} atoms, {} species; topology captured",
+                topology.atom_count(),
+                topology.species.len()
+            ),
+        })
     })();
 
     finish_cli_task(state, task_run_id, result)

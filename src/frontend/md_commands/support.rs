@@ -2,6 +2,7 @@
 //! context loading, the boxed-structure guard, and the post-run energy analysis.
 
 use std::{
+    collections::BTreeMap,
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicBool},
     time::Duration,
@@ -19,7 +20,7 @@ use crate::{
     },
     frontend::{
         md_support::{
-            gromacs_topology_path_for_entry, load_md_system_context_for_entry,
+            derive_md_topology, gromacs_topology_path_for_entry, load_md_system_context_for_entry,
             md_topology_path_for_entry,
         },
         state::AppState,
@@ -159,5 +160,5 @@ pub fn load_active_or_derive_md_topology(state: &AppState) -> Result<MdTopology>
     if let Some(path) = active_entry_md_topology_path(state) {
         return MdTopology::load(&path);
     }
-    MdTopology::from_structure(state.structure())
+    Ok(derive_md_topology(state.structure(), &BTreeMap::new())?.0)
 }
