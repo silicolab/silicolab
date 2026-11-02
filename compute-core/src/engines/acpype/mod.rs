@@ -199,14 +199,6 @@ fn validate_request(request: &AcpypeRequest) -> Result<()> {
             GAFF_ELEMENTS.join(", ")
         );
     }
-    let formal: f32 = request.structure.atoms.iter().map(|atom| atom.charge).sum();
-    if (formal - request.net_charge as f32).abs() > 0.5 {
-        bail!(
-            "net charge {} disagrees with the structure's formal charges ({formal:+.1}); pass \
-             `--charge` explicitly if the formal charges are wrong",
-            request.net_charge
-        );
-    }
     Ok(())
 }
 
@@ -356,11 +348,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_net_charge_that_contradicts_formal_charges() {
+    fn net_charge_overrides_missing_formal_charges() {
         let mut request = request(methane());
-        request.net_charge = 2;
-        let err = validate_request(&request).unwrap_err().to_string();
-        assert!(err.contains("formal charges"), "{err}");
+        request.net_charge = 1;
+        validate_request(&request).unwrap();
+        assert!(render_args(&request).windows(2).any(|w| w == ["-n", "1"]));
     }
 
     #[test]
@@ -418,5 +410,31 @@ mod tests {
         let outcome = run_acpype(request, launch, Default::default(), |_| {}).unwrap();
         assert_eq!(outcome.molecule.atoms.len(), 6);
         assert!(outcome.itp.contains("[ atomtypes ]"));
+    }
+
+    /// Opt-in AM1-BCC run on methylammonium with its formal charge wiped, so
+    /// only the requested net charge tells antechamber the molecule is a cation.
+    #[test]
+    #[ignore = "requires SILICOLAB_TEST_ACPYPE_PROGRAM to name an acpype executable"]
+    fn configured_acpype_am1bcc_honours_requested_charge() {
+        let program = std::env::var("SILICOLAB_TEST_ACPYPE_PROGRAM")
+            .expect("set SILICOLAB_TEST_ACPYPE_PROGRAM");
+        let launch = EngineLaunch {
+            command_prefix: Vec::new(),
+            program,
+        };
+        let mut structure = crate::workflows::sketch_to_structure::smiles_to_structure(
+            "C[NH3+]",
+            Some("methylammonium"),
+        )
+        .unwrap();
+        for atom in &mut structure.atoms {
+            atom.charge = 0.0;
+        }
+        let mut request = request(structure);
+        request.net_charge = 1;
+        let outcome = run_acpype(request, launch, Default::default(), |_| {}).unwrap();
+        assert_eq!(outcome.molecule.atoms.len(), 8);
+        assert!((outcome.molecule.net_charge() - 1.0).abs() < 0.01);
     }
 }

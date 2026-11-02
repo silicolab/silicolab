@@ -74,7 +74,7 @@ saves acpype's `.itp` under the given name in the force-field library
 (`~/.silicolab/force_fields/`). The topology is a complete GROMACS
 `[ moleculetype ]` that `md build` does not consume yet; use it directly in a
 GROMACS run, or wait for the bonded organic topology step that will tile it. The net charge defaults to the sum
-of the structure's formal charges; pass `--charge` when they are missing.
+of the structure's formal charges; `--charge` overrides them when they are missing or wrong.
 `--method gas` switches to faster, cruder Gasteiger charges and
 `--atom-types gaff` to the first-generation GAFF set. GAFF covers H, C, N, O,
 F, P, S, Cl, Br, and I only, and the molecule must have bonds.

@@ -59,7 +59,7 @@ forcefield list
 力场库（`~/.silicolab/force_fields/`）中。该拓扑是完整的 GROMACS
 `[ moleculetype ]`，`md build` 目前还不会读取它；可直接用于 GROMACS 运行，
 或等待后续的有机分子成键拓扑功能来拼接它。净电荷默认取结构形式电荷之和；
-缺少形式电荷时用 `--charge` 指定。`--method gas` 切换到更快但更粗糙的 Gasteiger
+形式电荷缺失或有误时用 `--charge` 覆盖。`--method gas` 切换到更快但更粗糙的 Gasteiger
 电荷，`--atom-types gaff` 切换到第一代 GAFF 类型集。GAFF 只覆盖 H、C、N、O、F、
 P、S、Cl、Br、I，且分子必须带有键。
 
