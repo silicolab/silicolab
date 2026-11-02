@@ -277,8 +277,8 @@ fn cube_edge_for_density(
     molecules: &[crate::domain::Structure],
     density: f32,
 ) -> Result<f32> {
-    if density <= 0.0 {
-        bail!("--cube needs a positive density in g/cm3");
+    if !density.is_finite() || density <= 0.0 {
+        bail!("--cube needs a positive, finite density in g/cm3 (got {density})");
     }
     let mut mass_u = 0.0f64;
     for (component, molecule) in components.iter().zip(molecules) {
@@ -477,5 +477,61 @@ mod tests {
             packed.cell.is_none(),
             "--no-cell should leave the cell unset"
         );
+    }
+
+    #[test]
+    fn cube_edge_matches_the_mass_density() {
+        // 1000 argon atoms at 1 g/cm3: 1000 × 39.948 u = 6.633e-20 g in 66 334 Å3.
+        let components = [ComponentArg {
+            entry: "argon".into(),
+            amount: Amount::Count(1000),
+        }];
+        let edge = cube_edge_for_density(&components, &[argon()], 1.0).unwrap();
+        assert!((edge - 40.48).abs() < 0.01, "edge {edge}");
+        let half = cube_edge_for_density(&components, &[argon()], 0.5).unwrap();
+        assert!((half / edge - 2f32.cbrt()).abs() < 1e-4, "edge {half}");
+    }
+
+    #[test]
+    fn cube_sizes_the_packed_cell() {
+        let (mut state, _) = scratch_with_entry();
+        disorder_command(&mut state, &split("--of active --count 8 --cube 0.5")).unwrap();
+        let packed = &state.entries.records.last().unwrap().structure;
+        assert_eq!(packed.atoms.len(), 8);
+        let cell = packed.cell.as_ref().expect("--cube stamps a cell");
+        let expected = (8.0 * 39.948 * GRAMS_PER_U / 0.5 * 1.0e24).cbrt() as f32;
+        for length in [cell.a, cell.b, cell.c] {
+            assert!((length - expected).abs() < 1e-3, "{length} vs {expected}");
+        }
+    }
+
+    #[test]
+    fn cube_refuses_amounts_it_cannot_size_from() {
+        let (mut state, _) = scratch_with_entry();
+        let err = disorder_command(
+            &mut state,
+            &split("--of active --count 4 --of active --density 0.8 --cube 1.0"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("--count amounts"), "got: {err}");
+        let err = disorder_command(
+            &mut state,
+            &split("--of active --count 4 --cube 1.0 --box 10,10,10"),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("only one region"), "got: {err}");
+    }
+
+    #[test]
+    fn cube_refuses_a_density_that_is_not_positive_and_finite() {
+        for density in ["0", "-1", "NaN", "inf"] {
+            let (mut state, _) = scratch_with_entry();
+            let line = format!("--of active --count 4 --cube {density}");
+            let err = disorder_command(&mut state, &split(&line)).unwrap_err();
+            assert!(
+                err.to_string().contains("positive, finite"),
+                "{density}: {err}"
+            );
+        }
     }
 }
