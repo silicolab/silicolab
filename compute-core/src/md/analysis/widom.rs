@@ -233,31 +233,17 @@ fn sample_frame(
         rng = splitmix64(rng);
         (rng >> 11) as f64 / (1u64 << 53) as f64
     };
-    let cutoff_sq = spec.cutoff * spec.cutoff;
     for _ in 0..spec.insertions {
         let origin = cell_point(cell, next(), next(), next());
         let rotation = random_rotation(next(), next(), next());
-        let mut energy = 0.0;
-        'probe: for (atom, offset) in spec.probe.iter().zip(&local) {
-            let point = origin + rotation * offset;
-            for neighbour in grid.neighbours(&point) {
-                let delta = grid.minimum_image(point - positions[neighbour].coords.cast::<f64>());
-                let r_sq = delta.norm_squared();
-                if r_sq >= cutoff_sq {
-                    continue;
-                }
-                energy += pair_energy(atom, &host[neighbour], r_sq, spec.cutoff);
-                if energy > 50.0 * kt {
-                    break 'probe;
-                }
-            }
-        }
+        let probe = spec
+            .probe
+            .iter()
+            .zip(&local)
+            .map(|(atom, offset)| (atom, origin + rotation * offset));
+        let mut energy = insertion_energy(&grid, positions, host, probe, spec.cutoff);
         energy += tail;
-        let boltzmann = if energy > 50.0 * kt {
-            0.0
-        } else {
-            (-energy / kt).exp()
-        };
+        let boltzmann = (-energy / kt).exp();
         accumulator.sum += boltzmann;
         accumulator.sum_sq += boltzmann * boltzmann;
         if energy < 0.0 {
@@ -268,11 +254,43 @@ fn sample_frame(
     Ok(())
 }
 
+/// Interaction energy of probe atoms at the given points with the host atoms
+/// inside the cutoff, summed in full: a large partial sum can still be offset by
+/// later attractive terms (Coulomb above all), so only an infinite overlap ends
+/// the sum early.
+fn insertion_energy<'a>(
+    grid: &CellList,
+    positions: &[Point3<f32>],
+    host: &[NonbondedAtom],
+    probe: impl Iterator<Item = (&'a NonbondedAtom, Vector3<f64>)>,
+    cutoff: f64,
+) -> f64 {
+    let cutoff_sq = cutoff * cutoff;
+    let mut energy = 0.0;
+    for (atom, point) in probe {
+        for neighbour in grid.neighbours(&point) {
+            let delta = grid.minimum_image(point - positions[neighbour].coords.cast::<f64>());
+            let r_sq = delta.norm_squared();
+            if r_sq >= cutoff_sq {
+                continue;
+            }
+            energy += pair_energy(atom, &host[neighbour], r_sq, cutoff);
+            if energy == f64::INFINITY {
+                return energy;
+            }
+        }
+    }
+    energy
+}
+
 /// Lennard-Jones (Lorentz–Berthelot) plus shifted-force Coulomb energy of one
 /// pair. A bare `q q / r` truncated per atom leaves tens of kJ/mol from every
 /// partial charge whose bonded partner lies just outside the sphere; the
 /// shifted-force form goes to zero with zero slope at the cutoff instead.
 fn pair_energy(a: &NonbondedAtom, b: &NonbondedAtom, r_sq: f64, cutoff: f64) -> f64 {
+    if r_sq <= 0.0 {
+        return f64::INFINITY;
+    }
     let sigma = 0.5 * (a.sigma + b.sigma);
     let epsilon = (a.epsilon * b.epsilon).sqrt();
     let mut energy = 0.0;
@@ -439,6 +457,125 @@ impl CellList {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn charged(sigma: f64, epsilon: f64, charge: f64) -> NonbondedAtom {
+        NonbondedAtom {
+            sigma,
+            epsilon,
+            charge,
+        }
+    }
+
+    fn cubic_cell(length: f32) -> UnitCell {
+        UnitCell::from_parameters(length, length, length, 90.0, 90.0, 90.0)
+    }
+
+    #[test]
+    fn a_large_repulsion_is_still_offset_by_a_later_attraction() {
+        // A probe anion 2.3 Å from a neutral host atom (well over 50 kT of
+        // repulsion) and 2.5 Å from a bare cation that more than cancels it.
+        let cell = cubic_cell(30.0);
+        let point = Vector3::new(15.0, 15.0, 15.0);
+        let positions = [Point3::new(17.3, 15.0, 15.0), Point3::new(15.0, 12.5, 15.0)];
+        let host = [charged(3.4, 0.4, 0.0), charged(0.0, 0.0, 1.0)];
+        let probe = charged(3.4, 0.4, -1.0);
+        let cutoff = 8.0;
+        let grid = CellList::new(&cell, &positions, cutoff).unwrap();
+        let energy = insertion_energy(
+            &grid,
+            &positions,
+            &host,
+            [(&probe, point)].into_iter(),
+            cutoff,
+        );
+        let repulsion = pair_energy(&probe, &host[0], 2.3 * 2.3, cutoff);
+        let attraction = pair_energy(&probe, &host[1], 6.25, cutoff);
+        assert!(repulsion > 50.0 * KB_KJ_PER_MOL_K * 300.0, "{repulsion}");
+        assert!((energy - (repulsion + attraction)).abs() < 1e-3, "{energy}");
+        assert!(energy < 0.0, "{energy}");
+    }
+
+    /// A charged two-atom probe in a charged host: the cell-list sum equals a
+    /// brute-force sum over every host atom, and reordering the host atoms
+    /// with their parameters leaves the Widom average unchanged.
+    #[test]
+    fn charged_insertions_match_a_full_sum_and_ignore_host_order() {
+        let length = 20.0f32;
+        let cell = cubic_cell(length);
+        let mut rng = 7u64;
+        let mut next = || {
+            rng = splitmix64(rng);
+            (rng >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut positions = Vec::new();
+        let mut host = Vec::new();
+        for index in 0..120 {
+            positions.push(Point3::new(
+                (next() * length as f64) as f32,
+                (next() * length as f64) as f32,
+                (next() * length as f64) as f32,
+            ));
+            let charge = if index % 2 == 0 { 0.4 } else { -0.4 };
+            host.push(charged(3.0, 0.3, charge));
+        }
+        let probe = [charged(3.0, 0.5, -0.8), charged(1.0, 0.0, 0.4)];
+        let cutoff = 9.0;
+        let grid = CellList::new(&cell, &positions, cutoff).unwrap();
+        for _ in 0..200 {
+            let origin = cell_point(&cell, next(), next(), next());
+            let points = [origin, origin + Vector3::new(1.0, 0.0, 0.0)];
+            let fast = insertion_energy(&grid, &positions, &host, probe.iter().zip(points), cutoff);
+            let mut reference = 0.0;
+            for (atom, point) in probe.iter().zip(points) {
+                for (position, other) in positions.iter().zip(&host) {
+                    let delta = grid.minimum_image(point - position.coords.cast::<f64>());
+                    if delta.norm_squared() < cutoff * cutoff {
+                        reference += pair_energy(atom, other, delta.norm_squared(), cutoff);
+                    }
+                }
+            }
+            assert!(
+                (fast - reference).abs() <= 1e-9 * reference.abs().max(1.0),
+                "{fast} vs {reference}"
+            );
+        }
+
+        let spec = WidomSpec {
+            probe_positions: vec![Point3::origin(), Point3::new(1.0, 0.0, 0.0)],
+            probe: probe.to_vec(),
+            temperature_k: 300.0,
+            insertions: 1000,
+            seed: 3,
+            cutoff,
+        };
+        let structure = |positions: &[Point3<f32>]| {
+            let atoms = positions
+                .iter()
+                .map(|position| crate::domain::Atom {
+                    element: "C".to_string(),
+                    position: *position,
+                    charge: 0.0,
+                })
+                .collect();
+            Structure::with_cell_and_bonds("host", atoms, Vec::new(), cell.clone())
+        };
+        let forward = widom_insertion(&structure(&positions), &host, &spec).unwrap();
+        let mut order: Vec<usize> = (0..positions.len()).collect();
+        order.reverse();
+        order.rotate_left(17);
+        let shuffled_positions: Vec<_> = order.iter().map(|&i| positions[i]).collect();
+        let shuffled_host: Vec<_> = order.iter().map(|&i| host[i]).collect();
+        let shuffled =
+            widom_insertion(&structure(&shuffled_positions), &shuffled_host, &spec).unwrap();
+        assert!(forward.boltzmann_mean > 0.0);
+        assert!(
+            (forward.boltzmann_mean - shuffled.boltzmann_mean).abs()
+                <= 1e-9 * forward.boltzmann_mean,
+            "{} vs {}",
+            forward.boltzmann_mean,
+            shuffled.boltzmann_mean
+        );
+    }
 
     #[test]
     fn tail_correction_matches_the_uniform_host_integral() {
