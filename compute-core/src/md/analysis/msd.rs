@@ -87,8 +87,7 @@ pub fn mean_squared_displacement(
         .max_lag_frames
         .unwrap_or(frames / 2)
         .clamp(2, frames - 1);
-    let dt = (trajectory.time(frames - 1) as f64 - trajectory.time(0) as f64) / (frames - 1) as f64;
-    let dt = if dt > 0.0 { dt } else { 1.0 };
+    let dt = frame_spacing(trajectory)?;
 
     let molecules = spec.molecules.len();
     let mut msd = Vec::with_capacity(max_lag);
@@ -133,6 +132,41 @@ pub fn mean_squared_displacement(
         frames,
         unwrapped,
     })
+}
+
+/// The common time step (ps) between frames. Every lag is a whole number of
+/// frames, so frame times must be finite, increasing, and evenly spaced (to 1%,
+/// plus the rounding of an `f32` time); a concatenated run with a repeated or
+/// skipped frame is refused rather than fitted with a wrong time axis.
+fn frame_spacing(trajectory: &Trajectory) -> Result<f64> {
+    let frames = trajectory.frame_count();
+    let times: Vec<f64> = (0..frames).map(|f| trajectory.time(f) as f64).collect();
+    if let Some(frame) = times.iter().position(|t| !t.is_finite()) {
+        bail!("frame {frame} has no finite time; MSD needs the frame times");
+    }
+    let dt = (times[frames - 1] - times[0]) / (frames - 1) as f64;
+    for (frame, pair) in times.windows(2).enumerate() {
+        let step = pair[1] - pair[0];
+        if step <= 0.0 {
+            bail!(
+                "frame times do not increase at frame {} ({} ps after {} ps); remove repeated \
+                 frames (e.g. at a restart boundary) before computing the MSD",
+                frame + 1,
+                pair[1],
+                pair[0]
+            );
+        }
+        let rounding = 4.0 * f32::EPSILON as f64 * pair[0].abs().max(pair[1].abs());
+        if (step - dt).abs() > 0.01 * dt + rounding {
+            bail!(
+                "frames are not evenly spaced: {step} ps between frames {frame} and {} against \
+                 {dt:.4} ps on average; MSD lags count frames, so resample the trajectory to \
+                 a fixed interval first",
+                frame + 1
+            );
+        }
+    }
+    Ok(dt)
 }
 
 /// Centre of mass of every molecule in every frame (`frame * molecules + m`),
