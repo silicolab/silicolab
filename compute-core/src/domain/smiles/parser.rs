@@ -5,14 +5,17 @@
 //! isotope/charge/explicit-H/atom-class, the bond symbols `- = # : / \`, branches
 //! `( )`, ring-closure digits and `%nn`, and dot-disconnected fragments. Chirality
 //! (`@`, `@@`) and bond stereo (`/`, `\`) are parsed but discarded — the sketcher
-//! does not model stereochemistry in v1.
+//! does not model stereochemistry in v1. `*` and `[*]` become attachment points.
 
 use anyhow::{Result, bail};
 
 use crate::domain::{
     BondType,
-    sketch::{Sketch, seed_layout},
+    sketch::{ATTACHMENT_SYMBOL, Sketch, seed_layout},
 };
+
+/// Largest hydrogen count or charge magnitude a bracket atom may state.
+const MAX_ATOM_COUNT: i32 = 99;
 
 /// Parse a SMILES string into a laid-out [`Sketch`].
 pub fn parse(input: &str) -> Result<Sketch> {
@@ -54,7 +57,7 @@ impl ParsedMolecule {
             // A bracket atom's hydrogen count is authoritative in SMILES: pin it
             // so the valence model is bypassed and `fill_hydrogens` adds exactly
             // this many (handles radicals like `[CH2]` and donors like `[nH]`).
-            if atom.bracket {
+            if atom.bracket && !sketch_atom.is_attachment() {
                 sketch_atom.explicit_hydrogens = Some(atom.explicit_h);
             }
             sketch.atoms.push(sketch_atom);
@@ -246,7 +249,7 @@ impl Parser {
         let (element, aromatic) = match c {
             'B' | 'C' | 'N' | 'O' | 'P' | 'S' | 'F' | 'I' => (c.to_string(), false),
             'b' | 'c' | 'n' | 'o' | 'p' | 's' => (c.to_uppercase().to_string(), true),
-            '*' => ("C".to_string(), false), // wildcard → treat as carbon
+            '*' => (ATTACHMENT_SYMBOL.to_string(), false),
             _ => bail!("unexpected character '{c}' in SMILES"),
         };
         self.pos += 1;
@@ -266,7 +269,7 @@ impl Parser {
             self.pos += 1;
         }
         let (element, aromatic) = self.read_bracket_symbol()?;
-        if !crate::domain::chemistry::is_element_symbol(&element) {
+        if element != ATTACHMENT_SYMBOL && !crate::domain::chemistry::is_element_symbol(&element) {
             bail!("unknown element `{element}` in bracket atom");
         }
 
@@ -277,6 +280,9 @@ impl Parser {
             match c {
                 ']' => {
                     self.pos += 1;
+                    if element == ATTACHMENT_SYMBOL && explicit_h > 0 {
+                        bail!("attachment point `*` cannot carry hydrogens");
+                    }
                     return Ok(ParsedAtom {
                         element,
                         charge,
@@ -307,13 +313,13 @@ impl Parser {
                 }
                 'H' => {
                     self.pos += 1;
-                    explicit_h = self.read_optional_count(1) as u32;
+                    explicit_h = self.read_optional_count(1)? as u32;
                 }
                 '+' => {
-                    charge += self.read_charge_run('+');
+                    charge += self.read_charge_run('+')?;
                 }
                 '-' => {
-                    charge -= self.read_charge_run('-');
+                    charge -= self.read_charge_run('-')?;
                 }
                 ':' => {
                     // Atom class — `:` followed by digits, discarded.
@@ -332,7 +338,10 @@ impl Parser {
         let Some(&first) = self.chars.get(self.pos) else {
             bail!("empty bracket atom");
         };
-        if first.is_ascii_uppercase() {
+        if first == '*' {
+            self.pos += 1;
+            Ok((ATTACHMENT_SYMBOL.to_string(), false))
+        } else if first.is_ascii_uppercase() {
             self.pos += 1;
             // A following lowercase letter forms a two-letter element symbol,
             // except 'H' which is the hydrogen-count token.
@@ -362,23 +371,26 @@ impl Parser {
     }
 
     /// Read an optional integer count after `H`/`+`/`-`, defaulting to `default`.
-    fn read_optional_count(&mut self, default: i32) -> i32 {
+    fn read_optional_count(&mut self, default: i32) -> Result<i32> {
         if self.chars.get(self.pos).is_some_and(|c| c.is_ascii_digit()) {
             let mut value = 0i32;
             while let Some(&c) = self.chars.get(self.pos) {
                 let Some(digit) = c.to_digit(10) else { break };
                 value = value * 10 + digit as i32;
+                if value > MAX_ATOM_COUNT {
+                    bail!("count in bracket atom is too large");
+                }
                 self.pos += 1;
             }
-            value
+            Ok(value)
         } else {
-            default
+            Ok(default)
         }
     }
 
     /// Handle a charge run: a sign followed by either a digit count (`+2`) or
     /// repeats of the same sign (`++`). Assumes the leading sign is at `pos`.
-    fn read_charge_run(&mut self, sign: char) -> i32 {
+    fn read_charge_run(&mut self, sign: char) -> Result<i32> {
         self.pos += 1; // consume the leading sign
         if self.chars.get(self.pos).is_some_and(|c| c.is_ascii_digit()) {
             return self.read_optional_count(1);
@@ -388,7 +400,7 @@ impl Parser {
             magnitude += 1;
             self.pos += 1;
         }
-        magnitude
+        Ok(magnitude)
     }
 }
 

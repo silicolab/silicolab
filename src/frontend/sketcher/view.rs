@@ -2,9 +2,8 @@
 //! footer with import/export, the title field, and the Build/Cancel actions.
 //!
 //! This is pure rendering in the architecture's sense: the live canvas mutates
-//! [`SketcherState`] in place each frame, and only Build/Cancel cross the
-//! `AppAction → dispatch` boundary ([`AppAction::CommitSketch`] /
-//! [`AppAction::CancelSketch`]).
+//! [`SketcherState`] in place each frame, and only Build/Cancel and molfile
+//! open/save cross the `AppAction → dispatch` boundary.
 
 use eframe::egui::{self, Context, RichText, TextEdit, Vec2};
 
@@ -44,7 +43,7 @@ pub fn render_sketcher_window(state: &mut AppState, actions: &mut Vec<AppAction>
             });
 
             ui.separator();
-            footer(sketcher, ui, &mut commit, &mut cancel);
+            footer(sketcher, ui, actions, &mut commit, &mut cancel);
         });
 
     if let Some(sketcher) = &mut state.ui.sketcher {
@@ -61,6 +60,7 @@ pub fn render_sketcher_window(state: &mut AppState, actions: &mut Vec<AppAction>
 fn footer(
     sketcher: &mut super::SketcherState,
     ui: &mut egui::Ui,
+    actions: &mut Vec<AppAction>,
     commit: &mut bool,
     cancel: &mut bool,
 ) {
@@ -88,7 +88,21 @@ fn footer(
             let smiles = sketcher.export_smiles();
             ui.ctx().copy_text(smiles.clone());
             sketcher.smiles_input = smiles;
-            sketcher.status = "Copied SMILES to clipboard".to_string();
+            sketcher.status = if sketcher.sketch.repeat_units.is_empty() {
+                "Copied SMILES to clipboard".to_string()
+            } else {
+                "Copied SMILES to clipboard; SMILES omits the repeat units".to_string()
+            };
+        }
+        ui.separator();
+        if ui.button("Open .mol…").clicked() {
+            actions.push(AppAction::OpenSketchMolfile);
+        }
+        if ui
+            .add_enabled(!sketcher.sketch.is_empty(), egui::Button::new("Save .mol…"))
+            .clicked()
+        {
+            actions.push(AppAction::SaveSketchMolfile);
         }
     });
 

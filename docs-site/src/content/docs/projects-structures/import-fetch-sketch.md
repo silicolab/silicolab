@@ -103,6 +103,22 @@ previous drawing. Correct the text and import again; do not mistake the retained
 drawing for the failed input. Choose **Cancel** to close the sketch without
 creating an entry.
 
+### Polymer repeat units
+
+The sketch window reads and writes MDL Molfile V3000 with **Open .mol…** and
+**Save .mol…**, including attachment points (`*`) and SRU repeat-unit brackets
+with their subscripts. SMILES accepts `*` and `[*]` as attachment points, for
+example `[*]CC([*])c1ccccc1`, but cannot express a repeat unit, so **Copy as
+SMILES** leaves the brackets out.
+
+Opening a molfile reports anything the sketch does not keep, such as stereo or
+isotopes, in the status bar. V2000 files, query atoms, R-group blocks, and Sgroup
+types other than SRU are rejected. A COP wrapper around SRU groups is dropped
+with a warning. Deleting a bond that crosses a bracket removes that repeat unit.
+
+**Build (Save as New)** stops with an error while the sketch has attachment
+points or repeat units, because a polymer fragment is not a complete molecule.
+
 Build adds inferred hydrogens, generates initial 3D coordinates, and attempts
 UFF relaxation only for supported elements. A structure with unsupported
 elements can still be created with unrelaxed coordinates.

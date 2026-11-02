@@ -6,6 +6,10 @@
 //! [`crate::domain::sketch::seed_layout`] lays them out). [`to_smiles`] walks the
 //! bond graph to emit a (non-canonical) SMILES string. Stereochemistry is not
 //! modeled in v1.
+//!
+//! `*` and `[*]` are attachment points. SMILES cannot express a repeat unit, so
+//! [`to_smiles`] writes the sketch's atoms and bonds but no bracket, subscript,
+//! or connectivity from [`crate::domain::sketch::RepeatUnit`].
 
 mod parser;
 mod writer;
@@ -96,6 +100,25 @@ mod tests {
         assert!(parse("C1CC").is_err()); // unclosed ring
         assert!(parse("[Xx]").is_err()); // not an element
         assert!(parse("[Q]").is_err());
+        assert!(parse("[CH99999999999]").is_err()); // count overflow
+    }
+
+    #[test]
+    fn reads_and_writes_attachment_points() {
+        let sketch = parse("[*]CC([*])c1ccccc1").unwrap();
+        assert_eq!(sketch.attachment_count(), 2);
+        let carbon = sketch.neighbors(0)[0].0;
+        assert_eq!(sketch.implicit_hydrogens(carbon), 2);
+        assert_eq!(sketch.implicit_hydrogens(0), 0);
+
+        let emitted = to_smiles(&sketch);
+        assert_eq!(emitted.matches("[*]").count(), 2, "{emitted}");
+        let reparsed = parse(&emitted).unwrap();
+        assert_eq!(reparsed.attachment_count(), 2);
+        assert_eq!(reparsed.bonds.len(), sketch.bonds.len());
+        assert_eq!(parse("*CC*").unwrap().attachment_count(), 2);
+        assert_eq!(parse("[*:1]CC").unwrap().attachment_count(), 1);
+        assert!(parse("[*H]C").is_err());
     }
 
     #[test]

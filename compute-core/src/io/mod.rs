@@ -1,6 +1,7 @@
 pub mod formats;
 #[cfg(feature = "network")]
 pub mod llm;
+pub mod molfile;
 #[cfg(feature = "network")]
 pub mod online_structures;
 #[cfg(feature = "network")]

@@ -90,6 +90,7 @@ pub fn clean_up(sketch: &mut Sketch, selection: Option<&[usize]>) {
             atom.pos += correction;
         }
     }
+    sketch.refit_repeat_unit_brackets();
 }
 
 /// Lay atoms out along a breadth-first walk of the bond graph so a freshly

@@ -1,7 +1,7 @@
 //! The drawing surface: computes this frame's pointer/hover, runs the tool input,
-//! then paints bonds, atoms, labels, charges, valence warnings, the hover halo,
-//! the selection, and any in-progress preview (ring template, rubber-band bond,
-//! chain count, rotation angle, marquee).
+//! then paints bonds, atoms, labels, charges, valence warnings, repeat-unit
+//! brackets, the hover halo, the selection, and any in-progress preview (ring
+//! template, rubber-band bond, chain count, rotation angle, marquee).
 
 use eframe::egui::{
     Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, Vec2, vec2,
@@ -14,13 +14,14 @@ use crate::domain::{BondType, chemistry::element_style};
 const PICK_PX: f32 = 14.0;
 const BOND_WIDTH: f32 = 2.0;
 const LABEL_SIZE: f32 = 15.0;
+const MIN_FIT_ZOOM: f32 = 1.0;
 
 pub(super) fn show_canvas(state: &mut SketcherState, ui: &mut Ui) {
     let size = ui.available_size();
     let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
 
     if state.take_needs_fit() {
-        state.fit(rect);
+        state.fit(rect, ui.painter());
     }
 
     // --- This frame's pointer / hover ---
@@ -48,6 +49,7 @@ pub(super) fn show_canvas(state: &mut SketcherState, ui: &mut Ui) {
         shift,
     };
     input::handle(state, &response, ui, &frame);
+    state.report_removed_repeat_units();
     set_cursor(state, ui, &response);
 
     // --- Paint ---
@@ -63,6 +65,7 @@ pub(super) fn show_canvas(state: &mut SketcherState, ui: &mut Ui) {
     draw_hover(state, &painter, rect, hovered_atom, hovered_bond);
     draw_bonds(state, &painter, rect);
     draw_atoms(state, &painter, rect);
+    draw_repeat_units(state, &painter, rect);
     draw_overlays(state, &painter, rect, &frame);
 }
 
@@ -244,6 +247,120 @@ fn draw_atoms(state: &SketcherState, painter: &eframe::egui::Painter, rect: Rect
             );
         }
     }
+}
+
+struct RepeatUnitDrawing {
+    lines: Vec<[Pos2; 2]>,
+    label: Option<(Pos2, std::sync::Arc<eframe::egui::Galley>)>,
+}
+
+impl RepeatUnitDrawing {
+    fn bounds(&self) -> Rect {
+        let mut bounds = Rect::NOTHING;
+        for line in &self.lines {
+            bounds.extend_with(line[0]);
+            bounds.extend_with(line[1]);
+        }
+        bounds = bounds.expand(BOND_WIDTH * 0.375);
+        if let Some((pos, galley)) = &self.label {
+            bounds = bounds.union(galley.mesh_bounds.translate(pos.to_vec2()));
+        }
+        bounds
+    }
+}
+
+fn repeat_unit_drawing(
+    state: &SketcherState,
+    painter: &eframe::egui::Painter,
+    rect: Rect,
+    unit: &crate::domain::sketch::RepeatUnit,
+) -> RepeatUnitDrawing {
+    let serif = state.zoom * 0.2;
+    let mut lines = Vec::new();
+    let mut subscript_at: Option<(Pos2, Vec2)> = None;
+    for [first, second] in &unit.brackets {
+        let start = state.to_screen(rect, *first);
+        let end = state.to_screen(rect, *second);
+        let along = (end - start).normalized();
+        let inward = vec2(-along.y, along.x) * serif;
+        lines.extend([[start + inward, start], [start, end], [end, end + inward]]);
+        for corner in [start, end] {
+            if subscript_at.is_none_or(|(at, _)| lower_right(corner) > lower_right(at)) {
+                subscript_at = Some((corner, -inward.normalized()));
+            }
+        }
+    }
+    let label = subscript_at
+        .filter(|_| !unit.label.is_empty())
+        .map(|(at, outward)| {
+            let galley = painter.layout_no_wrap(
+                unit.label.clone(),
+                FontId::proportional(LABEL_SIZE * 0.8),
+                bond_base_color(painter_is_dark(painter)),
+            );
+            let center = at + outward * (galley.size().length() * 0.5 + 2.0);
+            (center - galley.size() * 0.5, galley)
+        });
+    RepeatUnitDrawing { lines, label }
+}
+
+/// Subscripts sit at the bracket's lower right, the usual place in polymer
+/// formulas.
+fn lower_right(pos: Pos2) -> f32 {
+    pos.x + pos.y
+}
+
+fn draw_repeat_units(state: &SketcherState, painter: &eframe::egui::Painter, rect: Rect) {
+    let color = bond_base_color(painter_is_dark(painter));
+    let stroke = Stroke::new(BOND_WIDTH * 0.75, color);
+    for unit in &state.sketch.repeat_units {
+        let drawing = repeat_unit_drawing(state, painter, rect, unit);
+        for line in drawing.lines {
+            painter.line_segment(line, stroke);
+        }
+        if let Some((pos, galley)) = drawing.label {
+            painter.galley(pos, galley, color);
+        }
+    }
+}
+
+pub(super) fn fit_repeat_units(
+    state: &mut SketcherState,
+    rect: Rect,
+    painter: &eframe::egui::Painter,
+) {
+    let target = rect.shrink2(rect.size() * 0.09);
+    let bounds_at = |state: &SketcherState| {
+        let mut bounds = Rect::NOTHING;
+        for atom in &state.sketch.atoms {
+            bounds.extend_with(state.to_screen(rect, atom.pos));
+        }
+        for unit in &state.sketch.repeat_units {
+            bounds = bounds.union(repeat_unit_drawing(state, painter, rect, unit).bounds());
+        }
+        bounds
+    };
+    let atom_fit = (state.zoom, state.pan);
+    let mut low = 0.0;
+    let mut high = state.zoom;
+    // Text stays in screen pixels while bracket geometry scales with zoom.
+    for _ in 0..24 {
+        state.zoom = (low + high) * 0.5;
+        let bounds = bounds_at(state);
+        if bounds.width() <= target.width() && bounds.height() <= target.height() {
+            low = state.zoom;
+        } else {
+            high = state.zoom;
+        }
+    }
+    if low < MIN_FIT_ZOOM {
+        // A label about as wide as the canvas leaves no room for the atoms.
+        state.zoom = atom_fit.0;
+        state.pan = atom_fit.1;
+        return;
+    }
+    state.zoom = low;
+    state.pan += rect.center() - bounds_at(state).center();
 }
 
 fn atom_label(state: &SketcherState, index: usize) -> String {
@@ -439,5 +556,119 @@ impl SketcherState {
             }
             super::Gesture::Translate { .. } | super::Gesture::Erase => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_fitted(state: &SketcherState, painter: &eframe::egui::Painter, rect: Rect) {
+        for atom in &state.sketch.atoms {
+            assert!(rect.contains(state.to_screen(rect, atom.pos)));
+        }
+        for unit in &state.sketch.repeat_units {
+            let drawing = repeat_unit_drawing(state, painter, rect, unit);
+            assert!(
+                rect.contains_rect(drawing.bounds()),
+                "{:?}",
+                drawing.bounds()
+            );
+            for [first, second] in &unit.brackets {
+                assert!(rect.contains(state.to_screen(rect, *first)));
+                assert!(rect.contains(state.to_screen(rect, *second)));
+            }
+            if let Some((pos, galley)) = drawing.label {
+                assert!(rect.contains_rect(Rect::from_min_size(pos, galley.size())));
+            }
+        }
+    }
+
+    #[test]
+    fn fit_includes_polymer_brackets_and_subscripts() {
+        let ctx = eframe::egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            for text in [
+                include_str!("../../../compute-core/tests/fixtures/molfile/polystyrene.mol"),
+                include_str!("../../../compute-core/tests/fixtures/molfile/quaternized_ppo.mol"),
+                include_str!(
+                    "../../../compute-core/tests/fixtures/molfile/piperidinium_polymer.mol"
+                ),
+            ] {
+                let read = crate::io::molfile::read_molfile(text).unwrap();
+                let original = read.sketch.clone();
+                let mut state = SketcherState::with_sketch(read.sketch, read.title);
+                for size in [vec2(920.0, 420.0), vec2(660.0, 220.0)] {
+                    let rect = Rect::from_min_size(Pos2::new(100.0, 70.0), size);
+                    state.zoom = 80.0;
+                    state.pan = vec2(400.0, -300.0);
+                    state.fit(rect, ui.painter());
+                    assert_fitted(&state, ui.painter(), rect);
+                    let fitted_zoom = state.zoom;
+                    let fitted_pan = state.pan;
+                    state.fit(rect, ui.painter());
+                    assert!((state.zoom - fitted_zoom).abs() < 1e-4);
+                    assert!((state.pan - fitted_pan).length() < 1e-3);
+                    assert_eq!(state.sketch, original);
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn fit_measures_long_subscripts_and_large_brackets() {
+        let ctx = eframe::egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let read = crate::io::molfile::read_molfile(include_str!(
+                "../../../compute-core/tests/fixtures/molfile/polystyrene.mol"
+            ))
+            .unwrap();
+            let mut state = SketcherState::with_sketch(read.sketch, read.title);
+            let rect = Rect::from_min_size(Pos2::new(50.0, 100.0), vec2(660.0, 220.0));
+            state.sketch.repeat_units[0].brackets = vec![
+                [Point2::new(-60.0, -30.0), Point2::new(-60.0, 30.0)],
+                [Point2::new(60.0, 30.0), Point2::new(60.0, -30.0)],
+            ];
+            for label in ["n", "degree of polymerization (n + x + y)"] {
+                state.sketch.repeat_units[0].label = label.to_string();
+                state.fit(rect, ui.painter());
+                assert_fitted(&state, ui.painter(), rect);
+                assert!(state.zoom < 10.0);
+            }
+        });
+    }
+
+    #[test]
+    fn fit_keeps_the_atoms_visible_when_a_label_cannot_fit() {
+        let ctx = eframe::egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let read = crate::io::molfile::read_molfile(include_str!(
+                "../../../compute-core/tests/fixtures/molfile/polystyrene.mol"
+            ))
+            .unwrap();
+            let mut state = SketcherState::with_sketch(read.sketch, read.title);
+            let rect = Rect::from_min_size(Pos2::new(50.0, 100.0), vec2(660.0, 220.0));
+            state.sketch.repeat_units[0].label = "n".repeat(400);
+            state.fit(rect, ui.painter());
+            assert!(state.zoom >= 10.0, "{}", state.zoom);
+        });
+    }
+
+    #[test]
+    fn fit_without_repeat_units_keeps_the_existing_scale_and_center() {
+        let ctx = eframe::egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let mut state = SketcherState::new();
+            let rect = Rect::from_min_size(Pos2::new(100.0, 70.0), vec2(660.0, 220.0));
+            state.fit(rect, ui.painter());
+            assert_eq!(state.zoom, super::super::DEFAULT_ZOOM);
+            assert_eq!(state.pan, Vec2::ZERO);
+            state.sketch.add_atom("C", Point2::new(-10.0, -5.0));
+            state.sketch.add_atom("C", Point2::new(20.0, 5.0));
+            state.fit(rect, ui.painter());
+            let expected_zoom = (660.0_f32 * 0.82 / 30.0).min(220.0 * 0.82 / 10.0);
+            assert!((state.zoom - expected_zoom).abs() < 1e-5);
+            assert!((state.pan - vec2(-5.0 * expected_zoom, 0.0)).length() < 1e-5);
+        });
     }
 }

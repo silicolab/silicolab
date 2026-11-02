@@ -157,6 +157,8 @@ pub fn dispatch(state: &mut AppState, action: AppAction, ctx: &egui::Context) {
         AppAction::SketchMolecule => sketch_molecule(state),
         AppAction::CommitSketch => commit_sketch(state),
         AppAction::CancelSketch => cancel_sketch(state),
+        AppAction::OpenSketchMolfile => open_sketch_molfile(state),
+        AppAction::SaveSketchMolfile => save_sketch_molfile(state),
         AppAction::SelectAll => select_all(state),
         AppAction::InvertSelection => invert_selection(state),
         AppAction::ClearSelection => clear_selection(state),

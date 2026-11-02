@@ -2,7 +2,7 @@ use super::*;
 
 use std::path::PathBuf;
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Result, anyhow, bail};
 
 use crate::{
     backend::entries::EntryOrigin,
@@ -232,10 +232,10 @@ pub(crate) fn sketch_command(
     name: Option<&str>,
 ) -> Result<String> {
     let structure = crate::workflows::sketch_to_structure::smiles_to_structure(smiles, name)
-        .with_context(|| {
-            format!(
-                "could not sketch `{smiles}` — check the SMILES; diatomics need explicit \
-                 atoms (H₂ is `[H][H]`, O₂ is `O=O`, N₂ is `N#N`)"
+        .map_err(|error| {
+            anyhow!(
+                "could not sketch `{smiles}`: {error} — check the SMILES; diatomics need \
+                 explicit atoms (H₂ is `[H][H]`, O₂ is `O=O`, N₂ is `N#N`)"
             )
         })?;
     let atom_count = structure.atoms.len();
