@@ -86,6 +86,8 @@ fn two_methanes() -> Structure {
         atoms,
         UnitCell::from_parameters(20.0, 20.0, 20.0, 90.0, 90.0, 90.0),
     );
+    // `with_cell` guesses bonds from distances, which joins the packed hydrogens.
+    structure.bonds.clear();
     for copy in 0..2 {
         let base = copy * 5;
         for h in 1..=4 {
@@ -213,4 +215,33 @@ fn conflicting_atom_type_parameters_are_rejected() {
     .unwrap_err()
     .to_string();
     assert!(err.contains("different parameters"), "{err}");
+}
+
+/// Same atoms in the same order as methane, but H4 hangs off H3 instead of C.
+fn rewired_methane_template(label: &str) -> OrganicTemplate {
+    let mut template = methane_template(label);
+    template.molecule.bonds[3].atoms = vec![4, 5];
+    template
+}
+
+#[test]
+fn a_template_with_the_same_atoms_but_other_bonds_is_rejected() {
+    let err = organic_topology(
+        &two_methanes(),
+        &[rewired_methane_template("rewired")],
+        &BTreeMap::new(),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(
+        err.contains("different bonds") && err.contains("rewired"),
+        "{err}"
+    );
+
+    let templates = [
+        rewired_methane_template("rewired"),
+        methane_template("methane"),
+    ];
+    let (topology, _) = organic_topology(&two_methanes(), &templates, &BTreeMap::new()).unwrap();
+    assert_eq!(topology.molecules[0].name, "methane");
 }

@@ -49,7 +49,8 @@ md simulate --time 500ps --temperature 300
 ```
 
 `md build` finds the molecules of the active structure (the connected components of its bonds),
-matches each to the library entry with the same atoms in the same order, and captures a GAFF2
+matches each to the library entry with the same atoms in the same order and the same bonds between
+them (an isomer packed in the same element order is refused), and captures a GAFF2
 topology: the typed atoms with their AM1-BCC charges, the bonded terms with acpype's explicit
 parameters, and the molecule counts in coordinate order. The reply lists the composition, for
 example `… atoms as 8× ps3, 20× benzene`.

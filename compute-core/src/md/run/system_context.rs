@@ -358,7 +358,10 @@ mod tests {
             ForceFieldFamily::Gromos
         );
         // A framework / custom token has no biomolecular convention.
-        assert_eq!(ForceFieldFamily::from_token("gaff2"), ForceFieldFamily::Amber);
+        assert_eq!(
+            ForceFieldFamily::from_token("gaff2"),
+            ForceFieldFamily::Amber
+        );
         let other = ForceFieldFamily::from_token("nanosheet-custom");
         assert_eq!(other, ForceFieldFamily::Other);
         assert!(!other.is_biomolecular());

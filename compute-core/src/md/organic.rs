@@ -4,7 +4,7 @@
 //! template's typed atoms and parameterised bonded terms become the molecule
 //! type. Nothing is re-typed here; the templates come from a typer such as acpype.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Result, bail};
 
@@ -63,9 +63,14 @@ pub fn organic_topology(
         .iter()
         .map(|atom| normalized_symbol(&atom.element))
         .collect();
-    let template_elements: Vec<Vec<String>> = templates
+    let signatures: Vec<Signature> = templates
         .iter()
-        .map(|template| template_elements(&template.molecule))
+        .map(|template| {
+            Ok(Signature {
+                elements: template_elements(&template.molecule)?,
+                bonds: template_bond_graph(&template.molecule),
+            })
+        })
         .collect::<Result<_>>()?;
 
     let mut species: Vec<Species> = Vec::new();
@@ -80,10 +85,14 @@ pub fn organic_topology(
             .as_ref()
             .and_then(|b| b.residue_for_atom.get(start).copied().flatten())
             .and_then(|r| b_residue_name(structure, r));
+        let molecule = Signature {
+            elements: elements[start..end].to_vec(),
+            bonds: bond_graph(structure, start, end),
+        };
         let index = match_template(
-            &elements[start..end],
+            &molecule,
             templates,
-            &template_elements,
+            &signatures,
             residue.as_deref(),
             preferred,
             start,
@@ -186,19 +195,64 @@ fn molecule_ranges(structure: &Structure) -> Result<Vec<(usize, usize)>> {
     Ok(ranges)
 }
 
+/// Bonds among atoms `start..end`, as sorted molecule-local index pairs.
+fn bond_graph(structure: &Structure, start: usize, end: usize) -> BTreeSet<(usize, usize)> {
+    structure
+        .bonds
+        .iter()
+        .filter(|bond| (start..end).contains(&bond.a) && (start..end).contains(&bond.b))
+        .map(|bond| {
+            let (a, b) = (bond.a - start, bond.b - start);
+            (a.min(b), a.max(b))
+        })
+        .collect()
+}
+
+/// The template's `[ bonds ]` as sorted 0-based index pairs.
+fn template_bond_graph(molecule: &TypedMolecule) -> BTreeSet<(usize, usize)> {
+    molecule
+        .bonds
+        .iter()
+        .filter_map(|bond| match bond.atoms.as_slice() {
+            &[a, b] if a > 0 && b > 0 => {
+                let (a, b) = (a as usize - 1, b as usize - 1);
+                Some((a.min(b), a.max(b)))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Element sequence and bond graph (molecule-local indices) of a molecule or
+/// a template.
+struct Signature {
+    elements: Vec<String>,
+    bonds: BTreeSet<(usize, usize)>,
+}
+
+/// A molecule matches a template when the element sequence agrees atom for
+/// atom and, under that same index mapping, the bonds are the same: an
+/// isomer packed in the same element order (1- vs 2-propanol) must not get
+/// the other's bonded terms.
 fn match_template(
-    elements: &[String],
+    molecule: &Signature,
     templates: &[OrganicTemplate],
-    template_elements: &[Vec<String>],
+    signatures: &[Signature],
     residue: Option<&str>,
     preferred: &BTreeMap<String, String>,
     start: usize,
 ) -> Result<usize> {
-    let candidates: Vec<usize> = template_elements
+    let elements = &molecule.elements;
+    let same_atoms: Vec<usize> = signatures
         .iter()
         .enumerate()
-        .filter(|(_, template)| template.as_slice() == elements)
+        .filter(|(_, template)| template.elements == *elements)
         .map(|(index, _)| index)
+        .collect();
+    let candidates: Vec<usize> = same_atoms
+        .iter()
+        .copied()
+        .filter(|&index| signatures[index].bonds == molecule.bonds)
         .collect();
     let describe = || {
         let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
@@ -222,6 +276,11 @@ fn match_template(
             .position(|t| t.label.eq_ignore_ascii_case(wanted))
         {
             Some(index) if candidates.contains(&index) => Ok(index),
+            Some(index) if same_atoms.contains(&index) => bail!(
+                "typed molecule `{wanted}` has the atoms of {} but different bonds (an isomer?); \
+                 type the exact molecule that was packed",
+                describe()
+            ),
             Some(_) => bail!(
                 "typed molecule `{wanted}` does not have the atoms of {} (same atoms in the same \
                  order are required; type the exact molecule that was packed)",
@@ -231,6 +290,18 @@ fn match_template(
         };
     }
     match candidates.as_slice() {
+        [] if !same_atoms.is_empty() => {
+            let names: Vec<&str> = same_atoms
+                .iter()
+                .map(|&i| templates[i].label.as_str())
+                .collect();
+            bail!(
+                "{} has the same atoms in the same order as {} but different bonds (an isomer?); \
+                 type it with `forcefield type` and build again",
+                describe(),
+                names.join(", ")
+            )
+        }
         [] => bail!(
             "no typed molecule matches {}; type it with `forcefield type` and build again",
             describe()
