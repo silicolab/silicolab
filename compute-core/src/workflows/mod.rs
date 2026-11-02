@@ -6,6 +6,7 @@ pub mod molecular_dynamics;
 pub mod nanosheet;
 pub mod optimization;
 pub mod packing;
+pub mod polymer;
 pub mod ptm;
 pub mod qm;
 pub mod reticular;

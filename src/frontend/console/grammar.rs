@@ -198,6 +198,12 @@ pub(crate) enum Command {
 
     Glycosylate(GlycosylateArgs),
 
+    /// Polymers (run `polymer` for subcommands).
+    Polymer {
+        #[command(subcommand)]
+        action: PolymerAction,
+    },
+
     /// Phosphorylate a Ser/Thr/Tyr hydroxyl or His imidazole (neutral phosphate).
     Phosphorylate(PhosphorylateArgs),
 
@@ -506,6 +512,37 @@ pub(crate) enum ExportFormatArg {
 }
 
 #[derive(Debug, Subcommand)]
+pub(crate) enum PolymerAction {
+    /// Build a linear chain from repeat-unit SMILES with `[*]` attachment points
+    /// as a new entry, e.g. `polymer build "[*]CC[*]" --dp 20`.
+    Build(PolymerBuildArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct PolymerBuildArgs {
+    /// Repeat-unit SMILES, each with exactly two `[*]`; labelled A, B, … in order.
+    #[arg(required = true, num_args = 1..)]
+    pub(crate) units: Vec<String>,
+    /// Degree of polymerization (units per chain).
+    #[arg(long, default_value_t = 10)]
+    pub(crate) dp: usize,
+    /// Copolymer pattern over the unit labels, cycled to `--dp` (e.g. `AB`, `AAB`).
+    #[arg(long)]
+    pub(crate) sequence: Option<String>,
+    /// Residue name recorded for every unit of a homopolymer (default `MOA`).
+    #[arg(long)]
+    pub(crate) residue: Option<String>,
+    /// Seed for the torsion choices; different seeds give different conformations.
+    #[arg(long, default_value_t = 0)]
+    pub(crate) seed: u64,
+    /// Skip the per-junction UFF relaxation (faster, rougher geometry).
+    #[arg(long)]
+    pub(crate) no_relax: bool,
+    #[arg(long)]
+    pub(crate) name: Option<String>,
+}
+
+#[derive(Debug, Subcommand)]
 pub(crate) enum JobsAction {
     /// List running and tracked jobs.
     Status,
@@ -522,8 +559,8 @@ impl Command {
         context: &mut ScriptContext,
     ) -> Result<String> {
         use crate::frontend::{
-            disorder_commands, docking_commands, glycan_commands, md_commands, ptm_commands,
-            qm_commands,
+            disorder_commands, docking_commands, glycan_commands, md_commands, polymer_commands,
+            ptm_commands, qm_commands,
         };
         match self {
             Command::Open { path } => super::open_command(state, context, &path),
@@ -571,6 +608,9 @@ impl Command {
             Command::Score(args) => docking_commands::score_command(state, args),
             Command::Glycan(args) => glycan_commands::glycan_command(state, args),
             Command::Glycosylate(args) => glycan_commands::glycosylate_command(state, args),
+            Command::Polymer {
+                action: PolymerAction::Build(args),
+            } => polymer_commands::build_command(state, args),
             Command::Phosphorylate(args) => ptm_commands::phosphorylate_command(state, args),
             Command::Acetylate(args) => ptm_commands::acetylate_command(state, args),
             Command::Methylate(args) => ptm_commands::methylate_command(state, args),
