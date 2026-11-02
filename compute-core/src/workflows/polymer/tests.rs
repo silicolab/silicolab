@@ -152,3 +152,22 @@ fn the_same_seed_rebuilds_the_same_chain() {
     };
     assert_eq!(positions(&a), positions(&b));
 }
+
+#[test]
+fn every_seed_gives_finite_coordinates() {
+    // Seeds that docked a unit through a NaN rotation before `rotation_onto`.
+    for seed in [4, 14, 18, 23, 28] {
+        let mut spec = spec(&["[*]CC[*]"], 10);
+        spec.seed = seed;
+        let result = build_polymer(&spec).unwrap();
+        assert!(
+            result.structure.atoms.iter().all(|atom| atom
+                .position
+                .coords
+                .iter()
+                .all(|c| c.is_finite())),
+            "seed {seed} produced non-finite coordinates"
+        );
+        assert!(result.report.end_to_end > 8.0, "seed {seed}");
+    }
+}

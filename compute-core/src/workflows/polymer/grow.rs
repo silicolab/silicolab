@@ -389,9 +389,7 @@ fn placements(
         let cap_dir = (positions[unit.head_cap] - head_pos)
             .try_normalize(1.0e-4)
             .unwrap_or_else(|| Vector3::new(-1.0, 0.0, 0.0));
-        let align = Rotation3::rotation_between(&cap_dir, &(-axis)).unwrap_or_else(|| {
-            Rotation3::from_axis_angle(&perpendicular(cap_dir), std::f32::consts::PI)
-        });
+        let align = rotation_onto(cap_dir, -axis);
         for candidate in 0..TORSION_CANDIDATES {
             let angle =
                 phase + candidate as f32 * std::f32::consts::TAU / TORSION_CANDIDATES as f32;
@@ -451,6 +449,24 @@ fn has_hard_clash(unit: &RepeatUnit, placed: &[Point3<f32>], obstacles: &[Obstac
     })
 }
 
+/// The rotation taking unit vector `from` onto unit vector `to`.
+///
+/// `Rotation3::rotation_between` takes the angle as `acos(dot)`, which is NaN
+/// when two nearly parallel f32 vectors round their dot product above 1; every
+/// copy of a symmetric unit such as ethylene docks in exactly that case.
+fn rotation_onto(from: Vector3<f32>, to: Vector3<f32>) -> Rotation3<f32> {
+    let cross = from.cross(&to);
+    let sin = cross.norm();
+    let cos = from.dot(&to);
+    if sin > 1.0e-6 {
+        Rotation3::from_axis_angle(&Unit::new_unchecked(cross / sin), sin.atan2(cos))
+    } else if cos > 0.0 {
+        Rotation3::identity()
+    } else {
+        Rotation3::from_axis_angle(&perpendicular(from), std::f32::consts::PI)
+    }
+}
+
 fn perpendicular(v: Vector3<f32>) -> Unit<Vector3<f32>> {
     let reference = if v.z.abs() < 0.9 {
         Vector3::new(0.0, 0.0, 1.0)
@@ -458,4 +474,25 @@ fn perpendicular(v: Vector3<f32>) -> Unit<Vector3<f32>> {
         Vector3::new(1.0, 0.0, 0.0)
     };
     Unit::new_normalize(v.cross(&reference))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rotation_onto_handles_nearly_parallel_and_opposite_vectors() {
+        let from = Vector3::new(0.267_261_24, 0.534_522_5, 0.801_783_7f32);
+        for to in [
+            from,
+            (from + Vector3::new(1.0e-7, -1.0e-7, 0.0)).normalize(),
+            (from + Vector3::new(3.0e-4, 0.0, -2.0e-4)).normalize(),
+            -from,
+            Vector3::new(0.0, 0.0, 1.0),
+        ] {
+            let rotated = rotation_onto(from, to) * from;
+            assert!(rotated.iter().all(|c| c.is_finite()), "{to:?}");
+            assert!((rotated - to).norm() < 1.0e-3, "{rotated:?} vs {to:?}");
+        }
+    }
 }
