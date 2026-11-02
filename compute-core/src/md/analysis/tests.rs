@@ -275,3 +275,73 @@ fn free_volume_averages_over_trajectory_frames_with_their_boxes() {
         .to_string();
     assert!(err.contains("out of range"), "{err}");
 }
+
+fn moving_atom_with_times(times: &[f32]) -> (Structure, Trajectory) {
+    let structure = Structure::new("t", vec![atom("Ar", 0.0, 0.0, 0.0)]);
+    let coords: Vec<f32> = (0..times.len())
+        .flat_map(|i| [0.5 * i as f32, 0.0, 0.0])
+        .collect();
+    let trajectory = Trajectory::from_parts(1, coords, times.to_vec(), 1, times.len());
+    (structure, trajectory)
+}
+
+fn msd_of(structure: &Structure, trajectory: &Trajectory) -> anyhow::Result<DiffusionReport> {
+    mean_squared_displacement(
+        trajectory,
+        structure,
+        &MsdSpec {
+            molecules: vec![vec![0]],
+            max_lag_frames: None,
+            fit_window: (0.2, 0.8),
+        },
+    )
+}
+
+#[test]
+fn msd_refuses_irregular_frame_spacing() {
+    let mut times: Vec<f32> = (0..20).map(|i| i as f32).collect();
+    for time in &mut times[10..] {
+        *time += 9.0;
+    }
+    let (structure, trajectory) = moving_atom_with_times(&times);
+    let err = msd_of(&structure, &trajectory).unwrap_err().to_string();
+    assert!(err.contains("evenly spaced"), "{err}");
+}
+
+#[test]
+fn msd_refuses_repeated_or_missing_times() {
+    let mut times: Vec<f32> = (0..20).map(|i| i as f32).collect();
+    times[10] = times[9];
+    let (structure, trajectory) = moving_atom_with_times(&times);
+    let err = msd_of(&structure, &trajectory).unwrap_err().to_string();
+    assert!(err.contains("do not increase"), "{err}");
+
+    let (structure, trajectory) = moving_atom_with_times(&[0.0; 20]);
+    assert!(msd_of(&structure, &trajectory).is_err());
+
+    times = (0..20).map(|i| i as f32).collect();
+    times[5] = f32::NAN;
+    let (structure, trajectory) = moving_atom_with_times(&times);
+    let err = msd_of(&structure, &trajectory).unwrap_err().to_string();
+    assert!(err.contains("finite"), "{err}");
+}
+
+#[test]
+fn msd_accepts_late_times_that_f32_rounds() {
+    // At 1 µs an f32 time is only good to ~0.06 ps; a 1 ps spacing still holds.
+    let times: Vec<f32> = (0..20).map(|i| 1.0e6 + i as f32 * 1.0).collect();
+    let (structure, trajectory) = moving_atom_with_times(&times);
+    let report = msd_of(&structure, &trajectory).unwrap();
+    assert!((report.lag_ps[0] - 1.0).abs() < 0.1, "{}", report.lag_ps[0]);
+}
+
+#[test]
+fn free_volume_refuses_a_grid_too_fine_to_count() {
+    let structure = Structure::with_cell("t", vec![atom("Ar", 0.0, 0.0, 0.0)], cubic(10.0));
+    let spec = FreeVolumeSpec {
+        probe_radius: 0.0,
+        grid_spacing: 1.0e-6,
+    };
+    let err = free_volume(&structure, spec).unwrap_err().to_string();
+    assert!(err.contains("coarser --grid"), "{err}");
+}

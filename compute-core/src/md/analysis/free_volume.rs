@@ -178,14 +178,20 @@ fn free_points(
         bail!("the cell is degenerate");
     };
     let counts = [cell.a, cell.b, cell.c].map(|length| ((length / spacing).ceil() as usize).max(1));
-    let total = counts[0] * counts[1] * counts[2];
     const MAX_POINTS: usize = 200_000_000;
-    if total > MAX_POINTS {
-        bail!(
-            "a {spacing} Å grid needs {total} points for this cell; use a coarser --grid or a \
-             smaller cell"
-        );
-    }
+    let total = counts[0]
+        .checked_mul(counts[1])
+        .and_then(|points| points.checked_mul(counts[2]))
+        .filter(|&points| points <= MAX_POINTS)
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "a {spacing} Å grid needs {}×{}×{} points for this cell, more than {MAX_POINTS}; \
+                 use a coarser --grid or a smaller cell",
+                counts[0],
+                counts[1],
+                counts[2]
+            )
+        })?;
     let mut occupied = vec![false; total];
     // Fractional half-widths of a sphere's bounding box along each axis.
     let reach = |radius: f32| -> [f32; 3] {

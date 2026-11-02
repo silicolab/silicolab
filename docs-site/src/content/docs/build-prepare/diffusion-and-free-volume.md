@@ -61,7 +61,9 @@ GROMACS' wrapped `.xtc` output needs no preprocessing. Watch the exponent: the l
 MSD over the fit window is 1 for Fickian diffusion. A value well below 1 means the sorbate is still
 caged in its hole and the run is too short; the command says so. An XYZ trajectory needs a
 `t=` time (ps) in each frame's comment line; without one, frames are taken as 0.005 ps apart and
-the reply warns that D rests on that spacing.
+the reply warns that D rests on that spacing. Frame times must be evenly spaced and increasing: a
+trajectory joined from restarts with a repeated frame, or one with a gap, is refused rather than
+fitted on a wrong time axis.
 
 A permeability-style selectivity follows from two runs: the ratio of the diffusion coefficients of
 two sorbates in the same membrane times the ratio of their sorption. The sorption half is a
