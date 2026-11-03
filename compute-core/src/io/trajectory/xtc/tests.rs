@@ -346,6 +346,12 @@ fn reads_small_uncompressed_frames() {
     assert!((traj.position(1, 2).z - 18.0).abs() < 1e-4);
     assert!((traj.time(0) - 1.5).abs() < 1e-4);
     assert!((traj.time(1) - 3.0).abs() < 1e-4);
+    // The 2 nm box is carried along in Angstrom.
+    let frame_box = traj.box_vectors(1).unwrap();
+    assert!((frame_box[0].x - 20.0).abs() < 1e-4);
+    assert!((frame_box[1].y - 20.0).abs() < 1e-4);
+    assert!(frame_box[2].x.abs() < 1e-6);
+    assert!(traj.box_vectors(2).is_none());
 }
 
 #[test]

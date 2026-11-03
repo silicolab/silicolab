@@ -1,7 +1,7 @@
 //! A decoded molecular-dynamics trajectory: a sequence of coordinate frames
 //! over a fixed set of atoms.
 
-use nalgebra::Point3;
+use nalgebra::{Point3, Vector3};
 
 use crate::domain::Atom;
 
@@ -29,6 +29,9 @@ pub struct Trajectory {
     energies: Vec<f64>,
     /// What produced the trajectory (e.g. `GFN2-xTB`), when the source says.
     method: Option<String>,
+    /// Box vectors (Angstrom) of each frame, when the source records them;
+    /// empty otherwise. When present, `len() == frame_count()`.
+    boxes: Vec<[Vector3<f32>; 3]>,
 }
 
 impl Trajectory {
@@ -52,7 +55,22 @@ impl Trajectory {
             source_frame_count,
             energies: Vec::new(),
             method: None,
+            boxes: Vec::new(),
         }
+    }
+
+    /// Attach per-frame box vectors (Angstrom). Ignored unless there is exactly
+    /// one box per frame, so a partial record never misaligns with the frames.
+    pub fn with_boxes(mut self, boxes: Vec<[Vector3<f32>; 3]>) -> Self {
+        if boxes.len() == self.frame_count() {
+            self.boxes = boxes;
+        }
+        self
+    }
+
+    /// Box vectors (Angstrom) of `frame`, when the trajectory carries boxes.
+    pub fn box_vectors(&self, frame: usize) -> Option<[Vector3<f32>; 3]> {
+        self.boxes.get(frame).copied()
     }
 
     /// Record the method that produced the trajectory.

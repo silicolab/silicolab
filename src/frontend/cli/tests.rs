@@ -359,3 +359,34 @@ fn strict_scripts_write_only_inside_the_project() {
     p.strict(&format!("export {}", inside.display())).unwrap();
     assert!(inside.exists());
 }
+
+#[test]
+fn strict_scripts_write_the_msd_curve_only_inside_the_project() {
+    let p = StrictProject::new("test-cli-strict-msd");
+    let trajectory = p.root.join("h2.traj.xyz");
+    let frames: String = (0..4)
+        .map(|frame| {
+            let z = frame as f32 * 0.1;
+            format!("2\nt= {frame}.0\nH 0 0 {z}\nH 0 0 {}\n", z + 0.9)
+        })
+        .collect();
+    fs::write(&trajectory, frames).unwrap();
+    let outside = p.root.join("msd.csv");
+    let line = |out: &std::path::Path| {
+        format!(
+            "membrane diffusion {} --out {}",
+            trajectory.display(),
+            out.display()
+        )
+    };
+    let error = p.strict(&line(&outside)).unwrap_err();
+    assert!(
+        format!("{error:#}").contains("outside the project"),
+        "{error:#}"
+    );
+    assert!(!outside.exists());
+
+    let inside = p.project.join("msd.csv");
+    p.strict(&line(&inside)).unwrap();
+    assert!(inside.exists());
+}

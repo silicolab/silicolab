@@ -17,6 +17,8 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 
+use nalgebra::Vector3;
+
 use crate::domain::Trajectory;
 
 /// nm -> Angstrom, matching the `.gro` loader (`io/formats/gro.rs`).
@@ -69,6 +71,7 @@ fn read_xtc_from<R: Read + Seek>(mut reader: R) -> Result<Trajectory> {
     // decoded.
     let mut frame_offsets: Vec<u64> = Vec::new();
     let mut frame_times: Vec<f32> = Vec::new();
+    let mut frame_boxes: Vec<[Vector3<f32>; 3]> = Vec::new();
     let mut natoms = 0usize;
     loop {
         let offset = reader.stream_position()?;
@@ -90,11 +93,11 @@ fn read_xtc_from<R: Read + Seek>(mut reader: R) -> Result<Trajectory> {
         }
         let _step = read_i32(&mut reader)?;
         let time = read_f32(&mut reader)?;
-        // Box: 3x3 floats.
-        reader.seek(SeekFrom::Current(9 * 4))?;
+        let frame_box = read_box(&mut reader)?;
         skip_coord_block(&mut reader, magic)?;
         frame_offsets.push(offset);
         frame_times.push(time);
+        frame_boxes.push(frame_box);
     }
 
     let source_frame_count = frame_offsets.len();
@@ -109,6 +112,7 @@ fn read_xtc_from<R: Read + Seek>(mut reader: R) -> Result<Trajectory> {
     let kept: Vec<usize> = (0..source_frame_count).step_by(stride).collect();
     let mut coords = Vec::with_capacity(kept.len() * natoms * 3);
     let mut times = Vec::with_capacity(kept.len());
+    let mut boxes = Vec::with_capacity(kept.len());
     let mut scratch = vec![0f32; natoms * 3];
 
     // Pass 2: seek to each kept frame and decode its coordinates.
@@ -117,15 +121,21 @@ fn read_xtc_from<R: Read + Seek>(mut reader: R) -> Result<Trajectory> {
         decode_frame(&mut reader, natoms, &mut scratch)?;
         coords.extend_from_slice(&scratch);
         times.push(frame_times[frame]);
+        boxes.push(frame_boxes[frame]);
     }
 
-    Ok(Trajectory::from_parts(
-        natoms,
-        coords,
-        times,
-        stride,
-        source_frame_count,
-    ))
+    Ok(Trajectory::from_parts(natoms, coords, times, stride, source_frame_count).with_boxes(boxes))
+}
+
+/// The frame's 3x3 box (nm rows), returned as Angstrom vectors.
+fn read_box<R: Read>(reader: &mut R) -> Result<[Vector3<f32>; 3]> {
+    let mut rows = [Vector3::zeros(); 3];
+    for row in &mut rows {
+        for component in row.iter_mut() {
+            *component = read_f32(reader)? * NM_TO_ANGSTROM;
+        }
+    }
+    Ok(rows)
 }
 
 fn check_magic(magic: i32) -> Result<()> {
