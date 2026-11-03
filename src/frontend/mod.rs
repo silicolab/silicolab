@@ -8,6 +8,7 @@ mod disorder_commands;
 mod dispatcher;
 mod docking_commands;
 mod entry_ref;
+mod forcefield_commands;
 mod glass;
 mod glycan_commands;
 mod gpu_inventory;

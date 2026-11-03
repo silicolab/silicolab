@@ -33,9 +33,11 @@ use crate::frontend::{
     state::{AppState, AtomStyle},
 };
 
+mod builder_args;
 mod online_args;
 mod ptm_args;
 
+pub(crate) use builder_args::{ForcefieldAction, ForcefieldTypeArgs};
 use online_args::parse_find_limit;
 pub(crate) use online_args::{FindQueryKind, parse_find_query};
 pub(crate) use ptm_args::{
@@ -202,6 +204,13 @@ pub(crate) enum Command {
     Polymer {
         #[command(subcommand)]
         action: PolymerAction,
+    },
+
+    /// Force-field typing of organic molecules (run `forcefield` for subcommands).
+    #[command(visible_alias = "ff")]
+    Forcefield {
+        #[command(subcommand)]
+        action: ForcefieldAction,
     },
 
     /// Phosphorylate a Ser/Thr/Tyr hydroxyl or His imidazole (neutral phosphate).
@@ -559,8 +568,8 @@ impl Command {
         context: &mut ScriptContext,
     ) -> Result<String> {
         use crate::frontend::{
-            disorder_commands, docking_commands, glycan_commands, md_commands, polymer_commands,
-            ptm_commands, qm_commands,
+            disorder_commands, docking_commands, forcefield_commands, glycan_commands, md_commands,
+            polymer_commands, ptm_commands, qm_commands,
         };
         match self {
             Command::Open { path } => super::open_command(state, context, &path),
@@ -611,6 +620,12 @@ impl Command {
             Command::Polymer {
                 action: PolymerAction::Build(args),
             } => polymer_commands::build_command(state, args),
+            Command::Forcefield {
+                action: ForcefieldAction::Type(args),
+            } => forcefield_commands::type_command(state, args),
+            Command::Forcefield {
+                action: ForcefieldAction::List,
+            } => Ok(forcefield_commands::list_command()),
             Command::Phosphorylate(args) => ptm_commands::phosphorylate_command(state, args),
             Command::Acetylate(args) => ptm_commands::acetylate_command(state, args),
             Command::Methylate(args) => ptm_commands::methylate_command(state, args),

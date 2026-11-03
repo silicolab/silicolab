@@ -1,7 +1,7 @@
 //! Approval risk: how consequential each `.sls` command is, which is what the
 //! assistant's approval gate keys on.
 
-use super::{Command, JobsAction};
+use super::{Command, ForcefieldAction, JobsAction};
 
 /// How consequential a command is — the input to the assistant's approval gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -59,6 +59,9 @@ impl Command {
             | Command::Jobs {
                 action: None | Some(JobsAction::Status),
             }
+            | Command::Forcefield {
+                action: ForcefieldAction::List,
+            }
             | Command::Help => ReadOnly,
             // `qm recommend` only prints the level-of-theory table (read-only);
             // every other `qm` sub-verb launches a calculation.
@@ -78,6 +81,9 @@ impl Command {
             Command::Save { .. } | Command::Export(_) => FileWrite,
             Command::Md { .. }
             | Command::Disorder { .. }
+            | Command::Forcefield {
+                action: ForcefieldAction::Type(_),
+            }
             | Command::Dock(_)
             | Command::Score(_) => Expensive,
             // `Source` runs a script's lines straight through the console with no

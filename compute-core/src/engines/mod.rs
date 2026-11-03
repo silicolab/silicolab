@@ -1,3 +1,4 @@
+pub mod acpype;
 pub mod docking;
 pub mod forcefield;
 pub mod gromacs;

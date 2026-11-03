@@ -167,6 +167,22 @@ const ENGINE_SPECS: &[EngineSpec] = &[
         identity_marker: "xtb",
         requires_configured_path: false,
     },
+    EngineSpec {
+        id: EngineId::ACPYPE,
+        name: "acpype",
+        description: "Optional GAFF/GAFF2 atom typing and AM1-BCC charges for organic molecules (AmberTools antechamber via acpype).",
+        candidate_executables: &[
+            "acpype",
+            "/opt/homebrew/bin/acpype",
+            "/usr/local/bin/acpype",
+        ],
+        // `--version` alone prints a bare version string; `-h` always names the
+        // program in its usage line, which is what the identity check needs.
+        version_args: &["-h"],
+        identity_allows_nonzero_exit: true,
+        identity_marker: "acpype",
+        requires_configured_path: false,
+    },
 ];
 
 /// The detection spec for `id`, or `None` for a built-in engine (no executable).

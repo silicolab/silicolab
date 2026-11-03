@@ -25,6 +25,7 @@ impl EngineId {
     pub const XTB: Self = Self("xtb");
     pub const GROMACS: Self = Self("gromacs");
     pub const DOCKING: Self = Self("docking");
+    pub const ACPYPE: Self = Self("acpype");
 
     pub fn as_str(self) -> &'static str {
         self.0
