@@ -211,12 +211,14 @@ pub(crate) fn resolve_md_topology_source(
         }
     }
 
-    let topology = crate::workflows::molecular_dynamics::MdTopology::from_structure(
+    let (topology, _) = crate::frontend::md_support::derive_md_topology(
         state.structure(),
+        &std::collections::BTreeMap::new(),
     )
-    .map_err(|_| {
+    .map_err(|error| {
         anyhow!(
-            "No automatic MD topology is available for this structure. Build an MD system first or choose a custom topology in Advanced."
+            "No automatic MD topology is available for this structure ({error:#}). Build an MD \
+             system first or choose a custom topology in Advanced."
         )
     })?;
     Ok(TopologySource::Inline(render_top(&topology)))

@@ -43,7 +43,7 @@ impl ForceFieldFamily {
         let t = token.trim().to_ascii_lowercase();
         if t.starts_with("charmm") {
             Self::Charmm
-        } else if t.starts_with("amber") {
+        } else if t.starts_with("amber") || t.starts_with("gaff") {
             Self::Amber
         } else if t.starts_with("opls") {
             Self::Opls
@@ -358,6 +358,10 @@ mod tests {
             ForceFieldFamily::Gromos
         );
         // A framework / custom token has no biomolecular convention.
+        assert_eq!(
+            ForceFieldFamily::from_token("gaff2"),
+            ForceFieldFamily::Amber
+        );
         let other = ForceFieldFamily::from_token("nanosheet-custom");
         assert_eq!(other, ForceFieldFamily::Other);
         assert!(!other.is_biomolecular());

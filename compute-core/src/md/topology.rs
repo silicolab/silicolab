@@ -90,6 +90,12 @@ pub struct BondedTerm {
     /// force-field topology convention (1 = harmonic bond/angle and 1-4 pair,
     /// 9 = multiple proper dihedral, 4 = improper dihedral).
     pub func: i32,
+    /// Explicit parameters following the function code, in the engine's order
+    /// for that function (a typed organic molecule carries its own, as acpype
+    /// writes them). Empty when the engine resolves the term from
+    /// [`MdTopology::bonded_params`] by atom type.
+    #[serde(default)]
+    pub params: Vec<f64>,
 }
 
 /// A molecule type: an ordered list of atoms plus optional bonded terms and an

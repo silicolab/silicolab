@@ -1,4 +1,4 @@
-use std::{path::Path, path::PathBuf};
+use std::{collections::BTreeMap, path::Path, path::PathBuf};
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -6,16 +6,69 @@ use serde::{Deserialize, Serialize};
 use crate::{
     backend::tasks::TaskKind,
     domain::Structure,
-    engines::gromacs::{
-        FreezeSelection, MdpSettings, StageSpec, framework_freeze_selection, input::FreezeGroup,
+    engines::{
+        acpype::parse_itp,
+        gromacs::{
+            FreezeSelection, MdpSettings, StageSpec, framework_freeze_selection, input::FreezeGroup,
+        },
     },
     frontend::state::AppState,
+    md::{OrganicReport, OrganicTemplate, organic_topology},
     workflows::molecular_dynamics::{
         MdProtocolOptions, MdSystemContext, MdTopology, full_protocol,
     },
 };
 
 pub const MD_TOPOLOGY_FILE: &str = "system_topology.json";
+
+/// Every library force field that parses as one typed molecule (an acpype
+/// product), by library name. Framework fragments and other partial `.itp`s are
+/// skipped silently: they are not molecule templates.
+pub fn organic_templates_from_library() -> Vec<OrganicTemplate> {
+    crate::backend::force_fields::list_force_fields()
+        .into_iter()
+        .filter_map(|name| {
+            let text = crate::backend::force_fields::load_force_field(&name).ok()?;
+            let molecule = parse_itp(&text, &name).ok()?;
+            (!molecule.atoms.is_empty()).then_some(OrganicTemplate {
+                label: name,
+                molecule,
+            })
+        })
+        .collect()
+}
+
+/// The engine-neutral topology of `structure` without an external build: the
+/// monatomic Lennard-Jones table for a bond-free system, else the typed
+/// molecules of the force-field library for a bonded organic one. `preferred`
+/// maps a residue name to the library entry to use when several would fit.
+pub fn derive_md_topology(
+    structure: &Structure,
+    preferred: &BTreeMap<String, String>,
+) -> Result<(MdTopology, Option<OrganicReport>)> {
+    if structure.bonds.is_empty() {
+        return Ok((MdTopology::from_structure(structure)?, None));
+    }
+    let templates = organic_templates_from_library();
+    let (topology, report) = organic_topology(structure, &templates, preferred)?;
+    Ok((topology, Some(report)))
+}
+
+/// Parse `--typed RES=name,RES2=name2` into a residue → library-name map.
+pub fn parse_typed_preferences(text: Option<&str>) -> Result<BTreeMap<String, String>> {
+    let mut preferred = BTreeMap::new();
+    for pair in text
+        .unwrap_or("")
+        .split(',')
+        .filter(|p| !p.trim().is_empty())
+    {
+        let Some((residue, name)) = pair.split_once('=') else {
+            anyhow::bail!("--typed expects RES=name pairs, got `{pair}`");
+        };
+        preferred.insert(residue.trim().to_string(), name.trim().to_string());
+    }
+    Ok(preferred)
+}
 
 /// The GROMACS topology a [`TaskKind::BuildMdSystem`] run writes when GROMACS is
 /// the build engine (`pdb2gmx -p topol.top`, updated by solvate/genion).
@@ -165,6 +218,15 @@ pub fn protocol_stage_specs(options: &MdProtocolOptions) -> Vec<StageSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_preferences_parse_residue_pairs() {
+        let preferred = parse_typed_preferences(Some("BEN=benzene, POL = ps10")).unwrap();
+        assert_eq!(preferred["BEN"], "benzene");
+        assert_eq!(preferred["POL"], "ps10");
+        assert!(parse_typed_preferences(None).unwrap().is_empty());
+        assert!(parse_typed_preferences(Some("benzene")).is_err());
+    }
 
     #[test]
     fn write_md_system_context_records_full_count_and_classifies_family() {

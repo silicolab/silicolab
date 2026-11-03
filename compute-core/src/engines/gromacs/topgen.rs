@@ -234,7 +234,11 @@ fn push_term_line(top: &mut String, term: &BondedTerm) {
     for atom in &term.atoms {
         top.push_str(&format!("{atom:>4} "));
     }
-    top.push_str(&format!("{}\n", term.func));
+    top.push_str(&format!("{}", term.func));
+    for value in &term.params {
+        top.push_str(&format!("  {value}"));
+    }
+    top.push('\n');
 }
 
 #[cfg(test)]
@@ -258,6 +262,21 @@ mod tests {
             UnitCell::from_parameters(100.0, 100.0, 100.0, 90.0, 90.0, 90.0),
         );
         MdTopology::from_structure(&structure).unwrap()
+    }
+
+    #[test]
+    fn bonded_terms_carry_their_explicit_parameters() {
+        let mut topology = argon_topology(1);
+        topology.molecules[0].bonds.push(BondedTerm {
+            atoms: vec![1, 2],
+            func: 1,
+            params: vec![0.1092, 282252.6],
+        });
+        let top = render_top(&topology);
+        assert!(
+            top.contains("[ bonds ]\n     1    2 1  0.1092  282252.6\n"),
+            "{top}"
+        );
     }
 
     #[test]

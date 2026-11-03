@@ -16,6 +16,7 @@ pub(crate) mod bonded_graph;
 pub mod catalog;
 pub mod framework;
 pub mod materials;
+pub mod organic;
 pub mod run;
 pub mod solvation;
 pub mod system;
@@ -33,6 +34,7 @@ pub use materials::{
     is_framework_shape, is_framework_with_custom, parameterize_element, solvent_definitions,
     supports_flexible, unparameterized_elements, user_provided_elements,
 };
+pub use organic::{GAFF_DEFAULTS, OrganicReport, OrganicTemplate, organic_topology};
 pub use run::{
     AnnealSpec, DEFAULT_TRAJECTORY_FRAMES, EffectiveContext, ForceFieldFamily, MdParameters,
     MdStage, MdSystemContext, PresetId, PresetParams, ProductionLength, RecNote, Recommendation,
