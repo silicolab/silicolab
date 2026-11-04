@@ -38,15 +38,30 @@ a residue; the residue name is the first three letters of the entry name, upperc
 pack --of ps3 --count 8 --of benzene --count 20 --box 32,32,32 --seed 1
 ```
 
-Use `--density` instead of `--count` to size the chain count by mass density. A low starting
-density (0.1–0.3 g/cm³) packs quickly; the compression stages of the run bring it to the real one.
+Use `--density` instead of `--count` to size the chain count by mass density, or `--cube <g/cm³>`
+instead of `--box` to size a cubic cell so the counted copies start at that density. A low starting
+density (0.1–0.3 g/cm³) packs quickly; the compression stages of the run bring it to the real one:
+
+```text
+pack --of ps3 --count 8 --of benzene --count 20 --cube 0.2 --seed 1
+```
 
 ## 3. Build and run
 
 ```text
 md build
-md simulate --time 500ps --temperature 300
+md run --preset amorphous --length 500ps --temperature 300
 ```
+
+`md presets` recommends the **Amorphous Compression** preset for a typed organic build whose
+largest molecule is a chain (60 atoms or more). It runs energy minimization, a short hot NVT stage,
+NPT compression at 2000 bar, relaxation at 1 bar, a longer hot NPT stage, an NPT anneal from the
+hot temperature to the target temperature, then production. The hot stages run at 600 K by
+default, which melts a glassy polymer but boils a small-molecule liquid at the 1 bar stages;
+for a liquid such as a solvent box pass `--melt` with a value below its boiling point
+(`md run --preset amorphous --melt 330` for methanol), or use the recommended `quick-relax`.
+A plain `md simulate` is the standard biomolecular protocol and will leave a loosely packed box
+near its starting density.
 
 `md build` finds the molecules of the active structure (the connected components of its bonds),
 matches each to the library entry with the same atoms in the same order and the same bonds between

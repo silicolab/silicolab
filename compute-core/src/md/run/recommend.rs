@@ -50,6 +50,7 @@ pub fn recommend(eff: &EffectiveContext) -> Recommendation {
         temperature_k: 300.0,
         production: ProductionLength::Standard,
         timestep_ps: 0.002,
+        melt_temperature_k: None,
     };
 
     let mut notes = Vec::new();
@@ -161,9 +162,23 @@ pub fn recommended_trajectory_frames(eff: &EffectiveContext) -> u64 {
     }
 }
 
+/// Smallest molecule that counts as a chain for the amorphous preset: a few
+/// repeat units (styrene DP 4 is 66 atoms). Below it the box is a
+/// small-molecule liquid, which the protocol's 600 K, 1 bar stages would boil.
+pub const POLYMER_MOLECULE_ATOMS: usize = 60;
+
 /// Pick the most specific applicable preset.
 fn pick_preset(eff: &EffectiveContext) -> PresetId {
-    if eff.has_membrane() {
+    if eff.force_field_token().eq_ignore_ascii_case("gaff2") {
+        // A typed organic box has no biomolecular residues to restrain: a box of
+        // chains starts loosely packed and has to be compressed, a liquid of small
+        // molecules (which the ligand detector also flags) only needs relaxing.
+        if eff.largest_molecule_atoms() >= POLYMER_MOLECULE_ATOMS {
+            PresetId::AmorphousCompression
+        } else {
+            PresetId::QuickRelax
+        }
+    } else if eff.has_membrane() {
         PresetId::MembraneProtein
     } else if eff.has_ligand() {
         PresetId::ProteinLigand
@@ -205,7 +220,25 @@ mod tests {
             atom_count: 20_000,
             restraint_groups: vec![],
             hmr_applied: false,
+            largest_molecule_atoms: 0,
         }
+    }
+
+    #[test]
+    fn typed_organic_chains_get_the_amorphous_preset_but_liquids_do_not() {
+        let mut c = ctx();
+        c.force_field_token = "gaff2".to_string();
+        c.force_field_family = ForceFieldFamily::Amber;
+        c.water_token = None;
+        c.detected_protein = false;
+        c.largest_molecule_atoms = 66;
+        let rec = recommend(&c.with_overrides(SystemTypeOverrides::default()));
+        assert_eq!(rec.preset, PresetId::AmorphousCompression);
+
+        c.largest_molecule_atoms = 6;
+        c.detected_ligand = true;
+        let rec = recommend(&c.with_overrides(SystemTypeOverrides::default()));
+        assert_eq!(rec.preset, PresetId::QuickRelax);
     }
 
     #[test]

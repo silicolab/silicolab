@@ -68,6 +68,10 @@ pub struct PresetParams {
     /// Production/dynamics timestep (ps). The membrane preset still uses a smaller
     /// timestep for its earliest sub-steps regardless of this.
     pub timestep_ps: f32,
+    /// Temperature of the hot stages of the amorphous compression protocol;
+    /// `None` takes [`MELT_TEMPERATURE_K`]. A small-molecule liquid needs a
+    /// value below its boiling point, since the protocol holds 1 bar there.
+    pub melt_temperature_k: Option<f32>,
 }
 
 impl Default for PresetParams {
@@ -76,6 +80,7 @@ impl Default for PresetParams {
             temperature_k: 300.0,
             production: ProductionLength::Standard,
             timestep_ps: 0.002,
+            melt_temperature_k: None,
         }
     }
 }
@@ -94,7 +99,17 @@ pub enum PresetId {
     SimulatedAnnealing,
     ProductionExtend,
     NvtProduction,
+    AmorphousCompression,
 }
+
+/// Default melt temperature of the amorphous compression protocol: hot enough
+/// for a glassy polymer to flow on the nanosecond scale. GAFF has no reactive
+/// terms, so the heat only speeds up chain relaxation and cannot break bonds.
+/// It is above the critical point of most small molecules, which boil off at
+/// the 1 bar stages; those pass `PresetParams::melt_temperature_k`.
+pub const MELT_TEMPERATURE_K: f32 = 600.0;
+/// Compression pressure of the amorphous protocol (bar).
+pub const COMPRESSION_PRESSURE_BAR: f32 = 2000.0;
 
 impl PresetId {
     /// Every preset, in menu order.
@@ -111,6 +126,7 @@ impl PresetId {
             Self::SimulatedAnnealing,
             Self::ProductionExtend,
             Self::NvtProduction,
+            Self::AmorphousCompression,
         ]
     }
 
@@ -128,6 +144,7 @@ impl PresetId {
             Self::SimulatedAnnealing => "annealing",
             Self::ProductionExtend => "extend",
             Self::NvtProduction => "nvt-production",
+            Self::AmorphousCompression => "amorphous",
         }
     }
 
@@ -151,6 +168,7 @@ impl PresetId {
             Self::SimulatedAnnealing => "Simulated Annealing",
             Self::ProductionExtend => "Production-only / Extend",
             Self::NvtProduction => "NVT Production",
+            Self::AmorphousCompression => "Amorphous Compression (polymer / glass)",
         }
     }
 
@@ -181,6 +199,10 @@ impl PresetId {
                 "Continue/extend an equilibrated restart, no new equilibration."
             }
             Self::NvtProduction => "Constant-volume production (less common).",
+            Self::AmorphousCompression => {
+                "EM → hot NVT → 2000 bar compression → 1 bar relaxation → hot NPT → anneal to \
+                 the target temperature → production. For a loosely packed organic box."
+            }
         }
     }
 
@@ -341,6 +363,36 @@ impl PresetId {
                 vec![extend]
             }
 
+            Self::AmorphousCompression => {
+                let hot = params
+                    .melt_temperature_k
+                    .unwrap_or(MELT_TEMPERATURE_K)
+                    .max(t);
+                let mut stages = vec![
+                    MdStage::minimize(),
+                    short_equil(MdStage::nvt(hot), GENTLE_TIMESTEP_PS, groups, 30.0),
+                ];
+                for (bar, ps) in [
+                    (COMPRESSION_PRESSURE_BAR, 250.0),
+                    (1.0, 250.0),
+                    (1.0, 1000.0),
+                ] {
+                    let mut stage = short_equil(MdStage::npt(hot), dt, groups, ps);
+                    stage.pressure = Some(PressureCoupling {
+                        ref_bar: bar,
+                        ..PressureCoupling::isotropic()
+                    });
+                    stages.push(stage);
+                }
+                let mut anneal = short_equil(MdStage::npt(hot), dt, groups, 400.0);
+                anneal.kind = StageKind::Anneal;
+                anneal.name = StageKind::Anneal.default_name().to_string();
+                anneal.anneal = Some(AnnealSpec::ramp(hot, t, 400.0));
+                stages.push(anneal);
+                stages.push(production(MdStage::produce(t), dt, groups, production_len));
+                name_uniquely(stages)
+            }
+
             Self::NvtProduction => {
                 let mut prod = production(MdStage::produce(t), dt, groups, production_len);
                 // Constant volume: drop the barostat.
@@ -450,7 +502,80 @@ mod tests {
             atom_count: 10_000,
             restraint_groups: vec![],
             hmr_applied: false,
+            largest_molecule_atoms: 0,
         }
+    }
+
+    #[test]
+    fn amorphous_compression_squeezes_hot_then_anneals_to_the_target() {
+        let mut ctx = context(false, false, false, false);
+        ctx.force_field_token = "gaff2".to_string();
+        ctx.force_field_family = ForceFieldFamily::Other;
+        ctx.water_token = None;
+        let eff = ctx.with_overrides(SystemTypeOverrides::default());
+        let stages = PresetId::AmorphousCompression.build(&eff, &PresetParams::default());
+        let kinds: Vec<StageKind> = stages.iter().map(|s| s.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![
+                StageKind::Minimize,
+                StageKind::NvtEquilibrate,
+                StageKind::NptEquilibrate,
+                StageKind::NptEquilibrate,
+                StageKind::NptEquilibrate,
+                StageKind::Anneal,
+                StageKind::Produce,
+            ]
+        );
+        let names: Vec<&str> = stages.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["em", "nvt", "npt1", "npt2", "npt3", "anneal", "md"]);
+        assert_eq!(stages[1].temperature_k, MELT_TEMPERATURE_K);
+        assert_eq!(
+            stages[2].pressure.unwrap().ref_bar,
+            COMPRESSION_PRESSURE_BAR
+        );
+        assert_eq!(stages[3].pressure.unwrap().ref_bar, 1.0);
+        assert_eq!(stages[4].length, StageLength::Picoseconds(1000.0));
+        let ramp = stages[5].anneal.as_ref().unwrap();
+        assert_eq!(ramp.points, vec![(0.0, MELT_TEMPERATURE_K), (400.0, 300.0)]);
+        assert!(
+            stages[5].pressure.is_some(),
+            "the anneal keeps the barostat"
+        );
+        assert_eq!(stages[6].temperature_k, 300.0);
+        assert!(
+            stages
+                .iter()
+                .all(|s| matches!(s.restraint, RestraintScheme::None)),
+            "an amorphous box has nothing to restrain"
+        );
+        assert!(
+            stages
+                .iter()
+                .all(|s| s.coupling_groups == CouplingGroups::WholeSystem)
+        );
+
+        let liquid = PresetId::AmorphousCompression.build(
+            &eff,
+            &PresetParams {
+                melt_temperature_k: Some(330.0),
+                ..PresetParams::default()
+            },
+        );
+        assert_eq!(liquid[1].temperature_k, 330.0);
+        assert_eq!(liquid[4].temperature_k, 330.0);
+        assert_eq!(
+            liquid[5].anneal.as_ref().unwrap().points,
+            vec![(0.0, 330.0), (400.0, 300.0)]
+        );
+        let cold = PresetId::AmorphousCompression.build(
+            &eff,
+            &PresetParams {
+                melt_temperature_k: Some(250.0),
+                ..PresetParams::default()
+            },
+        );
+        assert_eq!(cold[1].temperature_k, 300.0, "never below the target");
     }
 
     #[test]
