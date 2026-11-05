@@ -38,7 +38,8 @@ mod online_args;
 mod ptm_args;
 
 pub(crate) use builder_args::{
-    DiffusionArgs, ForcefieldAction, ForcefieldTypeArgs, FreeVolumeArgs, MembraneAction,
+    DiffusionArgs, ForcefieldAction, ForcefieldTypeArgs, FreeVolumeArgs, MembraneAction, RdfArgs,
+    SorptionArgs,
 };
 use online_args::parse_find_limit;
 pub(crate) use online_args::{FindQueryKind, parse_find_query};
@@ -634,6 +635,12 @@ impl Command {
             Command::Membrane {
                 action: MembraneAction::FreeVolume(args),
             } => membrane_commands::free_volume_command(state, args),
+            Command::Membrane {
+                action: MembraneAction::Sorption(args),
+            } => membrane_commands::sorption_command(state, args),
+            Command::Membrane {
+                action: MembraneAction::Rdf(args),
+            } => membrane_commands::rdf_command(state, context, args),
             Command::Forcefield {
                 action: ForcefieldAction::Type(args),
             } => forcefield_commands::type_command(state, args),

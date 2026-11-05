@@ -1,6 +1,6 @@
 ---
 title: Diffusion and free volume in a dense phase
-description: Measure the probe-accessible free volume of a packed box and the self-diffusion coefficient of sorbate molecules from an MD trajectory in Console.
+description: Measure the probe-accessible free volume of a packed box, the self-diffusion coefficient of sorbate molecules, their sorption by Widom insertion, and radial distribution functions in Console.
 sidebar:
   order: 9
 ---
@@ -66,5 +66,59 @@ trajectory joined from restarts with a repeated frame, or one with a gap, is ref
 fitted on a wrong time axis.
 
 A permeability-style selectivity follows from two runs: the ratio of the diffusion coefficients of
-two sorbates in the same membrane times the ratio of their sorption. The sorption half is a
-separate step.
+two sorbates in the same membrane times the ratio of their sorption. `membrane sorption` supplies
+the sorption half.
+
+## Sorption
+
+`membrane sorption` performs Widom test-particle insertion: a copy of the probe molecule is dropped
+at random positions and orientations into the host box, its interaction energy with the host is
+evaluated, and the Boltzmann average `⟨exp(−ΔU/kT)⟩` gives the excess chemical potential
+`μ_ex = −kT ln⟨…⟩` and the infinite-dilution solubility coefficient `S = exp(−μ_ex/kT) / (R T)`
+in cm³(STP)/(cm³·cmHg).
+
+```text
+forcefield type benzene --name benzene
+membrane sorption benzene --frames 20
+```
+
+The host is the active entry's typed MD system (`md build` from library-typed molecules) and the
+probe is another entry whose molecule is typed in the force-field library, so both carry
+Lennard-Jones parameters and partial charges. The reply reads `benzene: μ_ex = -14.2 kJ/mol,
+⟨exp(−ΔU/kT)⟩ = 2.96e2 ± 4.1e1, S = 3.550e0 cm³(STP)/(cm³·cmHg) at 300 K from 400000
+insertions over the last 20 frames of md.xtc (22.4% favourable)`.
+
+| Option | Meaning |
+| --- | --- |
+| `--entry` | Host entry (default `active`). |
+| `--temperature <K>` | Insertion temperature (default 300 K). |
+| `--insertions N` | Trial insertions per frame (default 20000). The quoted error is the standard error of the Boltzmann mean. |
+| `--cutoff <Å>` | Pair cutoff (default 10 Å); the box must be at least twice as wide. Lennard-Jones beyond it is added as the analytic tail of a uniform host; Coulomb is shifted-force so the sum does not depend on which atoms of a molecule straddle the sphere. |
+| `--seed N` | Random seed; the same seed reproduces the same insertions. |
+| `--trajectory <path> --frames N` | Average over the last `N` frames instead of the entry's own coordinates. With `--frames` alone, the entry's recorded MD trajectory is used. |
+
+Insertion is cheap but blind: in a dense glassy polymer most trials land inside an atom and only
+the few that find a cavity count, so take many frames and expect the error bar to shrink slowly.
+A probe larger than the free-volume elements cannot be inserted at all and reports a vanishing
+Boltzmann mean; the number is then a statement about the method, not the material. Solubility
+selectivity is the ratio of `S` for two probes in the same frames.
+
+## Radial distribution
+
+`membrane rdf` histograms the minimum-image distances between two selections and normalises them
+to the ideal-gas expectation, giving `g(r)` and the running coordination number.
+
+```text
+membrane rdf BEN C --frames 20 --out rdf.csv
+membrane rdf O
+```
+
+With one selection the pairs are within it. The reply names the first peak; `--out` writes
+`r_angstrom,g,coordination`.
+
+| Option | Meaning |
+| --- | --- |
+| `--entry` | Host entry (default `active`). |
+| `--rmax <Å>` | Longest separation tabulated (default 12 Å); must not exceed half the box. |
+| `--bin <Å>` | Bin width (default 0.1 Å). |
+| `--trajectory <path> --frames N` | Average over trailing frames as above. |

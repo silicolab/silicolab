@@ -1,7 +1,7 @@
 //! Approval risk: how consequential each `.sls` command is, which is what the
 //! assistant's approval gate keys on.
 
-use super::{Command, ForcefieldAction, JobsAction, MembraneAction};
+use super::{Command, DiffusionArgs, ForcefieldAction, JobsAction, MembraneAction, RdfArgs};
 
 /// How consequential a command is — the input to the assistant's approval gate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -63,13 +63,15 @@ impl Command {
                 action: ForcefieldAction::List,
             }
             | Command::Membrane {
-                action: MembraneAction::FreeVolume(_),
+                action: MembraneAction::FreeVolume(_) | MembraneAction::Sorption(_),
             }
             | Command::Help => ReadOnly,
             Command::Membrane {
-                action: MembraneAction::Diffusion(args),
+                action:
+                    MembraneAction::Diffusion(DiffusionArgs { out, .. })
+                    | MembraneAction::Rdf(RdfArgs { out, .. }),
             } => {
-                if args.out.is_some() {
+                if out.is_some() {
                     FileWrite
                 } else {
                     ReadOnly

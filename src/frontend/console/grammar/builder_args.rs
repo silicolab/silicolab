@@ -45,6 +45,64 @@ pub(crate) enum MembraneAction {
     /// Probe-accessible free volume of a periodic cell (optionally averaged over
     /// trajectory frames), e.g. `membrane free-volume --probe 1.3`.
     FreeVolume(FreeVolumeArgs),
+    /// Widom test-particle insertion of a typed probe molecule into the entry's
+    /// box: excess chemical potential and solubility, e.g.
+    /// `membrane sorption benzene --frames 20`.
+    Sorption(SorptionArgs),
+    /// Radial distribution function between two selections, e.g.
+    /// `membrane rdf BEN C --frames 20 --out rdf.csv`.
+    Rdf(RdfArgs),
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct SorptionArgs {
+    /// Entry holding the probe molecule, typed in the force-field library.
+    pub(crate) probe: String,
+    /// Host entry: `active`, `#id`, or a name (default: active).
+    #[arg(long, default_value = "active")]
+    pub(crate) entry: String,
+    #[arg(long, default_value_t = 300.0)]
+    pub(crate) temperature: f64,
+    /// Trial insertions per frame.
+    #[arg(long, default_value_t = 20_000)]
+    pub(crate) insertions: usize,
+    #[arg(long, default_value_t = 0)]
+    pub(crate) seed: u64,
+    /// Pair cutoff in Å.
+    #[arg(long, default_value_t = 10.0)]
+    pub(crate) cutoff: f64,
+    /// Trajectory to sample instead of the entry's own coordinates; default:
+    /// the entry's recorded MD trajectory when `--frames` is given.
+    #[arg(long)]
+    pub(crate) trajectory: Option<PathBuf>,
+    /// Number of trailing trajectory frames to sample.
+    #[arg(long)]
+    pub(crate) frames: Option<usize>,
+}
+
+#[derive(Debug, Args)]
+pub(crate) struct RdfArgs {
+    /// First selection: `all`, an element symbol, or a residue name.
+    pub(crate) first: String,
+    /// Second selection (default: the first).
+    pub(crate) second: Option<String>,
+    /// Host entry: `active`, `#id`, or a name (default: active).
+    #[arg(long, default_value = "active")]
+    pub(crate) entry: String,
+    /// Largest separation in Å.
+    #[arg(long, default_value_t = 12.0)]
+    pub(crate) rmax: f64,
+    /// Bin width in Å.
+    #[arg(long, default_value_t = 0.1)]
+    pub(crate) bin: f64,
+    #[arg(long)]
+    pub(crate) trajectory: Option<PathBuf>,
+    /// Number of trailing trajectory frames to average over.
+    #[arg(long)]
+    pub(crate) frames: Option<usize>,
+    /// Write the curve as CSV to this path.
+    #[arg(long)]
+    pub(crate) out: Option<PathBuf>,
 }
 
 #[derive(Debug, Args)]

@@ -4,6 +4,8 @@
 
 pub mod free_volume;
 pub mod msd;
+pub mod rdf;
+pub mod widom;
 
 use std::collections::BTreeSet;
 
@@ -13,6 +15,11 @@ use crate::domain::Structure;
 
 pub use free_volume::{FreeVolumeReport, FreeVolumeSpec, free_volume, free_volume_over_frames};
 pub use msd::{DiffusionReport, MsdSpec, mean_squared_displacement, msd_csv};
+pub use rdf::{RdfReport, RdfSpec, radial_distribution, radial_distribution_over_frames, rdf_csv};
+pub use widom::{
+    NonbondedAtom, WidomReport, WidomSpec, host_parameters, widom_insertion,
+    widom_insertion_over_frames,
+};
 
 /// Atoms named by a selector: `all`, an element symbol (`C`), or a residue name
 /// (`BEN`, matched case-insensitively against the structure's residues).
@@ -125,5 +132,7 @@ pub fn van_der_waals_radius(element: &str) -> f32 {
     }
 }
 
+#[cfg(test)]
+mod sorption_tests;
 #[cfg(test)]
 mod tests;

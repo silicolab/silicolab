@@ -100,3 +100,41 @@ fn membrane_commands_parse_their_flags() {
         other => panic!("expected membrane free-volume, got {other:?}"),
     }
 }
+
+#[test]
+fn sorption_and_rdf_parse_their_flags() {
+    match parse_command(
+        &shell_words("membrane sorption benzene --entry #2 --temperature 308 --insertions 500 --cutoff 7 --frames 4")
+            .unwrap(),
+    )
+    .unwrap()
+    {
+        Command::Membrane {
+            action: MembraneAction::Sorption(args),
+        } => {
+            assert_eq!(args.probe, "benzene");
+            assert_eq!(args.entry, "#2");
+            assert_eq!(args.temperature, 308.0);
+            assert_eq!(args.insertions, 500);
+            assert_eq!(args.cutoff, 7.0);
+            assert_eq!(args.frames, Some(4));
+        }
+        other => panic!("expected membrane sorption, got {other:?}"),
+    }
+    match parse_command(
+        &shell_words("membrane rdf BEN C --rmax 8 --bin 0.2 --out rdf.csv").unwrap(),
+    )
+    .unwrap()
+    {
+        Command::Membrane {
+            action: MembraneAction::Rdf(args),
+        } => {
+            assert_eq!(args.first, "BEN");
+            assert_eq!(args.second.as_deref(), Some("C"));
+            assert_eq!(args.rmax, 8.0);
+            assert_eq!(args.bin, 0.2);
+            assert!(args.out.is_some());
+        }
+        other => panic!("expected membrane rdf, got {other:?}"),
+    }
+}
